@@ -29,6 +29,7 @@ playground.xcworkspace
 # hence it is not needed unless you have added a package configuration file to your project
 # .swiftpm
 
+Core/Utils/Config.swift
 .build/
 
 # CocoaPods
@@ -60,3 +61,8 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# SECURITY: Prevent API key leaks in Xcode project files
+*.xcodeproj/project.pbxproj
+*.xcodeproj/xcshareddata/xcschemes/
+*.xcworkspace/xcshareddata/xcschemes/
