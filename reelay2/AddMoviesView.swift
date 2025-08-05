@@ -35,13 +35,16 @@ struct AddMoviesView: View {
     // UI state
     @State private var showingSimilarRatings = false
     @State private var similarRatingMovies: [Movie] = []
-    @State private var displayedMoviesCount = 10
+    @State private var displayedMoviesCount = 5
     @State private var isLoadingMoreMovies = false
     @State private var previousWatches: [Movie] = []
     @State private var showingPreviousWatches = false
     @State private var isAddingMovie = false
     @State private var showingAlert = false
     @State private var alertMessage = ""
+    @State private var selectedPreviousMovie: Movie?
+    @State private var showingMovieDetails = false
+    @State private var ratingSearchText = ""
     
     var body: some View {
         NavigationView {
@@ -76,6 +79,11 @@ struct AddMoviesView: View {
                 Button("OK") { }
             } message: {
                 Text(alertMessage)
+            }
+            .sheet(isPresented: $showingMovieDetails) {
+                if let selectedMovie = selectedPreviousMovie {
+                    MovieDetailsView(movie: selectedMovie)
+                }
             }
         }
     }
@@ -253,13 +261,35 @@ struct AddMoviesView: View {
                 .font(.subheadline)
                 .fontWeight(.medium)
             
+            // Rating search bar
+            HStack {
+                TextField("Filter by specific rating", text: $ratingSearchText)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .keyboardType(.numberPad)
+                    .onChange(of: ratingSearchText) { oldValue, newValue in
+                        // Validate input - only allow numbers
+                        let filtered = newValue.filter { $0.isNumber }
+                        if filtered != newValue {
+                            ratingSearchText = filtered
+                        }
+                    }
+                
+                if !ratingSearchText.isEmpty {
+                    Button("Clear") {
+                        ratingSearchText = ""
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                }
+            }
+            
             LazyVStack(spacing: 8) {
-                ForEach(Array(similarRatingMovies.prefix(displayedMoviesCount).enumerated()), id: \.element.id) { index, movie in
+                ForEach(Array(filteredSimilarMovies.prefix(displayedMoviesCount).enumerated()), id: \.element.id) { index, movie in
                     ComparisonMovieRow(movie: movie)
                 }
                 
                 // Show more button if there are more movies to display
-                if displayedMoviesCount < similarRatingMovies.count {
+                if displayedMoviesCount < filteredSimilarMovies.count {
                     Button(action: {
                         if !isLoadingMoreMovies {
                             displayedMoviesCount += 10
@@ -271,7 +301,7 @@ struct AddMoviesView: View {
                                     .progressViewStyle(CircularProgressViewStyle(tint: .blue))
                                     .scaleEffect(0.8)
                             }
-                            Text("Show More (\(similarRatingMovies.count - displayedMoviesCount) remaining)")
+                            Text("Show More (\(filteredSimilarMovies.count - displayedMoviesCount) remaining)")
                                 .font(.caption)
                                 .foregroundColor(.blue)
                         }
@@ -279,11 +309,33 @@ struct AddMoviesView: View {
                     }
                     .disabled(isLoadingMoreMovies)
                 }
+                
+                // Show total count
+                if !filteredSimilarMovies.isEmpty {
+                    Text("Showing \(min(displayedMoviesCount, filteredSimilarMovies.count)) of \(filteredSimilarMovies.count) movies")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                }
             }
         }
         .padding()
         .background(Color.gray.opacity(0.1))
         .cornerRadius(8)
+    }
+    
+    // MARK: - Computed Properties
+    private var filteredSimilarMovies: [Movie] {
+        guard !ratingSearchText.isEmpty, let searchRating = Int(ratingSearchText) else {
+            return similarRatingMovies
+        }
+        
+        return similarRatingMovies.filter { movie in
+            if let detailedRating = movie.detailed_rating {
+                return Int(detailedRating) == searchRating
+            }
+            return false
+        }
     }
     
     // MARK: - Previous Entries Section
@@ -300,7 +352,7 @@ struct AddMoviesView: View {
                             .font(.system(size: 16, weight: .medium))
                             .foregroundColor(.orange)
                         
-                        Text("RE")
+                        Text("Previous Entries")
                             .font(.headline)
                             .fontWeight(.semibold)
                             .foregroundColor(.white)
@@ -328,7 +380,10 @@ struct AddMoviesView: View {
             if showingPreviousWatches {
                 VStack(spacing: 12) {
                     ForEach(previousWatches) { previousWatch in
-                        PreviousEntryRow(movie: previousWatch)
+                        PreviousEntryRow(movie: previousWatch) {
+                            selectedPreviousMovie = previousWatch
+                            showingMovieDetails = true
+                        }
                     }
                 }
                 .padding(.top, 12)
@@ -484,7 +539,7 @@ struct AddMoviesView: View {
                 let movies = try await supabaseService.getMoviesInRatingRange(
                     minRating: minRating,
                     maxRating: maxRating,
-                    limit: 100  // Get more movies for pagination
+                    limit: 1000  // Get more movies for pagination
                 )
                 
                 // Sort movies by rating in descending order (highest first)
@@ -492,7 +547,7 @@ struct AddMoviesView: View {
                 
                 await MainActor.run {
                     similarRatingMovies = sortedMovies
-                    displayedMoviesCount = 10  // Reset to show first 10
+                    displayedMoviesCount = 5  // Reset to show first 5
                     showingSimilarRatings = !sortedMovies.isEmpty
                 }
             } catch {
@@ -500,7 +555,7 @@ struct AddMoviesView: View {
                 await MainActor.run {
                     showingSimilarRatings = false
                     similarRatingMovies = []
-                    displayedMoviesCount = 10
+                    displayedMoviesCount = 5
                 }
             }
         }
@@ -607,9 +662,10 @@ struct AddMoviesView: View {
         isRewatch = false
         showingSimilarRatings = false
         similarRatingMovies = []
-        displayedMoviesCount = 10
+        displayedMoviesCount = 5
         previousWatches = []
         showingPreviousWatches = false
+        ratingSearchText = ""
     }
 }
 
@@ -752,69 +808,77 @@ struct ComparisonMovieRow: View {
 // MARK: - Previous Entry Row
 struct PreviousEntryRow: View {
     let movie: Movie
+    let onTap: () -> Void
     
     var body: some View {
-        HStack(spacing: 12) {
-            // Entry indicator
-            Text("PREV")
-                .font(.caption2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-                .frame(width: 30, height: 20)
-                .background(Color.orange)
-                .cornerRadius(6)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(formattedWatchDate)
-                    .font(.body)
-                    .fontWeight(.medium)
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                // Entry indicator
+                Text("RE")
+                    .font(.caption2)
+                    .fontWeight(.bold)
                     .foregroundColor(.white)
+                    .frame(width: 30, height: 20)
+                    .background(Color.orange)
+                    .cornerRadius(6)
                 
-                HStack(spacing: 8) {
-                    // Star rating
-                    HStack(spacing: 2) {
-                        ForEach(0..<5) { index in
-                            Image(systemName: starType(for: index, rating: movie.rating))
-                                .foregroundColor(starColor(for: movie.rating))
-                                .font(.system(size: 12))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(formattedWatchDate)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                    
+                    HStack(spacing: 8) {
+                        // Star rating
+                        HStack(spacing: 2) {
+                            ForEach(0..<5) { index in
+                                Image(systemName: starType(for: index, rating: movie.rating))
+                                    .foregroundColor(starColor(for: movie.rating))
+                                    .font(.system(size: 12))
+                            }
+                        }
+                        
+                        if let rating = movie.rating {
+                            Text("(\(String(format: "%.1f", rating)))")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        
+                        // Detailed rating
+                        if let detailedRating = movie.detailed_rating {
+                            HStack(spacing: 2) {
+                                Image(systemName: "chart.bar.fill")
+                                    .foregroundColor(.purple)
+                                    .font(.system(size: 10))
+                                
+                                Text("\(String(format: "%.0f", detailedRating))/100")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
                         }
                     }
                     
-                    if let rating = movie.rating {
-                        Text("(\(String(format: "%.1f", rating)))")
+                    // Show review if it exists
+                    if let review = movie.review, !review.isEmpty {
+                        Text("Review: \(review)")
                             .font(.caption)
                             .foregroundColor(.gray)
-                    }
-                    
-                    // Detailed rating
-                    if let detailedRating = movie.detailed_rating {
-                        HStack(spacing: 2) {
-                            Image(systemName: "chart.bar.fill")
-                                .foregroundColor(.purple)
-                                .font(.system(size: 10))
-                            
-                            Text("\(String(format: "%.0f", detailedRating))/100")
-                                .font(.caption)
-                                .foregroundColor(.white)
-                        }
+                            .lineLimit(2)
+                            .padding(.top, 2)
                     }
                 }
                 
-                // Show review if it exists
-                if let review = movie.review, !review.isEmpty {
-                    Text("Review: \(review)")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .lineLimit(2)
-                        .padding(.top, 2)
-                }
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
             }
-            
-            Spacer()
+            .padding(12)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(12)
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(12)
+        .buttonStyle(PlainButtonStyle())
     }
     
     private var formattedWatchDate: String {

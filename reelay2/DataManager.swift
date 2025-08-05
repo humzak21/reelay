@@ -60,12 +60,16 @@ class DataManager: ObservableObject {
         try await listService.unpinList(list)
     }
     
-    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, year: Int? = nil, listId: UUID) async throws {
-        try await listService.addMovieToList(tmdbId: tmdbId, title: title, posterUrl: posterUrl, year: year, listId: listId)
+    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, backdropUrl: String? = nil, year: Int? = nil, listId: UUID) async throws {
+        try await listService.addMovieToList(tmdbId: tmdbId, title: title, posterUrl: posterUrl, backdropUrl: backdropUrl, year: year, listId: listId)
     }
     
     func removeMovieFromList(tmdbId: Int, listId: UUID) async throws {
         try await listService.removeMovieFromList(tmdbId: tmdbId, listId: listId)
+    }
+    
+    func reorderListItems(_ listId: UUID, items: [ListItem]) async throws {
+        try await listService.reorderListItems(listId, items: items)
     }
     
     func getItemsForList(_ listId: UUID) async throws -> [ListItem] {
@@ -74,6 +78,10 @@ class DataManager: ObservableObject {
     
     func getListItems(_ list: MovieList) -> [ListItem] {
         return listService.getListItems(list)
+    }
+    
+    func getMoviesByTmdbId(tmdbId: Int) async throws -> [Movie] {
+        return try await movieService.getMoviesByTmdbId(tmdbId: tmdbId)
     }
     
     func refreshLists() async {

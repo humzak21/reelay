@@ -184,13 +184,8 @@ struct ListsView: View {
         isLoading = true
         errorMessage = nil
         
-        do {
-            await dataManager.refreshLists()
-            print("📋 ListsView: Lists loaded, count: \(dataManager.movieLists.count)")
-        } catch {
-            print("📋 ListsView: Error loading lists: \(error)")
-            errorMessage = error.localizedDescription
-        }
+        await dataManager.refreshLists()
+        print("📋 ListsView: Lists loaded, count: \(dataManager.movieLists.count)")
         
         isLoading = false
     }
@@ -345,13 +340,13 @@ struct CreateListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
+                    Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Create") {
+                    Button("Create", systemImage: "checkmark") {
                         Task {
                             await createList()
                         }

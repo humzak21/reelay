@@ -22,10 +22,17 @@ struct MovieDetailsView: View {
     @State private var showingDeleteAlert = false
     @State private var isDeletingMovie = false
     @State private var isReviewCopied = false
+    @State private var selectedPreviousMovie: Movie?
+    @State private var showingPreviousMovieDetails = false
+    @State private var showingAddMovie = false
     
     init(movie: Movie) {
         self.movie = movie
         self._currentMovie = State(initialValue: movie)
+    }
+    
+    private var isUnloggedMovie: Bool {
+        currentMovie.id == -1
     }
     
     var body: some View {
@@ -35,32 +42,40 @@ struct MovieDetailsView: View {
                     // Backdrop Section
                     backdropSection
                     
-                    // Watch Date Section (now scrollable)
-                    watchDateSection
+                    // Watch Date Section (only show for logged movies)
+                    if !isUnloggedMovie {
+                        watchDateSection
+                    }
                     
                     // Main Content
                     VStack(spacing: 16) {
-                        // Movie Header Section
-                        movieHeaderSection
-                        
-                        // Rating Cards
-                        ratingCardsSection
-                        
-                        // Previously Watched Section
-                        if !previousWatches.isEmpty {
-                            previouslyWatchedSection
+                        if isUnloggedMovie {
+                            // Unlogged movie state
+                            unloggedMovieView
+                        } else {
+                            // Logged movie state
+                            // Movie Header Section
+                            movieHeaderSection
+                            
+                            // Rating Cards
+                            ratingCardsSection
+                            
+                            // Previously Watched Section
+                            if !previousWatches.isEmpty {
+                                previouslyWatchedSection
+                            }
+                            
+                            // Review Section
+                            reviewSection
+                            
+                            // Tags Section
+                            if hasVisibleTags {
+                                tagsSection
+                            }
+                            
+                            // Movie Metadata
+                            metadataSection
                         }
-                        
-                        // Review Section
-                        reviewSection
-                        
-                        // Tags Section
-                        if hasVisibleTags {
-                            tagsSection
-                        }
-                        
-                        // Movie Metadata
-                        metadataSection
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 16)
@@ -134,6 +149,91 @@ struct MovieDetailsView: View {
         } message: {
             Text("Are you sure you want to delete '\(currentMovie.title)'? This action cannot be undone.")
         }
+        .sheet(isPresented: $showingPreviousMovieDetails) {
+            if let selectedMovie = selectedPreviousMovie {
+                MovieDetailsView(movie: selectedMovie)
+            }
+        }
+        .sheet(isPresented: $showingAddMovie) {
+            if isUnloggedMovie, let tmdbId = currentMovie.tmdb_id {
+                AddMovieFromListView(
+                    tmdbId: tmdbId,
+                    title: currentMovie.title,
+                    releaseYear: currentMovie.release_year,
+                    posterUrl: currentMovie.poster_url,
+                    backdropUrl: currentMovie.backdrop_path
+                )
+            } else {
+                AddMoviesView()
+            }
+        }
+    }
+    
+    private var unloggedMovieView: some View {
+        VStack(spacing: 24) {
+            // Movie Header Section (simplified for unlogged)
+            HStack(alignment: .top, spacing: 20) {
+                // Movie Poster
+                AsyncImage(url: currentMovie.posterURL) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                }
+                .frame(width: 100, height: 150)
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                
+                // Movie Details
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(currentMovie.title)
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                    
+                    Text(currentMovie.formattedReleaseYear)
+                        .font(.title3)
+                        .foregroundColor(.white.opacity(0.8))
+                        .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
+                }
+                
+                Spacer()
+            }
+            
+            // Unlogged state message
+            VStack(spacing: 16) {
+                Image(systemName: "film.stack")
+                    .font(.system(size: 64))
+                    .foregroundColor(.gray)
+                
+                Text("You haven't logged this film yet")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                
+                Text("Add this movie to your diary to track your ratings, reviews, and watch history.")
+                    .font(.body)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                
+                Button("Add Movie") {
+                    showingAddMovie = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.top, 8)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+        }
     }
     
     private var backdropSection: some View {
@@ -181,26 +281,14 @@ struct MovieDetailsView: View {
             // Enhanced gradient overlay for recessed appearance
             LinearGradient(
                 colors: [
-                    Color.black.opacity(0.2), 
+                    Color.black.opacity(0.1), 
+                    Color.black.opacity(0.3),
                     Color.black.opacity(0.6),
-                    Color.black.opacity(0.9),
-                    Color.black
+                    Color.black.opacity(0.9)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-        )
-        .overlay(
-            // Additional fade overlay to blend into black background
-            Rectangle()
-                .fill(
-                    RadialGradient(
-                        colors: [Color.clear, Color.black.opacity(0.05)],
-                        center: .center,
-                        startRadius: 50,
-                        endRadius: 200
-                    )
-                )
         )
     }
     
@@ -397,7 +485,10 @@ struct MovieDetailsView: View {
             if showingPreviousWatches {
                 VStack(spacing: 12) {
                     ForEach(previousWatches) { previousWatch in
-                        PreviousWatchRow(movie: previousWatch)
+                        PreviousWatchRow(movie: previousWatch) {
+                            selectedPreviousMovie = previousWatch
+                            showingPreviousMovieDetails = true
+                        }
                     }
                 }
                 .padding(.top, 12)
@@ -759,66 +850,68 @@ struct EditReviewSheet: View {
 
 struct PreviousWatchRow: View {
     let movie: Movie
+    let onTap: () -> Void
     
     var body: some View {
-        HStack(spacing: 12) {
-            // Rewatch indicator
-            Text("RE")
-                .font(.caption)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-                .frame(width: 24, height: 24)
-                .background(Color.orange)
-                .clipShape(Circle())
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(formattedWatchDate)
-                    .font(.body)
-                    .fontWeight(.medium)
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                // Rewatch indicator
+                Text("RE")
+                    .font(.caption)
+                    .fontWeight(.bold)
                     .foregroundColor(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Color.orange)
+                    .clipShape(Circle())
                 
-                HStack(spacing: 8) {
-                    // Star rating
-                    HStack(spacing: 2) {
-                        ForEach(0..<5) { index in
-                            Image(systemName: starType(for: index, rating: movie.rating))
-                                .foregroundColor(starColor(for: movie.rating))
-                                .font(.system(size: 12))
-                        }
-                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(formattedWatchDate)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
                     
-                    if let rating = movie.rating {
-                        Text("(\(String(format: "%.1f", rating)))")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                    
-                    // Detailed rating
-                    if let detailedRating = movie.detailed_rating {
+                    HStack(spacing: 8) {
+                        // Star rating
                         HStack(spacing: 2) {
-                            Image(systemName: "chart.bar.fill")
-                                .foregroundColor(.purple)
-                                .font(.system(size: 10))
-                            
-                            Text("\(String(format: "%.0f", detailedRating))/100")
+                            ForEach(0..<5) { index in
+                                Image(systemName: starType(for: index, rating: movie.rating))
+                                    .foregroundColor(starColor(for: movie.rating))
+                                    .font(.system(size: 12))
+                            }
+                        }
+                        
+                        if let rating = movie.rating {
+                            Text("(\(String(format: "%.1f", rating)))")
                                 .font(.caption)
-                                .foregroundColor(.white)
+                                .foregroundColor(.gray)
+                        }
+                        
+                        // Detailed rating
+                        if let detailedRating = movie.detailed_rating {
+                            HStack(spacing: 2) {
+                                Image(systemName: "chart.bar.fill")
+                                    .foregroundColor(.purple)
+                                    .font(.system(size: 10))
+                                
+                                Text("\(String(format: "%.0f", detailedRating))/100")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
                         }
                     }
                 }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
             }
-            
-            Spacer()
-            
-            Button("Rewatch") {
-                // Rewatch action
-            }
-            .font(.caption)
-            .foregroundColor(.orange)
+            .padding(12)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(24)
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(24)
+        .buttonStyle(PlainButtonStyle())
     }
     
     private var formattedWatchDate: String {
@@ -918,6 +1011,305 @@ struct TagView: View {
             return .pink
         default:
             return .blue
+        }
+    }
+}
+
+// MARK: - Add Movie From List View
+struct AddMovieFromListView: View {
+    let tmdbId: Int
+    let title: String
+    let releaseYear: Int?
+    let posterUrl: String?
+    let backdropUrl: String?
+    
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var tmdbService = TMDBService.shared
+    @StateObject private var supabaseService = SupabaseMovieService.shared
+    
+    // Movie details state
+    @State private var movieDetails: TMDBMovieDetails?
+    @State private var director: String?
+    @State private var isLoadingDetails = false
+    
+    // User input state
+    @State private var starRating: Double = 0.0
+    @State private var detailedRating: String = ""
+    @State private var review: String = ""
+    @State private var tags: String = ""
+    @State private var watchDate = Date()
+    @State private var isRewatch = false
+    
+    // UI state
+    @State private var isAddingMovie = false
+    @State private var showingAlert = false
+    @State private var alertMessage = ""
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    movieHeader
+                    watchDateSection
+                    ratingSection
+                    detailedRatingSection
+                    rewatchSection
+                    reviewSection
+                    tagsSection
+                    
+                    Spacer(minLength: 100)
+                }
+                .padding()
+            }
+            .background(Color.black)
+            .preferredColorScheme(.dark)
+            .navigationTitle("Add Movie")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel", systemImage: "xmark") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Add", systemImage: "checkmark") {
+                        Task {
+                            await addMovie()
+                        }
+                    }
+                    .disabled(isAddingMovie)
+                    .foregroundColor(.white)
+                }
+            }
+            .onAppear {
+                loadMovieDetails()
+            }
+            .alert("Error", isPresented: $showingAlert) {
+                Button("OK") { }
+            } message: {
+                Text(alertMessage)
+            }
+        }
+    }
+    
+    // MARK: - Movie Header
+    private var movieHeader: some View {
+        HStack(alignment: .top, spacing: 15) {
+            AsyncImage(url: URL(string: posterUrl ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(2/3, contentMode: .fill)
+            } placeholder: {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+            }
+            .frame(width: 120, height: 180)
+            .cornerRadius(8)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                
+                if let year = releaseYear {
+                    Text(String(year))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                if let director = director {
+                    Text("Directed by \(director)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else if isLoadingDetails {
+                    Text("Loading director...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                if let overview = movieDetails?.overview {
+                    Text(overview)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(4)
+                }
+            }
+            
+            Spacer()
+        }
+    }
+    
+    // MARK: - Rating Section
+    private var ratingSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Star Rating")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            StarRatingView(rating: $starRating, size: 30)
+            
+            Text("Tap stars to rate (tap twice for half stars)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Detailed Rating Section
+    private var detailedRatingSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Detailed Rating (out of 100)")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            TextField("Enter rating 0-100", text: $detailedRating)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .keyboardType(.numberPad)
+                .onChange(of: detailedRating) { oldValue, newValue in
+                    let filtered = newValue.filter { $0.isNumber }
+                    if filtered != newValue {
+                        detailedRating = filtered
+                    }
+                }
+        }
+    }
+    
+    // MARK: - Review Section
+    private var reviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Review")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            TextField("Write your review...", text: $review, axis: .vertical)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .lineLimit(5...10)
+        }
+    }
+    
+    // MARK: - Tags Section
+    private var tagsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tags")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            TextField("e.g., theater, family, IMAX", text: $tags)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .autocapitalization(.none)
+            
+            Text("Separate tags with commas (e.g., theater, family, IMAX)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Watch Date Section
+    private var watchDateSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Watch Date")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            DatePicker("When did you watch this?", selection: $watchDate, displayedComponents: .date)
+                .datePickerStyle(CompactDatePickerStyle())
+        }
+    }
+    
+    // MARK: - Rewatch Section
+    private var rewatchSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Rewatch")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            Toggle("This was a rewatch", isOn: $isRewatch)
+        }
+    }
+    
+    // MARK: - Helper Methods
+    private func loadMovieDetails() {
+        isLoadingDetails = true
+        
+        Task {
+            do {
+                let (details, directorName) = try await tmdbService.getCompleteMovieData(movieId: tmdbId)
+                await MainActor.run {
+                    movieDetails = details
+                    director = directorName
+                    isLoadingDetails = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingDetails = false
+                    alertMessage = "Failed to load movie details: \(error.localizedDescription)"
+                    showingAlert = true
+                }
+            }
+        }
+    }
+    
+    private func addMovie() async {
+        isAddingMovie = true
+        
+        do {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            
+            let genres = movieDetails?.genreNames ?? []
+            
+            let movieRequest = AddMovieRequest(
+                title: title,
+                release_year: releaseYear,
+                release_date: movieDetails?.releaseDate,
+                rating: starRating > 0 ? starRating : nil,
+                ratings100: Double(detailedRating),
+                reviews: review.isEmpty ? nil : review,
+                tags: tags.isEmpty ? nil : tags,
+                watched_date: formatter.string(from: watchDate),
+                rewatch: isRewatch ? "yes" : "no",
+                tmdb_id: tmdbId,
+                overview: movieDetails?.overview,
+                poster_url: posterUrl,
+                backdrop_path: backdropUrl,
+                director: director,
+                runtime: movieDetails?.runtime,
+                vote_average: movieDetails?.voteAverage,
+                vote_count: movieDetails?.voteCount,
+                popularity: movieDetails?.popularity,
+                original_language: movieDetails?.originalLanguage,
+                original_title: movieDetails?.originalTitle,
+                tagline: movieDetails?.tagline,
+                status: movieDetails?.status,
+                budget: movieDetails?.budget,
+                revenue: movieDetails?.revenue,
+                imdb_id: movieDetails?.imdbId,
+                homepage: movieDetails?.homepage,
+                genres: genres
+            )
+            
+            let _ = try await supabaseService.addMovie(movieRequest)
+            
+            // Copy review to clipboard if it exists
+            if !review.isEmpty {
+                await MainActor.run {
+                    UIPasteboard.general.string = review
+                }
+            }
+            
+            await MainActor.run {
+                isAddingMovie = false
+                dismiss()
+            }
+            
+        } catch {
+            await MainActor.run {
+                isAddingMovie = false
+                alertMessage = "Failed to add movie: \(error.localizedDescription)"
+                showingAlert = true
+            }
         }
     }
 }

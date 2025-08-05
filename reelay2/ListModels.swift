@@ -135,16 +135,18 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
     let tmdbId: Int
     let movieTitle: String
     let moviePosterUrl: String?
+    let movieBackdropUrl: String?
     let movieYear: Int?
     let addedAt: Date
     let sortOrder: Int
     
-    init(id: Int64, listId: UUID, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieYear: Int? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
+    init(id: Int64, listId: UUID, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieBackdropUrl: String? = nil, movieYear: Int? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
         self.id = id
         self.listId = listId
         self.tmdbId = tmdbId
         self.movieTitle = movieTitle
         self.moviePosterUrl = moviePosterUrl
+        self.movieBackdropUrl = movieBackdropUrl
         self.movieYear = movieYear
         self.addedAt = addedAt
         self.sortOrder = sortOrder
@@ -156,6 +158,7 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
         case tmdbId = "tmdb_id"
         case movieTitle = "movie_title"
         case moviePosterUrl = "movie_poster_url"
+        case movieBackdropUrl = "movie_backdrop_url"
         case movieYear = "movie_year"
         case addedAt = "added_at"
         case sortOrder = "sort_order"
@@ -176,6 +179,7 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
         tmdbId = try container.decode(Int.self, forKey: .tmdbId)
         movieTitle = try container.decode(String.self, forKey: .movieTitle)
         moviePosterUrl = try container.decodeIfPresent(String.self, forKey: .moviePosterUrl)
+        movieBackdropUrl = try container.decodeIfPresent(String.self, forKey: .movieBackdropUrl)
         movieYear = try container.decodeIfPresent(Int.self, forKey: .movieYear)
         
         if let addedAtString = try? container.decode(String.self, forKey: .addedAt) {
@@ -195,6 +199,7 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
         try container.encode(tmdbId, forKey: .tmdbId)
         try container.encode(movieTitle, forKey: .movieTitle)
         try container.encodeIfPresent(moviePosterUrl, forKey: .moviePosterUrl)
+        try container.encodeIfPresent(movieBackdropUrl, forKey: .movieBackdropUrl)
         try container.encodeIfPresent(movieYear, forKey: .movieYear)
         try container.encode(ISO8601DateFormatter().string(from: addedAt), forKey: .addedAt)
         try container.encode(sortOrder, forKey: .sortOrder)
@@ -270,16 +275,18 @@ class PersistentListItem {
     var tmdbId: Int
     var movieTitle: String
     var moviePosterUrl: String?
+    var movieBackdropUrl: String?
     var movieYear: Int?
     var addedAt: Date
     var sortOrder: Int
     
-    init(id: Int64, listId: String, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieYear: Int? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
+    init(id: Int64, listId: String, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieBackdropUrl: String? = nil, movieYear: Int? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
         self.id = id
         self.listId = listId
         self.tmdbId = tmdbId
         self.movieTitle = movieTitle
         self.moviePosterUrl = moviePosterUrl
+        self.movieBackdropUrl = movieBackdropUrl
         self.movieYear = movieYear
         self.addedAt = addedAt
         self.sortOrder = sortOrder
@@ -292,6 +299,7 @@ class PersistentListItem {
             tmdbId: listItem.tmdbId,
             movieTitle: listItem.movieTitle,
             moviePosterUrl: listItem.moviePosterUrl,
+            movieBackdropUrl: listItem.movieBackdropUrl,
             movieYear: listItem.movieYear,
             addedAt: listItem.addedAt,
             sortOrder: listItem.sortOrder
@@ -305,6 +313,7 @@ class PersistentListItem {
             tmdbId: tmdbId,
             movieTitle: movieTitle,
             moviePosterUrl: moviePosterUrl,
+            movieBackdropUrl: movieBackdropUrl,
             movieYear: movieYear,
             addedAt: addedAt,
             sortOrder: sortOrder
@@ -317,6 +326,7 @@ class PersistentListItem {
         self.tmdbId = listItem.tmdbId
         self.movieTitle = listItem.movieTitle
         self.moviePosterUrl = listItem.moviePosterUrl
+        self.movieBackdropUrl = listItem.movieBackdropUrl
         self.movieYear = listItem.movieYear
         self.addedAt = listItem.addedAt
         self.sortOrder = listItem.sortOrder

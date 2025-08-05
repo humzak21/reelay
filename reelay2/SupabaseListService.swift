@@ -223,7 +223,7 @@ class SupabaseListService: ObservableObject {
     
     // MARK: - List Item Operations
     
-    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, year: Int? = nil, listId: UUID) async throws {
+    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, backdropUrl: String? = nil, year: Int? = nil, listId: UUID) async throws {
         isLoading = true
         error = nil
         
@@ -244,6 +244,7 @@ class SupabaseListService: ObservableObject {
                 tmdbId: tmdbId,
                 movieTitle: title,
                 moviePosterUrl: posterUrl,
+                movieBackdropUrl: backdropUrl,
                 movieYear: year,
                 sortOrder: nextSortOrder
             )
@@ -304,6 +305,59 @@ class SupabaseListService: ObservableObject {
             
             // Update the list's item count
             await refreshListItemCount(listId)
+            
+        } catch {
+            self.error = error
+            throw error
+        }
+    }
+    
+    func reorderListItems(_ listId: UUID, items: [ListItem]) async throws {
+        isLoading = true
+        error = nil
+        
+        defer { isLoading = false }
+        
+        do {
+            // Create update requests for each item with new sort order
+            for (index, item) in items.enumerated() {
+                let updatedItem = ListItem(
+                    id: item.id,
+                    listId: item.listId,
+                    tmdbId: item.tmdbId,
+                    movieTitle: item.movieTitle,
+                    moviePosterUrl: item.moviePosterUrl,
+                    movieBackdropUrl: item.movieBackdropUrl,
+                    movieYear: item.movieYear,
+                    addedAt: item.addedAt,
+                    sortOrder: index
+                )
+                
+                // Update in Supabase
+                try await supabaseClient
+                    .from("list_items")
+                    .update(["sort_order": index])
+                    .eq("id", value: String(item.id))
+                    .execute()
+                
+                // Update locally
+                try saveListItemLocally(updatedItem)
+            }
+            
+            // Update in-memory data
+            listItems[listId] = items.enumerated().map { index, item in
+                ListItem(
+                    id: item.id,
+                    listId: item.listId,
+                    tmdbId: item.tmdbId,
+                    movieTitle: item.movieTitle,
+                    moviePosterUrl: item.moviePosterUrl,
+                    movieBackdropUrl: item.movieBackdropUrl,
+                    movieYear: item.movieYear,
+                    addedAt: item.addedAt,
+                    sortOrder: index
+                )
+            }
             
         } catch {
             self.error = error
@@ -612,6 +666,7 @@ struct AddListItemInsert: Codable {
     let tmdbId: Int
     let movieTitle: String
     let moviePosterUrl: String?
+    let movieBackdropUrl: String?
     let movieYear: Int?
     let sortOrder: Int
     
@@ -620,6 +675,7 @@ struct AddListItemInsert: Codable {
         case tmdbId = "tmdb_id"
         case movieTitle = "movie_title"
         case moviePosterUrl = "movie_poster_url"
+        case movieBackdropUrl = "movie_backdrop_url"
         case movieYear = "movie_year"
         case sortOrder = "sort_order"
     }

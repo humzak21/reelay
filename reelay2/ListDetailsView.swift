@@ -22,12 +22,15 @@ struct ListDetailsView: View {
     }
     
     private var firstMovieBackdrop: String? {
-        // For now, we'll use the poster URL as backdrop since we don't store backdrop URLs in list items
-        // This will show the poster image as a wider backdrop - still looks good
-        guard let firstItem = listItems.first,
-              let posterUrl = firstItem.moviePosterUrl else { return nil }
+        guard let firstItem = listItems.first else { return nil }
         
-        // Use higher resolution if it's a TMDB URL
+        // Prefer backdrop URL if available
+        if let backdropUrl = firstItem.movieBackdropUrl {
+            return backdropUrl
+        }
+        
+        // Fallback to poster URL with higher resolution
+        guard let posterUrl = firstItem.moviePosterUrl else { return nil }
         if posterUrl.contains("image.tmdb.org/t/p/w500") {
             return posterUrl.replacingOccurrences(of: "w500", with: "w1280")
         }
@@ -37,41 +40,37 @@ struct ListDetailsView: View {
     
     var body: some View {
         NavigationView {
-            ZStack {
-                // Backdrop extends behind navigation bar
-                VStack(spacing: 0) {
-                    headerView
-                        .frame(height: 80)
-                        .ignoresSafeArea(edges: .top)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    // Backdrop Section
+                    backdropSection
                     
-                    Spacer()
-                }
-                
-                // Content positioned below backdrop
-                VStack(spacing: 0) {
-                    // Spacer to push content below backdrop
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(height: 260)
+                    // List Info Section (similar to watch date section)
+                    listInfoSection
                     
-                    // Scrollable movies grid in same position
-                    if listItems.isEmpty {
-                        emptyStateView
-                    } else {
-                        ScrollView {
+                    // Content Section
+                    VStack(spacing: 16) {
+                        if listItems.isEmpty {
+                            emptyStateView
+                        } else {
                             moviesGridView
-                                .padding(.top, 20)
                         }
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                    .background(Color.black)
+                    
+                    Spacer(minLength: 100)
                 }
             }
-            .background(Color.black)
+            .background(Color.black.ignoresSafeArea())
+            .ignoresSafeArea(edges: .top)
             .preferredColorScheme(.dark)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Close") {
+                    Button("Close", systemImage: "xmark") {
                         dismiss()
                     }
                     .foregroundColor(.white)
@@ -80,22 +79,22 @@ struct ListDetailsView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
-                        Button("Add Movies") {
+                        Button("Add Movies", systemImage: "plus") {
                             showingAddMovies = true
                         }
                         
-                        Button("Edit List") {
+                        Button("Edit List", systemImage: "pencil") {
                             showingEditList = true
                         }
                         
                         if list.pinned {
-                            Button("Unpin List") {
+                            Button("Unpin List", systemImage: "pin.slash") {
                                 Task {
                                     await unpinList()
                                 }
                             }
                         } else {
-                            Button("Pin List") {
+                            Button("Pin List", systemImage: "pin.fill") {
                                 Task {
                                     await pinList()
                                 }
@@ -133,80 +132,92 @@ struct ListDetailsView: View {
         }
     }
     
-    @ViewBuilder
-    private var headerView: some View {
-        ZStack(alignment: .bottomLeading) {
-            // Backdrop image - fills the header container completely
-            if let backdropUrl = firstMovieBackdrop {
-                AsyncImage(url: URL(string: backdropUrl)) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Color.gray.opacity(0.3)
+    private var listInfoSection: some View {
+        VStack(spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(list.name.uppercased())
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .tracking(1)
+                
+                if list.pinned {
+                    Image(systemName: "pin.fill")
+                        .foregroundColor(.yellow)
+                        .font(.body)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-            } else {
-                // Default gradient background when no backdrop
+            }
+            
+            if let description = list.description, !description.isEmpty {
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+            }
+            
+            Text("\(list.itemCount) FILMS")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.white.opacity(0.7))
+                .textCase(.uppercase)
+                .tracking(1.2)
+        }
+        .padding(.top, 20)
+        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.8), Color.black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+    
+    private var backdropSection: some View {
+        AsyncImage(url: URL(string: firstMovieBackdrop ?? "")) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            case .failure(_):
+                // Fallback to default gradient when backdrop fails
                 LinearGradient(
                     colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.8)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
+            case .empty:
+                // Loading state
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+            @unknown default:
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
             }
-            
-            // Dark gradient overlay for text readability - only at bottom half
+        }
+        .frame(height: 300)
+        .clipped()
+        .overlay(
+            // Enhanced gradient overlay for recessed appearance
             LinearGradient(
-                colors: [Color.clear, Color.black.opacity(0.8)],
-                startPoint: UnitPoint(x: 0.5, y: 0.5),
+                colors: [
+                    Color.black.opacity(0.1), 
+                    Color.black.opacity(0.3),
+                    Color.black.opacity(0.6),
+                    Color.black.opacity(0.9)
+                ],
+                startPoint: .top,
                 endPoint: .bottom
             )
-            
-            // List title and description overlay - positioned at bottom
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .center, spacing: 6) {
-                    Text(list.name)
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
-                    
-                    if list.pinned {
-                        Image(systemName: "pin.fill")
-                            .foregroundColor(.yellow)
-                            .font(.body)
-                            .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
-                    }
-                    
-                    Spacer()
-                }
-                
-                if let description = list.description, !description.isEmpty {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.9))
-                        .lineLimit(2)
-                        .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
-                }
-                
-                Text("\(list.itemCount) films")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.8))
-                    .textCase(.uppercase)
-                    .fontWeight(.medium)
-                    .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
-            }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
-        }
+        )
     }
     
     @ViewBuilder
     private var emptyStateView: some View {
         VStack(spacing: 16) {
-            Spacer()
-            
             Image(systemName: "film.stack")
                 .font(.system(size: 64))
                 .foregroundColor(.gray)
@@ -220,17 +231,15 @@ struct ListDetailsView: View {
                 .font(.body)
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
             
             Button("Add Movies") {
                 showingAddMovies = true
             }
             .buttonStyle(.borderedProminent)
             .padding(.top, 8)
-            
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 60)
     }
     
     @ViewBuilder
@@ -240,8 +249,6 @@ struct ListDetailsView: View {
                 MoviePosterView(item: item, list: list)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 20)
     }
     
     private func pinList() async {
@@ -275,10 +282,15 @@ struct MoviePosterView: View {
     let list: MovieList
     @StateObject private var dataManager = DataManager.shared
     @State private var showingRemoveAlert = false
+    @State private var selectedMovie: Movie?
+    @State private var showingMovieDetails = false
+    @State private var isLoadingMovie = false
     
     var body: some View {
         Button(action: {
-            // Could implement navigation to movie details here
+            Task {
+                await loadLatestMovieEntry()
+            }
         }) {
             AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
                 image
@@ -302,6 +314,19 @@ struct MoviePosterView: View {
             }
             .clipped()
             .cornerRadius(12)
+            .overlay(
+                Group {
+                    if isLoadingMovie {
+                        Color.black.opacity(0.6)
+                            .cornerRadius(12)
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                            )
+                    }
+                }
+            )
             .contextMenu {
                 Button("Remove from List", role: .destructive) {
                     showingRemoveAlert = true
@@ -319,6 +344,11 @@ struct MoviePosterView: View {
         } message: {
             Text("Remove '\(item.movieTitle)' from '\(list.name)'?")
         }
+        .sheet(isPresented: $showingMovieDetails) {
+            if let selectedMovie = selectedMovie {
+                MovieDetailsView(movie: selectedMovie)
+            }
+        }
     }
     
     private func removeMovie() async {
@@ -326,6 +356,76 @@ struct MoviePosterView: View {
             try await dataManager.removeMovieFromList(tmdbId: item.tmdbId, listId: list.id)
         } catch {
             print("Error removing movie: \(error)")
+        }
+    }
+    
+    private func loadLatestMovieEntry() async {
+        isLoadingMovie = true
+        
+        do {
+            let movies = try await dataManager.getMoviesByTmdbId(tmdbId: item.tmdbId)
+            
+            if movies.isEmpty {
+                // No entries exist, create a placeholder movie for the unlogged state
+                let placeholderMovie = Movie(
+                    id: -1, // Use -1 to indicate this is a placeholder
+                    title: item.movieTitle,
+                    release_year: item.movieYear,
+                    release_date: nil,
+                    rating: nil,
+                    detailed_rating: nil,
+                    review: nil,
+                    tags: nil,
+                    watch_date: nil,
+                    is_rewatch: nil,
+                    tmdb_id: item.tmdbId,
+                    overview: nil,
+                    poster_url: item.moviePosterUrl,
+                    backdrop_path: item.movieBackdropUrl,
+                    director: nil,
+                    runtime: nil,
+                    vote_average: nil,
+                    vote_count: nil,
+                    popularity: nil,
+                    original_language: nil,
+                    original_title: nil,
+                    tagline: nil,
+                    status: nil,
+                    budget: nil,
+                    revenue: nil,
+                    imdb_id: nil,
+                    homepage: nil,
+                    genres: nil,
+                    created_at: nil,
+                    updated_at: nil
+                )
+                
+                await MainActor.run {
+                    selectedMovie = placeholderMovie
+                    showingMovieDetails = true
+                    isLoadingMovie = false
+                }
+            } else {
+                // Find the latest entry (most recent watch_date or created_at)
+                let latestMovie = movies.max { movie1, movie2 in
+                    let date1 = movie1.watch_date ?? movie1.created_at ?? ""
+                    let date2 = movie2.watch_date ?? movie2.created_at ?? ""
+                    return date1 < date2
+                }
+                
+                await MainActor.run {
+                    selectedMovie = latestMovie
+                    if latestMovie != nil {
+                        showingMovieDetails = true
+                    }
+                    isLoadingMovie = false
+                }
+            }
+        } catch {
+            print("Error loading latest movie entry: \(error)")
+            await MainActor.run {
+                isLoadingMovie = false
+            }
         }
     }
 }
@@ -507,6 +607,7 @@ struct AddMoviesToListView: View {
                 tmdbId: movie.id,
                 title: movie.title,
                 posterUrl: movie.posterURL?.absoluteString,
+                backdropUrl: movie.backdropURL?.absoluteString,
                 year: movie.releaseYear,
                 listId: list.id
             )
@@ -601,6 +702,8 @@ struct EditListView: View {
     @State private var listDescription: String
     @State private var isUpdating = false
     @State private var errorMessage: String?
+    @State private var listItems: [ListItem] = []
+    @State private var isReordering = false
     
     init(list: MovieList) {
         self.list = list
@@ -610,37 +713,80 @@ struct EditListView: View {
     
     var body: some View {
         NavigationView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("List Name")
-                        .font(.headline)
-                        .foregroundColor(.white)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    // List Details Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("List Details")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("List Name")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            TextField("Enter list name", text: $listName)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Description (Optional)")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            TextField("Enter description", text: $listDescription, axis: .vertical)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .lineLimit(3, reservesSpace: true)
+                        }
+                    }
                     
-                    TextField("Enter list name", text: $listName)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Description (Optional)")
-                        .font(.headline)
-                        .foregroundColor(.white)
+                    // List Items Section
+                    if !listItems.isEmpty {
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Text("Movies")
+                                    .font(.title2)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                
+                                Spacer()
+                                
+                                Button(isReordering ? "Done" : "Reorder") {
+                                    withAnimation {
+                                        isReordering.toggle()
+                                    }
+                                }
+                                .foregroundColor(.blue)
+                            }
+                            
+                            VStack(spacing: 12) {
+                                ForEach(listItems) { item in
+                                    EditableListItemView(
+                                        item: item,
+                                        isReordering: isReordering,
+                                        onRemove: {
+                                            await removeItem(item)
+                                        }
+                                    )
+                                }
+                                .onMove(perform: isReordering ? moveItems : nil)
+                            }
+                        }
+                    }
                     
-                    TextField("Enter description", text: $listDescription, axis: .vertical)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .lineLimit(3, reservesSpace: true)
+                    if let errorMessage = errorMessage {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    }
                 }
-                
-                if let errorMessage = errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                }
-                
-                Spacer()
+                .padding()
             }
-            .padding()
             .background(Color.black)
             .preferredColorScheme(.dark)
+            .environment(\.editMode, isReordering ? .constant(.active) : .constant(.inactive))
             .navigationTitle("Edit List")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -659,6 +805,37 @@ struct EditListView: View {
                     .disabled(listName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isUpdating)
                 }
             }
+            .onAppear {
+                loadListItems()
+            }
+        }
+    }
+    
+    private func loadListItems() {
+        listItems = dataManager.getListItems(list)
+    }
+    
+    private func moveItems(from source: IndexSet, to destination: Int) {
+        listItems.move(fromOffsets: source, toOffset: destination)
+        
+        // Save the reordered items
+        Task {
+            do {
+                try await dataManager.reorderListItems(list.id, items: listItems)
+            } catch {
+                errorMessage = error.localizedDescription
+                // Reload items on error to revert changes
+                loadListItems()
+            }
+        }
+    }
+    
+    private func removeItem(_ item: ListItem) async {
+        do {
+            try await dataManager.removeMovieFromList(tmdbId: item.tmdbId, listId: list.id)
+            loadListItems()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
     
@@ -683,6 +860,84 @@ struct EditListView: View {
         }
         
         isUpdating = false
+    }
+}
+
+struct EditableListItemView: View {
+    let item: ListItem
+    let isReordering: Bool
+    let onRemove: () async -> Void
+    @State private var showingRemoveAlert = false
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // Drag handle (only show when reordering)
+            if isReordering {
+                Image(systemName: "line.3.horizontal")
+                    .font(.title2)
+                    .foregroundColor(.gray)
+                    .frame(width: 20)
+            }
+            
+            // Movie poster
+            AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .foregroundColor(.gray)
+                    )
+            }
+            .frame(width: 50, height: 75)
+            .cornerRadius(8)
+            .clipped()
+            
+            // Movie details
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.movieTitle)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                
+                if let year = item.movieYear {
+                    Text(String(year))
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+            }
+            
+            Spacer()
+            
+            // Remove button (only show when not reordering)
+            if !isReordering {
+                Button(action: {
+                    showingRemoveAlert = true
+                }) {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding()
+        .background(Color.gray.opacity(0.15))
+        .cornerRadius(12)
+        .alert("Remove Movie", isPresented: $showingRemoveAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Remove", role: .destructive) {
+                Task {
+                    await onRemove()
+                }
+            }
+        } message: {
+            Text("Remove '\(item.movieTitle)' from this list?")
+        }
     }
 }
 
