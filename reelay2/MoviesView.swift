@@ -104,6 +104,8 @@ struct MoviesView: View {
       .task {
         if movieService.isLoggedIn {
           await loadMovies()
+          // Ensure lists are loaded for border detection
+          await listService.syncListsFromSupabase()
         }
       }
       .onChange(of: movieService.isLoggedIn) { _, isLoggedIn in
@@ -327,8 +329,26 @@ struct MoviesView: View {
         .cornerRadius(24)
         .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
         .padding(.horizontal, 20)
+        // MARK: - Temporarily disabled animated border feature
+        // .overlay(
+        //   AnimatedBorderOverlay(
+        //     isVisible: longPressedMovieId == movie.id,
+        //     colors: getBorderColors(for: movie),
+        //     cornerRadius: 24
+        //   )
+        // )
     }
     .buttonStyle(PlainButtonStyle())
+    // MARK: - Temporarily disabled long press gesture
+    // .onLongPressGesture(minimumDuration: 0.3, maximumDistance: 20) {
+    //   // Long press completed - could add haptic feedback here
+    //   print("Long press completed for movie: \(movie.title)")
+    // } onPressingChanged: { isPressing in
+    //   print("Long press pressing changed: \(isPressing) for movie: \(movie.title)")
+    //   withAnimation(.easeInOut(duration: 0.2)) {
+    //     longPressedMovieId = isPressing ? movie.id : nil
+    //   }
+    // }
   }
 
   @ViewBuilder
@@ -554,8 +574,26 @@ struct MoviesView: View {
               selectedMovie = movie
             }) {
               selectedDateMovieRow(movie: movie)
+                // MARK: - Temporarily disabled animated border feature
+                // .overlay(
+                //   AnimatedBorderOverlay(
+                //     isVisible: longPressedMovieId == movie.id,
+                //     colors: getBorderColors(for: movie),
+                //     cornerRadius: 12
+                //   )
+                // )
             }
             .buttonStyle(PlainButtonStyle())
+            // MARK: - Temporarily disabled long press gesture
+            // .onLongPressGesture(minimumDuration: 0.3, maximumDistance: 20) {
+            //   // Long press completed
+            //   print("Long press completed for movie: \(movie.title)")
+            // } onPressingChanged: { isPressing in
+            //   print("Long press pressing changed: \(isPressing) for movie: \(movie.title)")
+            //   withAnimation(.easeInOut(duration: 0.2)) {
+            //     longPressedMovieId = isPressing ? movie.id : nil
+            //   }
+            // }
           }
         }
       }
@@ -751,8 +789,26 @@ struct MoviesView: View {
         .scaleEffect(tappedMovieId == movie.id ? 1.05 : 1.0)
         .animation(
           .spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0), value: tappedMovieId)
+        // MARK: - Temporarily disabled animated border feature
+        // .overlay(
+        //   AnimatedBorderOverlay(
+        //     isVisible: longPressedMovieId == movie.id,
+        //     colors: getBorderColors(for: movie),
+        //     cornerRadius: 12
+        //   )
+        // )
     }
     .buttonStyle(PlainButtonStyle())
+    // MARK: - Temporarily disabled long press gesture
+    // .onLongPressGesture(minimumDuration: 0.3, maximumDistance: 20) {
+    //   // Long press completed - could add haptic feedback here
+    //   print("Long press completed for movie: \(movie.title)")
+    // } onPressingChanged: { isPressing in
+    //   print("Long press pressing changed: \(isPressing) for movie: \(movie.title)")
+    //   withAnimation(.easeInOut(duration: 0.2)) {
+    //     longPressedMovieId = isPressing ? movie.id : nil
+    //   }
+    // }
   }
 
   private func getMonthYearFromWatchDate(_ dateString: String?) -> String {
@@ -795,6 +851,153 @@ struct MoviesView: View {
     formatter.dateFormat = "MMMM yyyy"
     return formatter.string(from: Date())
   }
+  
+  // MARK: - Movie Border Category Logic
+  
+  // MARK: - Border calculation logic (temporarily disabled)
+  private func getBorderColors(for movie: Movie) -> [Color] {
+    var borderColors: [Color] = []
+    
+    guard let watchDate = movie.watch_date else { 
+      // print("No watch date for movie: \(movie.title)")
+      return borderColors 
+    }
+    
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "yyyy-MM-dd"
+    guard let movieWatchDate = dateFormatter.date(from: watchDate) else { 
+      // print("Could not parse watch date: \(watchDate) for movie: \(movie.title)")
+      return borderColors 
+    }
+    
+    let calendar = Calendar.current
+    let movieYear = calendar.component(.year, from: movieWatchDate)
+    let currentYear = calendar.component(.year, from: Date())
+    
+    // print("Checking borders for movie: \(movie.title), year: \(movieYear), current year: \(currentYear)")
+    
+    // Check for grey border: rewatch but never had entry before
+    if movie.isRewatchMovie && isFirstEntryForMovie(movie) {
+      borderColors.append(.gray)
+      // print("Added grey border for \(movie.title)")
+    }
+    
+    // Check for yellow border: first watched then rewatched in same calendar year
+    if movie.isRewatchMovie && wasFirstWatchedInSameYear(movie) {
+      borderColors.append(.yellow)
+      // print("Added yellow border for \(movie.title)")
+    }
+    
+    // Check for orange border: watched or rewatched in previous year
+    if movieYear < currentYear {
+      borderColors.append(.orange)
+      // print("Added orange border for \(movie.title)")
+    }
+    
+    // Check for purple border: part of "must watches" list
+    if isOnMustWatchesList(movie, for: movieYear) {
+      borderColors.append(.purple)
+      // print("Added purple border for \(movie.title)")
+    }
+    
+    // Check for cyan border: on "looking forward" list and watched in same year
+    if isOnLookingForwardList(movie) && movieYear == currentYear {
+      borderColors.append(.cyan)
+      // print("Added cyan border for \(movie.title)")
+    }
+    
+    // If no specific borders, add a default blue border for testing
+    if borderColors.isEmpty {
+      borderColors.append(.blue)
+      // print("Added default blue border for \(movie.title)")
+    }
+    
+    // print("Final border colors for \(movie.title): \(borderColors)")
+    return borderColors
+  }
+  
+  private func isFirstEntryForMovie(_ movie: Movie) -> Bool {
+    // Find all entries for this TMDB ID
+    let entriesForMovie = movies.filter { $0.tmdb_id == movie.tmdb_id && $0.tmdb_id != nil }
+    
+    // Check if this is the first entry (by watch_date) and it's marked as rewatch
+    guard let sortedEntries = entriesForMovie.sorted(by: { ($0.watch_date ?? "") < ($1.watch_date ?? "") }).first else {
+      return false
+    }
+    
+    return sortedEntries.id == movie.id && movie.isRewatchMovie
+  }
+  
+  private func wasFirstWatchedInSameYear(_ movie: Movie) -> Bool {
+    guard let watchDate = movie.watch_date,
+          let movieWatchDate = DateFormatter.movieDateFormatter.date(from: watchDate),
+          let tmdbId = movie.tmdb_id else { return false }
+    
+    let calendar = Calendar.current
+    let movieYear = calendar.component(.year, from: movieWatchDate)
+    
+    // Find all entries for this movie
+    let entriesForMovie = movies.filter { $0.tmdb_id == tmdbId }
+      .compactMap { movie -> (Movie, Date)? in
+        guard let dateString = movie.watch_date,
+              let date = DateFormatter.movieDateFormatter.date(from: dateString) else { return nil }
+        return (movie, date)
+      }
+      .sorted { $0.1 < $1.1 }
+    
+    // Check if there are at least 2 entries in the same year
+    let entriesInSameYear = entriesForMovie.filter {
+      calendar.component(.year, from: $0.1) == movieYear
+    }
+    
+    if entriesInSameYear.count >= 2 {
+      // Check if the first was not a rewatch and current one is a rewatch
+      let firstEntry = entriesInSameYear[0].0
+      return !firstEntry.isRewatchMovie && movie.isRewatchMovie && movie.id != firstEntry.id
+    }
+    
+    return false
+  }
+  
+  private func isOnMustWatchesList(_ movie: Movie, for year: Int) -> Bool {
+    guard let tmdbId = movie.tmdb_id else { return false }
+    
+    // Look for list named exactly "Must Watches for xxxx"
+    let mustWatchesListName = "Must Watches for \(year)"
+    guard let mustWatchesList = listService.movieLists.first(where: { $0.name == mustWatchesListName }) else {
+      return false
+    }
+    
+    let listItems = listService.getListItems(mustWatchesList)
+    return listItems.contains(where: { $0.tmdbId == tmdbId })
+  }
+  
+  private func isOnLookingForwardList(_ movie: Movie) -> Bool {
+    guard let tmdbId = movie.tmdb_id else { return false }
+    
+    // Look for lists named "Looking Forward in xxxx"
+    let lookingForwardLists = listService.movieLists.filter { list in
+      list.name.hasPrefix("Looking Forward in ")
+    }
+    
+    for list in lookingForwardLists {
+      let listItems = listService.getListItems(list)
+      if listItems.contains(where: { $0.tmdbId == tmdbId }) {
+        return true
+      }
+    }
+    
+    return false
+  }
+}
+
+// MARK: - DateFormatter Extension
+extension DateFormatter {
+  static let movieDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter
+  }()
 }
 
 struct MovieRowView: View {
@@ -1021,6 +1224,87 @@ struct FilterSortView: View {
             dismiss()
           }
         }
+      }
+    }
+  }
+}
+
+// MARK: - Animated Border Overlay Component
+
+struct AnimatedBorderOverlay: View {
+  let isVisible: Bool
+  let colors: [Color]
+  let cornerRadius: CGFloat
+  
+  @State private var rotationAngle: Double = 0
+  
+  var body: some View {
+    if isVisible && !colors.isEmpty {
+      RoundedRectangle(cornerRadius: cornerRadius)
+        .strokeBorder(
+          LinearGradient(
+            colors: colors.count == 1 ? [colors[0], colors[0]] : colors,
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+          ),
+          lineWidth: 4
+        )
+        .rotationEffect(.degrees(rotationAngle))
+        .scaleEffect(isVisible ? 1.02 : 1.0)
+        .opacity(isVisible ? 1.0 : 0.0)
+        .animation(.easeInOut(duration: 0.2), value: isVisible)
+        .onAppear {
+          if isVisible {
+            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+              rotationAngle = 360
+            }
+          }
+        }
+        .onChange(of: isVisible) { _, visible in
+          if visible {
+            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+              rotationAngle = 360
+            }
+          } else {
+            rotationAngle = 0
+          }
+        }
+    }
+  }
+}
+
+// MARK: - Multiple Border Layers Overlay
+
+struct MultipleBorderOverlay: View {
+  let isVisible: Bool
+  let colors: [Color]
+  let cornerRadius: CGFloat
+  
+  @State private var rotationAngle: Double = 0
+  
+  var body: some View {
+    if isVisible && !colors.isEmpty {
+      ZStack {
+        ForEach(Array(colors.enumerated()), id: \.offset) { index, color in
+          RoundedRectangle(cornerRadius: cornerRadius)
+            .strokeBorder(
+              color.opacity(0.8),
+              lineWidth: 2
+            )
+            .scaleEffect(1.0 + CGFloat(index) * 0.015)
+            .rotationEffect(.degrees(rotationAngle + Double(index) * 30))
+            .opacity(isVisible ? 1.0 : 0.0)
+        }
+      }
+      .scaleEffect(isVisible ? 1.02 : 1.0)
+      .animation(.easeInOut(duration: 0.3), value: isVisible)
+      .onAppear {
+        withAnimation(.linear(duration: 3.0).repeatForever(autoreverses: false)) {
+          rotationAngle = 360
+        }
+      }
+      .onDisappear {
+        rotationAngle = 0
       }
     }
   }

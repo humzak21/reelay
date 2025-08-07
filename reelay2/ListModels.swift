@@ -2,7 +2,7 @@
 //  ListModels.swift
 //  reelay2
 //
-//  Created by Claude on 8/4/25.
+//  Created by Humza Khalil on 8/4/25.
 //
 
 import Foundation
@@ -17,8 +17,9 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
     let updatedAt: Date
     let itemCount: Int
     let pinned: Bool
+    let ranked: Bool
     
-    init(id: UUID = UUID(), userId: UUID, name: String, description: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false) {
+    init(id: UUID = UUID(), userId: UUID, name: String, description: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false, ranked: Bool = false) {
         self.id = id
         self.userId = userId
         self.name = name
@@ -27,6 +28,7 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         self.updatedAt = updatedAt
         self.itemCount = itemCount
         self.pinned = pinned
+        self.ranked = ranked
     }
     
     enum CodingKeys: String, CodingKey {
@@ -38,6 +40,7 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         case updatedAt = "updated_at"
         case itemCount = "item_count"
         case pinned
+        case ranked
     }
     
     init(from decoder: Decoder) throws {
@@ -75,6 +78,7 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         
         itemCount = try container.decodeIfPresent(Int.self, forKey: .itemCount) ?? 0
         pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+        ranked = try container.decodeIfPresent(Bool.self, forKey: .ranked) ?? false
     }
     
     func encode(to encoder: Encoder) throws {
@@ -88,6 +92,7 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         try container.encode(ISO8601DateFormatter().string(from: updatedAt), forKey: .updatedAt)
         try container.encode(itemCount, forKey: .itemCount)
         try container.encode(pinned, forKey: .pinned)
+        try container.encode(ranked, forKey: .ranked)
     }
     
     // Helper method to parse dates from various formats
@@ -243,8 +248,9 @@ class PersistentMovieList {
     var updatedAt: Date
     var itemCount: Int
     var pinned: Bool
+    var ranked: Bool
     
-    init(id: String, userId: String, name: String, listDescription: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false) {
+    init(id: String, userId: String, name: String, listDescription: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false, ranked: Bool = false) {
         self.id = id
         self.userId = userId
         self.name = name
@@ -253,6 +259,7 @@ class PersistentMovieList {
         self.updatedAt = updatedAt
         self.itemCount = itemCount
         self.pinned = pinned
+        self.ranked = ranked
     }
     
     convenience init(from movieList: MovieList) {
@@ -264,7 +271,8 @@ class PersistentMovieList {
             createdAt: movieList.createdAt,
             updatedAt: movieList.updatedAt,
             itemCount: movieList.itemCount,
-            pinned: movieList.pinned
+            pinned: movieList.pinned,
+            ranked: movieList.ranked
         )
     }
     
@@ -277,7 +285,8 @@ class PersistentMovieList {
             createdAt: createdAt,
             updatedAt: updatedAt,
             itemCount: itemCount,
-            pinned: pinned
+            pinned: pinned,
+            ranked: ranked
         )
     }
     
@@ -290,6 +299,7 @@ class PersistentMovieList {
         self.updatedAt = movieList.updatedAt
         self.itemCount = movieList.itemCount
         self.pinned = movieList.pinned
+        self.ranked = movieList.ranked
     }
 }
 
@@ -371,20 +381,45 @@ struct CreateListRequest: Codable {
     let name: String
     let description: String?
     let userId: String
+    let ranked: Bool
     
     enum CodingKeys: String, CodingKey {
         case name
         case description
         case userId = "user_id"
+        case ranked
     }
 }
 
 struct UpdateListRequest: Codable {
     let name: String?
     let description: String?
+    let ranked: Bool?
     
-    init(name: String? = nil, description: String? = nil) {
+    init(name: String? = nil, description: String? = nil, ranked: Bool? = nil) {
         self.name = name
         self.description = description
+        self.ranked = ranked
+    }
+}
+
+// MARK: - Helper Extensions
+
+extension MovieList {
+    /// Checks if the list name or description contains ranking-related words
+    static func shouldAutoEnableRanking(name: String, description: String?) -> Bool {
+        let rankingKeywords = ["rank", "ranking", "ranks", "ranked", "top", "best", "tier", "order"]
+        
+        let separatorSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        let nameWords = name.lowercased().components(separatedBy: separatorSet)
+        let descriptionWords = (description?.lowercased().components(separatedBy: separatorSet)) ?? []
+        
+        let allWords = Set(nameWords + descriptionWords).filter { !$0.isEmpty }
+        
+        return rankingKeywords.contains { keyword in
+            allWords.contains { word in
+                word.contains(keyword) || keyword.contains(word)
+            }
+        }
     }
 }

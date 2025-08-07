@@ -2,7 +2,7 @@
 //  ModelContainerManager.swift
 //  reelay2
 //
-//  Created by Claude on 8/4/25.
+//  Created by Humza Khalil on 8/4/25.
 //
 
 import Foundation
@@ -34,7 +34,21 @@ class ModelContainerManager {
         do {
             self.modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            print("ModelContainer creation failed: \(error)")
+            
+            // Try to delete the existing database and recreate
+            do {
+                if FileManager.default.fileExists(atPath: storeURL.path) {
+                    try FileManager.default.removeItem(at: storeURL)
+                    print("Deleted existing database file")
+                }
+                
+                // Try creating the container again
+                self.modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
+                print("Successfully recreated ModelContainer")
+            } catch {
+                fatalError("Could not create ModelContainer even after reset: \(error)")
+            }
         }
     }
 }

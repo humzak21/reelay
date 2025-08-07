@@ -2,7 +2,7 @@
 //  DataManager.swift
 //  reelay2
 //
-//  Created by Claude on 8/4/25.
+//  Created by Humza Khalil on 8/4/25.
 //
 
 import Foundation
@@ -40,12 +40,12 @@ class DataManager: ObservableObject {
     
     // MARK: - List Operations
     
-    func createList(name: String, description: String? = nil) async throws -> MovieList {
-        return try await listService.createList(name: name, description: description)
+    func createList(name: String, description: String? = nil, ranked: Bool = false) async throws -> MovieList {
+        return try await listService.createList(name: name, description: description, ranked: ranked)
     }
     
-    func updateList(_ list: MovieList, name: String? = nil, description: String? = nil) async throws -> MovieList {
-        return try await listService.updateList(list, name: name, description: description)
+    func updateList(_ list: MovieList, name: String? = nil, description: String? = nil, ranked: Bool? = nil) async throws -> MovieList {
+        return try await listService.updateList(list, name: name, description: description, ranked: ranked)
     }
     
     func deleteList(_ list: MovieList) async throws {

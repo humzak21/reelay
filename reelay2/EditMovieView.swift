@@ -2,7 +2,7 @@
 //  EditMovieView.swift
 //  reelay2
 //
-//  Created by Claude on 8/1/25.
+//  Created by Humza Khalil on 8/1/25.
 //
 
 import SwiftUI

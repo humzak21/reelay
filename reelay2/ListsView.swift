@@ -14,6 +14,7 @@ struct ListsView: View {
     @State private var selectedList: MovieList?
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var showingCSVImport = false
     
     var body: some View {
         contentView
@@ -22,6 +23,14 @@ struct ListsView: View {
             .background(Color.black)
             .preferredColorScheme(.dark)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        showingCSVImport = true
+                    }) {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
                         showingCreateList = true
@@ -44,6 +53,9 @@ struct ListsView: View {
             }
             .sheet(isPresented: $showingCreateList) {
                 CreateListView()
+            }
+            .sheet(isPresented: $showingCSVImport) {
+                CSVImportView()
             }
             .sheet(item: $selectedList) { list in
                 ListDetailsView(list: list)
@@ -298,6 +310,7 @@ struct CreateListView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var listName = ""
     @State private var listDescription = ""
+    @State private var isRanked = false
     @State private var isCreating = false
     @State private var errorMessage: String?
     
@@ -311,6 +324,9 @@ struct CreateListView: View {
                     
                     TextField("Enter list name", text: $listName)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .onChange(of: listName) { _, newValue in
+                            checkAutoRanking()
+                        }
                 }
                 
                 VStack(alignment: .leading, spacing: 8) {
@@ -321,6 +337,26 @@ struct CreateListView: View {
                     TextField("Enter description", text: $listDescription, axis: .vertical)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .lineLimit(3, reservesSpace: true)
+                        .onChange(of: listDescription) { _, newValue in
+                            checkAutoRanking()
+                        }
+                }
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Ranked List")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        
+                        Spacer()
+                        
+                        Toggle("", isOn: $isRanked)
+                            .toggleStyle(SwitchToggleStyle(tint: .blue))
+                    }
+                    
+                    Text("Show numbers 1, 2, 3... next to movies to indicate ranking order")
+                        .font(.caption)
+                        .foregroundColor(.gray)
                 }
                 
                 if let errorMessage = errorMessage {
@@ -365,7 +401,8 @@ struct CreateListView: View {
             let description = listDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             _ = try await dataManager.createList(
                 name: listName.trimmingCharacters(in: .whitespacesAndNewlines),
-                description: description.isEmpty ? nil : description
+                description: description.isEmpty ? nil : description,
+                ranked: isRanked
             )
             dismiss()
         } catch {
@@ -373,6 +410,13 @@ struct CreateListView: View {
         }
         
         isCreating = false
+    }
+    
+    private func checkAutoRanking() {
+        // Only auto-enable if currently disabled to avoid overriding user choice
+        if !isRanked && MovieList.shouldAutoEnableRanking(name: listName, description: listDescription) {
+            isRanked = true
+        }
     }
 }
 

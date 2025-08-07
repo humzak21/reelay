@@ -2,7 +2,7 @@
 //  ListDetailsView.swift
 //  reelay2
 //
-//  Created by Claude on 8/4/25.
+//  Created by Humza Khalil on 8/4/25.
 //
 
 import SwiftUI
@@ -20,6 +20,10 @@ struct ListDetailsView: View {
     
     private var listItems: [ListItem] {
         dataManager.getListItems(list)
+    }
+    
+    private var isTheaterList: Bool {
+        list.name.lowercased().contains("theater") || list.name.lowercased().contains("theatre")
     }
     
     private var firstMovieBackdropURL: URL? {
@@ -41,7 +45,11 @@ struct ListDetailsView: View {
                         if listItems.isEmpty {
                             emptyStateView
                         } else {
-                            moviesGridView
+                            if isTheaterList {
+                                theaterTicketsView
+                            } else {
+                                moviesGridView
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
@@ -236,8 +244,17 @@ struct ListDetailsView: View {
     @ViewBuilder
     private var moviesGridView: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
-            ForEach(listItems) { item in
-                MoviePosterView(item: item, list: list)
+            ForEach(Array(listItems.enumerated()), id: \.element.id) { index, item in
+                MoviePosterView(item: item, list: list, rank: list.ranked ? index + 1 : nil)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var theaterTicketsView: some View {
+        LazyVStack(spacing: 16) {
+            ForEach(Array(listItems.enumerated()), id: \.element.id) { index, item in
+                TheaterTicketView(item: item, list: list, rank: list.ranked ? index + 1 : nil)
             }
         }
     }
@@ -292,6 +309,7 @@ struct ListDetailsView: View {
 struct MoviePosterView: View {
     let item: ListItem
     let list: MovieList
+    let rank: Int?
     @StateObject private var dataManager = DataManager.shared
     @State private var showingRemoveAlert = false
     @State private var selectedMovie: Movie?
@@ -338,6 +356,37 @@ struct MoviePosterView: View {
                             )
                     }
                 }
+            )
+            .overlay(
+                // Rank number overlay
+                Group {
+                    if let rank = rank {
+                        VStack {
+                            HStack {
+                                Text("\(rank)")
+                                    .font(.title2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color(red: 0.0, green: 0.2, blue: 0.4).opacity(0.95), Color(red: 0.0, green: 0.1, blue: 0.3).opacity(0.95)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .cornerRadius(8)
+                                    .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                
+                                Spacer()
+                            }
+                            
+                            Spacer()
+                        }
+                        .padding(8)
+                    }
+                }, alignment: .topLeading
             )
             .contextMenu {
                 Button("Remove from List", role: .destructive) {
@@ -724,6 +773,7 @@ struct EditListView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var listName: String
     @State private var listDescription: String
+    @State private var isRanked: Bool
     @State private var isUpdating = false
     @State private var errorMessage: String?
     @State private var listItems: [ListItem] = []
@@ -733,6 +783,7 @@ struct EditListView: View {
         self.list = list
         self._listName = State(initialValue: list.name)
         self._listDescription = State(initialValue: list.description ?? "")
+        self._isRanked = State(initialValue: list.ranked)
     }
     
     var body: some View {
@@ -753,6 +804,9 @@ struct EditListView: View {
                             
                             TextField("Enter list name", text: $listName)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .onChange(of: listName) { _, newValue in
+                                    checkAutoRanking()
+                                }
                         }
                         
                         VStack(alignment: .leading, spacing: 8) {
@@ -763,6 +817,26 @@ struct EditListView: View {
                             TextField("Enter description", text: $listDescription, axis: .vertical)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .lineLimit(3, reservesSpace: true)
+                                .onChange(of: listDescription) { _, newValue in
+                                    checkAutoRanking()
+                                }
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Ranked List")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                Spacer()
+                                
+                                Toggle("", isOn: $isRanked)
+                                    .toggleStyle(SwitchToggleStyle(tint: .blue))
+                            }
+                            
+                            Text("Show numbers 1, 2, 3... next to movies to indicate ranking order")
+                                .font(.caption)
+                                .foregroundColor(.gray)
                         }
                     }
                     
@@ -882,7 +956,8 @@ struct EditListView: View {
             _ = try await dataManager.updateList(
                 list,
                 name: name != list.name ? name : nil,
-                description: description != (list.description ?? "") ? (description.isEmpty ? nil : description) : nil
+                description: description != (list.description ?? "") ? (description.isEmpty ? nil : description) : nil,
+                ranked: isRanked != list.ranked ? isRanked : nil
             )
             dismiss()
         } catch {
@@ -890,6 +965,13 @@ struct EditListView: View {
         }
         
         isUpdating = false
+    }
+    
+    private func checkAutoRanking() {
+        // Only auto-enable if currently disabled to avoid overriding user choice
+        if !isRanked && MovieList.shouldAutoEnableRanking(name: listName, description: listDescription) {
+            isRanked = true
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 //  SupabaseListService.swift
 //  reelay2
 //
-//  Created by Claude on 8/4/25.
+//  Created by Humza Khalil on 8/4/25.
 //
 
 import Foundation
@@ -43,7 +43,7 @@ class SupabaseListService: ObservableObject {
     
     // MARK: - List Operations
     
-    func createList(name: String, description: String? = nil) async throws -> MovieList {
+    func createList(name: String, description: String? = nil, ranked: Bool = false) async throws -> MovieList {
         isLoading = true
         error = nil
         
@@ -57,7 +57,8 @@ class SupabaseListService: ObservableObject {
             let requestBody = CreateListRequest(
                 name: name,
                 description: description,
-                userId: currentUserId.uuidString
+                userId: currentUserId.uuidString,
+                ranked: ranked
             )
             
             let response = try await supabaseClient
@@ -84,14 +85,14 @@ class SupabaseListService: ObservableObject {
         }
     }
     
-    func updateList(_ list: MovieList, name: String? = nil, description: String? = nil) async throws -> MovieList {
+    func updateList(_ list: MovieList, name: String? = nil, description: String? = nil, ranked: Bool? = nil) async throws -> MovieList {
         isLoading = true
         error = nil
         
         defer { isLoading = false }
         
         do {
-            let requestBody = UpdateListRequest(name: name, description: description)
+            let requestBody = UpdateListRequest(name: name, description: description, ranked: ranked)
             
             let response = try await supabaseClient
                 .from("lists")
