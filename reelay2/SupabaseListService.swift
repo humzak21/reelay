@@ -223,7 +223,7 @@ class SupabaseListService: ObservableObject {
     
     // MARK: - List Item Operations
     
-    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, backdropUrl: String? = nil, year: Int? = nil, listId: UUID) async throws {
+    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, backdropPath: String? = nil, year: Int? = nil, listId: UUID) async throws {
         isLoading = true
         error = nil
         
@@ -244,7 +244,7 @@ class SupabaseListService: ObservableObject {
                 tmdbId: tmdbId,
                 movieTitle: title,
                 moviePosterUrl: posterUrl,
-                movieBackdropUrl: backdropUrl,
+                movieBackdropPath: backdropPath,
                 movieYear: year,
                 sortOrder: nextSortOrder
             )
@@ -327,7 +327,7 @@ class SupabaseListService: ObservableObject {
                     tmdbId: item.tmdbId,
                     movieTitle: item.movieTitle,
                     moviePosterUrl: item.moviePosterUrl,
-                    movieBackdropUrl: item.movieBackdropUrl,
+                    movieBackdropPath: item.movieBackdropPath,
                     movieYear: item.movieYear,
                     addedAt: item.addedAt,
                     sortOrder: index
@@ -352,7 +352,7 @@ class SupabaseListService: ObservableObject {
                     tmdbId: item.tmdbId,
                     movieTitle: item.movieTitle,
                     moviePosterUrl: item.moviePosterUrl,
-                    movieBackdropUrl: item.movieBackdropUrl,
+                    movieBackdropPath: item.movieBackdropPath,
                     movieYear: item.movieYear,
                     addedAt: item.addedAt,
                     sortOrder: index
@@ -666,7 +666,7 @@ struct AddListItemInsert: Codable {
     let tmdbId: Int
     let movieTitle: String
     let moviePosterUrl: String?
-    let movieBackdropUrl: String?
+    let movieBackdropPath: String?
     let movieYear: Int?
     let sortOrder: Int
     
@@ -675,7 +675,7 @@ struct AddListItemInsert: Codable {
         case tmdbId = "tmdb_id"
         case movieTitle = "movie_title"
         case moviePosterUrl = "movie_poster_url"
-        case movieBackdropUrl = "movie_backdrop_url"
+        case movieBackdropPath = "movie_backdrop_path"
         case movieYear = "movie_year"
         case sortOrder = "sort_order"
     }

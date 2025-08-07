@@ -282,8 +282,6 @@ struct ListCardView: View {
                                 .cornerRadius(8)
                         }
                     }
-                    
-                    Spacer()
                 }
             }
             .padding(16)

@@ -18,6 +18,7 @@ struct AddMoviesView: View {
     @State private var searchResults: [TMDBMovie] = []
     @State private var isSearching = false
     @State private var selectedMovie: TMDBMovie?
+    @State private var searchTask: Task<Void, Never>?
     
     // Movie details state
     @State private var movieDetails: TMDBMovieDetails?
@@ -57,6 +58,8 @@ struct AddMoviesView: View {
             }
             .navigationTitle("Add Movie")
             .navigationBarTitleDisplayMode(.inline)
+            .background(Color.black)
+            .preferredColorScheme(.dark)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel", systemImage: "xmark") {
@@ -85,37 +88,119 @@ struct AddMoviesView: View {
                     MovieDetailsView(movie: selectedMovie)
                 }
             }
+            .onDisappear {
+                searchTask?.cancel()
+            }
         }
     }
     
     // MARK: - Search View
     private var searchView: some View {
         VStack {
-            SearchBar(text: $searchText, onSearchButtonClicked: performSearch)
-                .padding()
+            // Search bar
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
+                
+                TextField("Search movies...", text: $searchText)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .foregroundColor(.white)
+                    .onSubmit {
+                        performSearch()
+                    }
+                    .onChange(of: searchText) { _, newValue in
+                        searchTask?.cancel()
+                        if !newValue.isEmpty {
+                            searchTask = Task {
+                                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
+                                if !Task.isCancelled {
+                                    await performSearchDelayed()
+                                }
+                            }
+                        } else {
+                            searchResults = []
+                        }
+                    }
+                
+                if !searchText.isEmpty {
+                    Button(action: {
+                        searchText = ""
+                        searchResults = []
+                        searchTask?.cancel()
+                    }) {
+                        Image(systemName: "xmark")
+                            .foregroundColor(.gray)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                
+                if isSearching {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.8)
+                }
+            }
+            .padding()
+            .background(Color.gray.opacity(0.2))
+            .cornerRadius(10)
+            .padding(.horizontal)
             
-            if isSearching {
-                ProgressView("Searching...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if searchResults.isEmpty && !searchText.isEmpty {
-                ContentUnavailableView(
-                    "No Results",
-                    systemImage: "magnifyingglass",
-                    description: Text("No movies found for '\(searchText)'")
-                )
+            // Search results
+            if searchResults.isEmpty && !searchText.isEmpty && !isSearching {
+                VStack(spacing: 16) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 48))
+                        .foregroundColor(.gray)
+                    
+                    Text("No Results")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    
+                    Text("Try searching with different keywords.")
+                        .font(.body)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if searchResults.isEmpty && searchText.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "film")
+                        .font(.system(size: 48))
+                        .foregroundColor(.gray)
+                    
+                    Text("Search Movies")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    
+                    Text("Search for movies to add to your diary.")
+                        .font(.body)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 searchResultsList
             }
+            
+            Spacer()
         }
+        .background(Color.black)
+        .preferredColorScheme(.dark)
     }
     
     private var searchResultsList: some View {
-        List(searchResults) { movie in
-            SearchResultRow(movie: movie) {
-                selectMovie(movie)
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(searchResults) { movie in
+                    SearchResultRow(movie: movie) {
+                        selectMovie(movie)
+                    }
+                }
             }
+            .padding(.horizontal)
         }
-        .listStyle(PlainListStyle())
     }
     
     // MARK: - Add Movie View
@@ -145,6 +230,7 @@ struct AddMoviesView: View {
             }
             .padding()
         }
+        .background(Color.black)
         .onAppear {
             if let movie = selectedMovie {
                 loadMovieDetails(movieId: movie.id)
@@ -444,26 +530,39 @@ struct AddMoviesView: View {
     
     // MARK: - Helper Methods
     private func performSearch() {
-        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        
-        isSearching = true
-        searchResults = []
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { 
+            searchResults = []
+            return 
+        }
         
         Task {
-            do {
-                let response = try await tmdbService.searchMovies(query: searchText)
-                await MainActor.run {
-                    searchResults = response.results
-                    isSearching = false
-                }
-            } catch {
-                await MainActor.run {
-                    alertMessage = "Search failed: \(error.localizedDescription)"
-                    showingAlert = true
-                    isSearching = false
-                }
-            }
+            await performSearchAsync()
         }
+    }
+    
+    private func performSearchDelayed() async {
+        await performSearchAsync()
+    }
+    
+    @MainActor
+    private func performSearchAsync() async {
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else { 
+            searchResults = []
+            return 
+        }
+        
+        isSearching = true
+        
+        do {
+            let response = try await tmdbService.searchMovies(query: searchText)
+            searchResults = response.results
+        } catch {
+            alertMessage = "Search failed: \(error.localizedDescription)"
+            showingAlert = true
+            searchResults = []
+        }
+        
+        isSearching = false
     }
     
     private func selectMovie(_ movie: TMDBMovie) {
@@ -669,25 +768,6 @@ struct AddMoviesView: View {
     }
 }
 
-// MARK: - Search Bar
-struct SearchBar: View {
-    @Binding var text: String
-    let onSearchButtonClicked: () -> Void
-    
-    var body: some View {
-        HStack {
-            TextField("Search movies...", text: $text)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .cornerRadius(24)
-                .onSubmit {
-                    onSearchButtonClicked()
-                }
-            
-            Button("Search", action: onSearchButtonClicked)
-                .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-    }
-}
 
 // MARK: - Search Result Row
 struct SearchResultRow: View {
@@ -697,40 +777,50 @@ struct SearchResultRow: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                WebImage(url: movie.posterURL)
-                    .resizable()
-                    .indicator(.activity)
-                    .transition(.fade(duration: 0.5))
-                    .aspectRatio(2/3, contentMode: .fill)
-                    .frame(width: 60)
-                    .cornerRadius(6)
+                // Movie poster
+                AsyncImage(url: movie.posterURL) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                }
+                .frame(width: 60, height: 90)
+                .cornerRadius(8)
+                .clipped()
                 
+                // Movie details
                 VStack(alignment: .leading, spacing: 4) {
                     Text(movie.title)
                         .font(.headline)
-                        .foregroundColor(.primary)
-                        .multilineTextAlignment(.leading)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .lineLimit(2)
                     
                     if let year = movie.releaseYear {
                         Text(String(year))
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.gray)
                     }
                     
-                    if let overview = movie.overview {
+                    if let overview = movie.overview, !overview.isEmpty {
                         Text(overview)
                             .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
+                            .foregroundColor(.gray)
+                            .lineLimit(3)
                     }
                 }
                 
                 Spacer()
                 
+                // Chevron
                 Image(systemName: "chevron.right")
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.gray)
             }
-            .padding(.vertical, 4)
+            .padding()
+            .background(Color.gray.opacity(0.15))
+            .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())
     }

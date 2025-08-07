@@ -16,26 +16,14 @@ struct ListDetailsView: View {
     @State private var showingEditList = false
     @State private var showingDeleteAlert = false
     @State private var errorMessage: String?
+    @State private var firstMovie: Movie?
     
     private var listItems: [ListItem] {
         dataManager.getListItems(list)
     }
     
-    private var firstMovieBackdrop: String? {
-        guard let firstItem = listItems.first else { return nil }
-        
-        // Prefer backdrop URL if available
-        if let backdropUrl = firstItem.movieBackdropUrl {
-            return backdropUrl
-        }
-        
-        // Fallback to poster URL with higher resolution
-        guard let posterUrl = firstItem.moviePosterUrl else { return nil }
-        if posterUrl.contains("image.tmdb.org/t/p/w500") {
-            return posterUrl.replacingOccurrences(of: "w500", with: "w1280")
-        }
-        
-        return posterUrl
+    private var firstMovieBackdropURL: URL? {
+        return firstMovie?.backdropURL
     }
     
     var body: some View {
@@ -129,6 +117,9 @@ struct ListDetailsView: View {
             } message: {
                 Text("Are you sure you want to delete '\(list.name)'? This action cannot be undone.")
             }
+            .task {
+                await loadFirstMovie()
+            }
         }
     }
     
@@ -176,7 +167,7 @@ struct ListDetailsView: View {
     }
     
     private var backdropSection: some View {
-        AsyncImage(url: URL(string: firstMovieBackdrop ?? "")) { phase in
+        AsyncImage(url: firstMovieBackdropURL) { phase in
             switch phase {
             case .success(let image):
                 image
@@ -273,6 +264,27 @@ struct ListDetailsView: View {
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+    
+    private func loadFirstMovie() async {
+        guard let firstItem = listItems.first else { return }
+        
+        do {
+            let movies = try await dataManager.getMoviesByTmdbId(tmdbId: firstItem.tmdbId)
+            
+            // Get the most recent movie entry for this TMDB ID
+            let latestMovie = movies.max { movie1, movie2 in
+                let date1 = movie1.watch_date ?? movie1.created_at ?? ""
+                let date2 = movie2.watch_date ?? movie2.created_at ?? ""
+                return date1 < date2
+            }
+            
+            await MainActor.run {
+                firstMovie = latestMovie
+            }
+        } catch {
+            print("Failed to load first movie: \(error)")
         }
     }
 }
@@ -381,7 +393,7 @@ struct MoviePosterView: View {
                     tmdb_id: item.tmdbId,
                     overview: nil,
                     poster_url: item.moviePosterUrl,
-                    backdrop_path: item.movieBackdropUrl,
+                    backdrop_path: item.movieBackdropPath,
                     director: nil,
                     runtime: nil,
                     vote_average: nil,
@@ -472,6 +484,18 @@ struct AddMoviesToListView: View {
                             }
                         }
                     
+                    if !searchText.isEmpty {
+                        Button(action: {
+                            searchText = ""
+                            searchResults = []
+                            searchTask?.cancel()
+                        }) {
+                            Image(systemName: "xmark")
+                                .foregroundColor(.gray)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                    
                     if isSearching {
                         ProgressView()
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
@@ -550,7 +574,7 @@ struct AddMoviesToListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
@@ -607,7 +631,7 @@ struct AddMoviesToListView: View {
                 tmdbId: movie.id,
                 title: movie.title,
                 posterUrl: movie.posterURL?.absoluteString,
-                backdropUrl: movie.backdropURL?.absoluteString,
+                backdropPath: movie.backdropPath,
                 year: movie.releaseYear,
                 listId: list.id
             )
@@ -761,7 +785,7 @@ struct EditListView: View {
                                 .foregroundColor(.blue)
                             }
                             
-                            VStack(spacing: 12) {
+                            List {
                                 ForEach(listItems) { item in
                                     EditableListItemView(
                                         item: item,
@@ -770,9 +794,15 @@ struct EditListView: View {
                                             await removeItem(item)
                                         }
                                     )
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                                 }
                                 .onMove(perform: isReordering ? moveItems : nil)
                             }
+                            .listStyle(PlainListStyle())
+                            .scrollDisabled(true)
+                            .frame(height: CGFloat(listItems.count) * 100) // Approximate height per row
                         }
                     }
                     
@@ -791,13 +821,13 @@ struct EditListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
+                    Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
+                    Button("Save", systemImage: "checkmark") {
                         Task {
                             await updateList()
                         }

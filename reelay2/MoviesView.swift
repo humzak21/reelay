@@ -22,6 +22,8 @@ struct MoviesView: View {
   @State private var viewMode: ViewMode = .list
   @State private var selectedDate: Date = Date()
   @State private var currentCalendarMonth: Date = Date()
+  @State private var longPressedMovieId: Int?
+  @StateObject private var listService = SupabaseListService.shared
 
   enum ViewMode {
     case list, tile, calendar

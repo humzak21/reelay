@@ -60,8 +60,8 @@ class DataManager: ObservableObject {
         try await listService.unpinList(list)
     }
     
-    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, backdropUrl: String? = nil, year: Int? = nil, listId: UUID) async throws {
-        try await listService.addMovieToList(tmdbId: tmdbId, title: title, posterUrl: posterUrl, backdropUrl: backdropUrl, year: year, listId: listId)
+    func addMovieToList(tmdbId: Int, title: String, posterUrl: String? = nil, backdropPath: String? = nil, year: Int? = nil, listId: UUID) async throws {
+        try await listService.addMovieToList(tmdbId: tmdbId, title: title, posterUrl: posterUrl, backdropPath: backdropPath, year: year, listId: listId)
     }
     
     func removeMovieFromList(tmdbId: Int, listId: UUID) async throws {
