@@ -26,7 +26,7 @@ class ModelContainerManager {
         do {
             try FileManager.default.createDirectory(at: appSupportURL, withIntermediateDirectories: true, attributes: nil)
         } catch {
-            print("Failed to create directory: \(error)")
+            // Silently handle directory creation error
         }
         
         let modelConfiguration = ModelConfiguration(schema: schema, url: storeURL)
@@ -34,18 +34,14 @@ class ModelContainerManager {
         do {
             self.modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            print("ModelContainer creation failed: \(error)")
-            
             // Try to delete the existing database and recreate
             do {
                 if FileManager.default.fileExists(atPath: storeURL.path) {
                     try FileManager.default.removeItem(at: storeURL)
-                    print("Deleted existing database file")
                 }
                 
                 // Try creating the container again
                 self.modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
-                print("Successfully recreated ModelContainer")
             } catch {
                 fatalError("Could not create ModelContainer even after reset: \(error)")
             }

@@ -180,3 +180,24 @@ extension Date {
         return Calendar.current.component(.year, from: self)
     }
 }
+
+// MARK: - Movie to TMDBMovie Conversion
+extension TMDBMovie {
+    /// Create a TMDBMovie from a Movie diary entry for "Log Again" functionality
+    init(from movie: Movie) {
+        self.id = movie.tmdb_id ?? 0
+        self.title = movie.title
+        self.originalTitle = movie.original_title
+        self.overview = movie.overview
+        self.releaseDate = movie.release_date
+        self.posterPath = movie.poster_url
+        self.backdropPath = movie.backdrop_path
+        self.voteAverage = movie.vote_average
+        self.voteCount = movie.vote_count
+        self.popularity = movie.popularity
+        self.originalLanguage = movie.original_language
+        self.genreIds = nil // Not stored in Movie model
+        self.adult = nil // Not stored in Movie model
+        self.video = nil // Not stored in Movie model
+    }
+}

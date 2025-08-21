@@ -12,6 +12,11 @@ struct AddMoviesView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var tmdbService = TMDBService.shared
     @StateObject private var supabaseService = SupabaseMovieService.shared
+    @StateObject private var watchlistService = SupabaseWatchlistService.shared
+    @StateObject private var dataManager = DataManager.shared
+    
+    // Optional pre-selected movie for "Log Again" functionality
+    let preSelectedMovie: TMDBMovie?
     
     // Search state
     @State private var searchText = ""
@@ -19,6 +24,10 @@ struct AddMoviesView: View {
     @State private var isSearching = false
     @State private var selectedMovie: TMDBMovie?
     @State private var searchTask: Task<Void, Never>?
+    
+    init(preSelectedMovie: TMDBMovie? = nil) {
+        self.preSelectedMovie = preSelectedMovie
+    }
     
     // Movie details state
     @State private var movieDetails: TMDBMovieDetails?
@@ -47,6 +56,11 @@ struct AddMoviesView: View {
     @State private var showingMovieDetails = false
     @State private var ratingSearchText = ""
     
+    // Watchlist state
+    @State private var isAddingToWatchlist = false
+    @State private var watchlistSuccessMessage = ""
+    @State private var showingWatchlistSuccess = false
+    
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -56,10 +70,9 @@ struct AddMoviesView: View {
                     addMovieView
                 }
             }
-            .navigationTitle("Add Movie")
+            .navigationTitle(preSelectedMovie != nil ? "Log Again" : "Add Movie")
             .navigationBarTitleDisplayMode(.inline)
-            .background(Color.black)
-            .preferredColorScheme(.dark)
+            .background(Color(.systemBackground))
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel", systemImage: "xmark") {
@@ -83,9 +96,24 @@ struct AddMoviesView: View {
             } message: {
                 Text(alertMessage)
             }
+            .alert("Added to Watchlist", isPresented: $showingWatchlistSuccess) {
+                Button("OK") { }
+            } message: {
+                Text(watchlistSuccessMessage)
+            }
             .sheet(isPresented: $showingMovieDetails) {
                 if let selectedMovie = selectedPreviousMovie {
                     MovieDetailsView(movie: selectedMovie)
+                }
+            }
+            .onAppear {
+                if let preSelected = preSelectedMovie {
+                    selectedMovie = preSelected
+                    // Load movie details and check for existing entries to prefill form
+                    loadMovieDetails(movieId: preSelected.id)
+                    Task {
+                        await checkForExistingMovie(tmdbId: preSelected.id)
+                    }
                 }
             }
             .onDisappear {
@@ -186,17 +214,24 @@ struct AddMoviesView: View {
             
             Spacer()
         }
-        .background(Color.black)
-        .preferredColorScheme(.dark)
+        .background(Color(.systemBackground))
     }
     
     private var searchResultsList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 ForEach(searchResults) { movie in
-                    SearchResultRow(movie: movie) {
-                        selectMovie(movie)
-                    }
+                    SearchResultRow(
+                        movie: movie,
+                        onLog: {
+                            selectMovie(movie)
+                        },
+                        onAddToWatchlist: {
+                            Task {
+                                await addToWatchlist(movie)
+                            }
+                        }
+                    )
                 }
             }
             .padding(.horizontal)
@@ -602,7 +637,6 @@ struct AddMoviesView: View {
             }
         } catch {
             // Silently fail - if we can't check for existing movies, just continue normally
-            print("Failed to check for existing movie: \(error)")
             await MainActor.run {
                 previousWatches = []
             }
@@ -638,12 +672,23 @@ struct AddMoviesView: View {
                 let movies = try await supabaseService.getMoviesInRatingRange(
                     minRating: minRating,
                     maxRating: maxRating,
-                    limit: 1000  // Get more movies for pagination
+                    limit: 3000  // Get more movies for pagination
                 )
-                
-                // Sort movies by rating in descending order (highest first)
-                let sortedMovies = movies.sorted { ($0.detailed_rating ?? 0) > ($1.detailed_rating ?? 0) }
-                
+
+                // Deduplicate by movie identity (tmdb_id or title) AND detailed rating, keeping latest entry
+                let deduplicatedMovies = deduplicateMoviesByIdentityAndDetailedRating(movies)
+
+                // Sort movies by rating in descending order (highest first) and then by latest watch/created date
+                let sortedMovies = deduplicatedMovies.sorted {
+                    let lhsRating = Int($0.detailed_rating ?? -1)
+                    let rhsRating = Int($1.detailed_rating ?? -1)
+                    if lhsRating != rhsRating { return lhsRating > rhsRating }
+
+                    let lhsDate = comparableDate(for: $0) ?? Date.distantPast
+                    let rhsDate = comparableDate(for: $1) ?? Date.distantPast
+                    return lhsDate > rhsDate
+                }
+
                 await MainActor.run {
                     similarRatingMovies = sortedMovies
                     displayedMoviesCount = 5  // Reset to show first 5
@@ -658,6 +703,80 @@ struct AddMoviesView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Deduplication Helpers
+    private func deduplicateMoviesByIdentityAndDetailedRating(_ movies: [Movie]) -> [Movie] {
+        // Group key combines movie identity (tmdb_id or normalized title) and integer detailed rating
+        var keyToLatestMovie: [String: Movie] = [:]
+
+        for movie in movies {
+            guard let detailedRating = movie.detailed_rating else { continue }
+            let ratingKey = String(Int(detailedRating))
+            let identity = movieIdentityKey(movie)
+            let groupKey = identity + "|" + ratingKey
+
+            if let existing = keyToLatestMovie[groupKey] {
+                // Keep the latest by comparable date
+                let existingDate = comparableDate(for: existing) ?? Date.distantPast
+                let candidateDate = comparableDate(for: movie) ?? Date.distantPast
+                if candidateDate > existingDate {
+                    keyToLatestMovie[groupKey] = movie
+                }
+            } else {
+                keyToLatestMovie[groupKey] = movie
+            }
+        }
+
+        return Array(keyToLatestMovie.values)
+    }
+
+    private func movieIdentityKey(_ movie: Movie) -> String {
+        if let tmdbId = movie.tmdb_id {
+            return "tmdb:" + String(tmdbId)
+        }
+        // Fallback to normalized title if tmdb_id is missing
+        let normalizedTitle = movie.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "title:" + normalizedTitle
+    }
+
+    private func comparableDate(for movie: Movie) -> Date? {
+        // Prefer watch_date (logical chronology). Fallback to updated_at then created_at
+        if let watchDateString = movie.watch_date, let watchDate = parseDate("yyyy-MM-dd", from: watchDateString) {
+            return watchDate
+        }
+        if let updatedAtString = movie.updated_at, let updatedAt = parseISO8601Date(from: updatedAtString) {
+            return updatedAt
+        }
+        if let createdAtString = movie.created_at, let createdAt = parseISO8601Date(from: createdAtString) {
+            return createdAt
+        }
+        return nil
+    }
+
+    private func parseDate(_ format: String, from string: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = format
+        return formatter.date(from: string)
+    }
+
+    private func parseISO8601Date(from string: String) -> Date? {
+        // Try strict ISO8601 first
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: string) { return d }
+
+        // Try without fractional seconds
+        iso.formatOptions = [.withInternetDateTime]
+        if let d2 = iso.date(from: string) { return d2 }
+
+        // Fallback: attempt a common Postgrest format without timezone
+        if let d3 = parseDate("yyyy-MM-dd'T'HH:mm:ss", from: string) { return d3 }
+        // Fallback: date only
+        if let d4 = parseDate("yyyy-MM-dd", from: string) { return d4 }
+        return nil
     }
     
     private func getDecadeRange(for rating: Double) -> (min: Double, max: Double) {
@@ -711,7 +830,7 @@ struct AddMoviesView: View {
                 rewatch: isRewatch ? "yes" : "no",
                 tmdb_id: selectedMovie.id,
                 overview: selectedMovie.overview,
-                poster_url: selectedMovie.posterPath,
+                poster_url: selectedMovie.fullPosterURL,
                 backdrop_path: selectedMovie.backdropPath,
                 director: director,
                 runtime: movieDetails?.runtime,
@@ -766,63 +885,126 @@ struct AddMoviesView: View {
         showingPreviousWatches = false
         ratingSearchText = ""
     }
+    
+    // MARK: - Watchlist Operations
+    private func addToWatchlist(_ movie: TMDBMovie) async {
+        guard !isAddingToWatchlist else { return }
+        
+        isAddingToWatchlist = true
+        
+        do {
+            try await watchlistService.upsertItem(
+                tmdbId: movie.id,
+                title: movie.title,
+                posterUrl: movie.posterURL?.absoluteString,
+                backdropPath: movie.backdropPath,
+                year: movie.releaseYear,
+                releaseDate: movie.releaseDate
+            )
+            
+            await dataManager.refreshWatchlist()
+            
+            await MainActor.run {
+                watchlistSuccessMessage = "\(movie.title) added to your watchlist!"
+                showingWatchlistSuccess = true
+                isAddingToWatchlist = false
+            }
+        } catch {
+            await MainActor.run {
+                alertMessage = "Failed to add \(movie.title) to watchlist: \(error.localizedDescription)"
+                showingAlert = true
+                isAddingToWatchlist = false
+            }
+        }
+    }
 }
 
 
 // MARK: - Search Result Row
 struct SearchResultRow: View {
     let movie: TMDBMovie
-    let onTap: () -> Void
+    let onLog: () -> Void
+    let onAddToWatchlist: () -> Void
     
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                // Movie poster
-                AsyncImage(url: movie.posterURL) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                }
-                .frame(width: 60, height: 90)
-                .cornerRadius(8)
-                .clipped()
-                
-                // Movie details
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(movie.title)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .lineLimit(2)
-                    
-                    if let year = movie.releaseYear {
-                        Text(String(year))
-                            .font(.subheadline)
+        HStack(spacing: 12) {
+            // Movie poster
+            AsyncImage(url: movie.posterURL) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "photo")
                             .foregroundColor(.gray)
-                    }
-                    
-                    if let overview = movie.overview, !overview.isEmpty {
-                        Text(overview)
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                            .lineLimit(3)
-                    }
-                }
-                
-                Spacer()
-                
-                // Chevron
-                Image(systemName: "chevron.right")
-                    .foregroundColor(.gray)
+                    )
             }
-            .padding()
-            .background(Color.gray.opacity(0.15))
-            .cornerRadius(12)
+            .frame(width: 60, height: 90)
+            .cornerRadius(8)
+            .clipped()
+            
+            // Movie details
+            VStack(alignment: .leading, spacing: 4) {
+                Text(movie.title)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                
+                if let year = movie.releaseYear {
+                    Text(String(year))
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+                
+                if let overview = movie.overview, !overview.isEmpty {
+                    Text(overview)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .lineLimit(2)
+                }
+            }
+            
+            Spacer()
+            
+            // Action buttons
+            VStack(spacing: 8) {
+                Button(action: onLog) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 16))
+                        Text("Log")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.2))
+                    .cornerRadius(16)
+                }
+                
+                Button(action: onAddToWatchlist) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bookmark.circle.fill")
+                            .font(.system(size: 16))
+                        Text("Watchlist")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.2))
+                    .cornerRadius(16)
+                }
+            }
         }
-        .buttonStyle(PlainButtonStyle())
+        .padding()
+        .background(Color.gray.opacity(0.15))
+        .cornerRadius(12)
     }
 }
 

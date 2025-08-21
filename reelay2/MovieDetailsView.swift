@@ -11,7 +11,9 @@ import SDWebImageSwiftUI
 struct MovieDetailsView: View {
     let movie: Movie
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var movieService = SupabaseMovieService.shared
+    @StateObject private var listService = SupabaseListService.shared
     @State private var previousWatches: [Movie] = []
     @State private var showingPreviousWatches = false
     @State private var isEditingReview = false
@@ -25,6 +27,12 @@ struct MovieDetailsView: View {
     @State private var selectedPreviousMovie: Movie?
     @State private var showingPreviousMovieDetails = false
     @State private var showingAddMovie = false
+    @State private var movieToAddToLists: Movie?
+    @State private var allMoviesForColorCalculation: [Movie] = []
+    @State private var showingChangeFilm = false
+    @State private var movieLists: [MovieList] = []
+    @State private var selectedList: MovieList?
+    @State private var showingListDetails = false
     
     init(movie: Movie) {
         self.movie = movie
@@ -33,6 +41,10 @@ struct MovieDetailsView: View {
     
     private var isUnloggedMovie: Bool {
         currentMovie.id == -1
+    }
+    
+    private var appBackground: Color {
+        colorScheme == .dark ? .black : Color(.systemBackground)
     }
     
     var body: some View {
@@ -57,6 +69,9 @@ struct MovieDetailsView: View {
                             // Movie Header Section
                             movieHeaderSection
                             
+                            // Centennial Milestone Note
+                            centennialMilestoneSection
+                            
                             // Rating Cards
                             ratingCardsSection
                             
@@ -73,22 +88,27 @@ struct MovieDetailsView: View {
                                 tagsSection
                             }
                             
+                            // Lists Section
+                            if !movieLists.isEmpty {
+                                listsSection
+                            }
+                            
                             // Movie Metadata
                             metadataSection
                         }
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 16)
-                    .background(Color.black)
+                    .background(appBackground)
                     
                     Spacer(minLength: 100)
                 }
             }
-            .background(Color.black.ignoresSafeArea())
+            .background(appBackground.ignoresSafeArea())
             .ignoresSafeArea(edges: .top)
             .navigationTitle("Movie Details")
             .navigationBarTitleDisplayMode(.inline)
-            .preferredColorScheme(.dark)
+            
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: {
@@ -100,8 +120,14 @@ struct MovieDetailsView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
+                        Button("Add to List", systemImage: "list.bullet") {
+                            movieToAddToLists = currentMovie
+                        }
                         Button("Edit Movie", systemImage: "pencil") {
                             showingEditMovie = true
+                        }
+                        Button("Change Film", systemImage: "arrow.2.squarepath") {
+                            showingChangeFilm = true
                         }
                         Button("Delete Movie", systemImage: "trash", role: .destructive) {
                             showingDeleteAlert = true
@@ -117,6 +143,9 @@ struct MovieDetailsView: View {
         }
         .task {
             await loadPreviousWatches()
+            await loadAllMoviesForColorCalculation()
+            await listService.syncListsFromSupabase()
+            await loadMovieLists()
         }
         .sheet(isPresented: $isEditingReview) {
             EditReviewSheet(
@@ -167,6 +196,22 @@ struct MovieDetailsView: View {
                 AddMoviesView()
             }
         }
+        .sheet(item: $movieToAddToLists) { movie in
+            AddToListsView(movie: movie)
+        }
+        .sheet(isPresented: $showingChangeFilm) {
+            ChangeFilmView(currentMovie: currentMovie) { updatedMovie in
+                currentMovie = updatedMovie
+                Task {
+                    await loadPreviousWatches()
+                }
+            }
+        }
+        .sheet(isPresented: $showingListDetails) {
+            if let selectedList = selectedList {
+                ListDetailsView(list: selectedList)
+            }
+        }
     }
     
     private var unloggedMovieView: some View {
@@ -191,16 +236,16 @@ struct MovieDetailsView: View {
                     Text(currentMovie.title)
                         .font(.title2)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : .white)
+                        .shadow(color: shouldHighlightMustWatchTitle(currentMovie) ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 3 : 2, x: 0, y: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 0 : 1)
                         .multilineTextAlignment(.leading)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                        .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
                     
                     Text(currentMovie.formattedReleaseYear)
                         .font(.title3)
-                        .foregroundColor(.white.opacity(0.8))
-                        .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
+                        .foregroundColor(shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan : .white.opacity(0.8))
+                        .shadow(color: shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightReleaseYearOnYear(currentMovie) ? 3 : 1, x: 0, y: shouldHighlightReleaseYearOnYear(currentMovie) ? 0 : 1)
                 }
                 
                 Spacer()
@@ -339,16 +384,16 @@ struct MovieDetailsView: View {
                     Text(currentMovie.title)
                         .font(.title2)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : .white)
+                        .shadow(color: shouldHighlightMustWatchTitle(currentMovie) ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 3 : 2, x: 0, y: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 0 : 1)
                         .multilineTextAlignment(.leading)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                        .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
                     
                     Text(currentMovie.formattedReleaseYear)
                         .font(.title3)
-                        .foregroundColor(.white.opacity(0.8))
-                        .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
+                        .foregroundColor(shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan : .white.opacity(0.8))
+                        .shadow(color: shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightReleaseYearOnYear(currentMovie) ? 3 : 1, x: 0, y: shouldHighlightReleaseYearOnYear(currentMovie) ? 0 : 1)
                     
                     if let director = currentMovie.director {
                         VStack(alignment: .leading, spacing: 3) {
@@ -386,13 +431,13 @@ struct MovieDetailsView: View {
                     if currentMovie.isRewatchMovie {
                         HStack(spacing: 6) {
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.system(size: 16, weight: .bold))
                             Text("REWATCH")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                                 .tracking(1)
                         }
-                        .foregroundColor(.orange)
+                        .foregroundColor(getRewatchIconColor(for: currentMovie))
                         .padding(.top, 2)
                     }
                 }
@@ -576,6 +621,42 @@ struct MovieDetailsView: View {
         .glassEffect(in: .rect(cornerRadius: 24.0))
     }
     
+    private var listsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.blue)
+                
+                Text("APPEARS IN LISTS")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.gray)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                
+                Spacer()
+                
+                Text("\(movieLists.count)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.gray)
+            }
+            
+            LazyVStack(spacing: 8) {
+                ForEach(movieLists) { list in
+                    ListRow(list: list) {
+                        selectedList = list
+                        showingListDetails = true
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 20)
+        .padding(.horizontal, 16)
+        .glassEffect(in: .rect(cornerRadius: 24.0))
+    }
+    
     private var metadataSection: some View {
         VStack(spacing: 16) {
             HStack {
@@ -611,6 +692,79 @@ struct MovieDetailsView: View {
         .padding(.vertical, 20)
         .padding(.horizontal, 16)
         .glassEffect(in: .rect(cornerRadius: 24.0))
+    }
+    
+    private var centennialMilestoneSection: some View {
+        let isUniqueFilm = isCentennialUniqueFilm(currentMovie)
+        let isTotalLog = isCentennialTotalLog(currentMovie)
+        let milestoneNumbers = getCentennialMilestoneNumber(currentMovie)
+        
+        // Only show if this movie is a centennial milestone
+        return Group {
+            if isUniqueFilm || isTotalLog {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "trophy.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(isTotalLog ? .red : .yellow)
+                    
+                    Text("CENTENNIAL MILESTONE")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.gray)
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                    
+                    Spacer()
+                }
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    if isTotalLog {
+                        if let totalPos = milestoneNumbers.totalPosition {
+                            Text("🔥 **\(totalPos)th Total Film Logged**")
+                                .font(.body)
+                                .foregroundColor(.white)
+                            Text("This entry represents your \(totalPos)th film logged in your movie diary, including all rewatches and duplicate entries.")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    } else if isUniqueFilm {
+                        if let uniquePos = milestoneNumbers.uniquePosition {
+                            Text("**\(uniquePos)th Unique Film**")
+                                .font(.body)
+                                .foregroundColor(.white)
+                            Text("This film represents your \(uniquePos)th unique movie title logged in your diary.")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 16)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 24.0)
+                    .fill(
+                        LinearGradient(
+                            colors: isTotalLog ? 
+                                [Color.red.opacity(0.1), Color.pink.opacity(0.05)] :
+                                [Color.yellow.opacity(0.1), Color.orange.opacity(0.05)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24.0)
+                            .stroke(
+                                isTotalLog ? Color.red.opacity(0.3) : Color.yellow.opacity(0.3),
+                                lineWidth: 1
+                            )
+                    )
+            )
+            } else {
+                EmptyView()
+            }
+        }
     }
     
     private var formattedWatchDate: String {
@@ -676,7 +830,6 @@ struct MovieDetailsView: View {
             }
             
         } catch {
-            print("Failed to load previous watches: \(error)")
             await MainActor.run {
                 previousWatches = []
             }
@@ -726,7 +879,6 @@ struct MovieDetailsView: View {
             }
             
         } catch {
-            print("Failed to update review: \(error)")
             // You might want to show an alert here
         }
         
@@ -745,7 +897,6 @@ struct MovieDetailsView: View {
             }
             
         } catch {
-            print("Failed to delete movie: \(error)")
             // You might want to show an error alert here
         }
         
@@ -769,6 +920,278 @@ struct MovieDetailsView: View {
             }
         }
     }
+    
+    private func loadAllMoviesForColorCalculation() async {
+        guard movieService.isLoggedIn else { return }
+        
+        do {
+            let movies = try await movieService.getMovies(sortBy: .watchDate, ascending: false, limit: 3000)
+            await MainActor.run {
+                allMoviesForColorCalculation = movies
+            }
+        } catch {
+            await MainActor.run {
+                allMoviesForColorCalculation = []
+            }
+        }
+    }
+    
+    private func loadMovieLists() async {
+        guard let tmdbId = currentMovie.tmdb_id else { return }
+        
+        await MainActor.run {
+            // Get all lists that contain this movie's TMDB ID
+            let allLists = listService.movieLists
+            let listsContainingMovie = allLists.filter { list in
+                let items = listService.getListItems(list)
+                return items.contains { $0.tmdbId == tmdbId }
+            }
+            movieLists = listsContainingMovie
+        }
+    }
+    
+    // MARK: - Rewatch Icon Color Logic
+    
+    private func getRewatchIconColor(for movie: Movie) -> Color {
+        guard movie.isRewatchMovie else { return .orange }
+        
+        // Grey: First entry in DB but marked as rewatch
+        if isFirstEntryButMarkedAsRewatch(movie) {
+            return .gray
+        }
+        
+        // Yellow: First watched and rewatched in same calendar year
+        if wasFirstWatchedInSameYearAsRewatch(movie) {
+            return .yellow
+        }
+        
+        // Orange: Movie was logged in a previous year
+        if wasLoggedInPreviousYear(movie) {
+            return .orange
+        }
+        
+        // Default orange for any other rewatch scenario
+        return .orange
+    }
+    
+    private func isFirstEntryButMarkedAsRewatch(_ movie: Movie) -> Bool {
+        guard let tmdbId = movie.tmdb_id else { return false }
+        
+        // Find all entries for this TMDB ID
+        let entriesForMovie = allMoviesForColorCalculation.filter { $0.tmdb_id == tmdbId }
+        
+        // If this is the only entry and it's marked as rewatch, then it's grey
+        return entriesForMovie.count == 1 && movie.isRewatchMovie
+    }
+    
+    private func wasFirstWatchedInSameYearAsRewatch(_ movie: Movie) -> Bool {
+        guard let watchDate = movie.watch_date,
+              let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate),
+              let tmdbId = movie.tmdb_id else { return false }
+        
+        let calendar = Calendar.current
+        let movieYear = calendar.component(.year, from: movieWatchDate)
+        
+        // Find all entries for this movie
+        let entriesForMovie = allMoviesForColorCalculation.filter { $0.tmdb_id == tmdbId }
+            .compactMap { movie -> (Movie, Date)? in
+                guard let dateString = movie.watch_date,
+                      let date = DateFormatter.detailsMovieDateFormatter.date(from: dateString) else { return nil }
+                return (movie, date)
+            }
+            .sorted { $0.1 < $1.1 }
+        
+        // Check if there are at least 2 entries in the same year
+        let entriesInSameYear = entriesForMovie.filter {
+            calendar.component(.year, from: $0.1) == movieYear
+        }
+        
+        if entriesInSameYear.count >= 2 {
+            // Check if the first was not a rewatch and current one is a rewatch
+            let firstEntry = entriesInSameYear[0].0
+            return !firstEntry.isRewatchMovie && movie.isRewatchMovie && movie.id != firstEntry.id
+        }
+        
+        return false
+    }
+    
+    private func wasLoggedInPreviousYear(_ movie: Movie) -> Bool {
+        guard let watchDate = movie.watch_date,
+              let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate),
+              let tmdbId = movie.tmdb_id else { return false }
+        
+        let calendar = Calendar.current
+        let movieYear = calendar.component(.year, from: movieWatchDate)
+        
+        // Find all entries for this movie
+        let entriesForMovie = allMoviesForColorCalculation.filter { $0.tmdb_id == tmdbId }
+            .compactMap { movie -> Date? in
+                guard let dateString = movie.watch_date,
+                      let date = DateFormatter.detailsMovieDateFormatter.date(from: dateString) else { return nil }
+                return date
+            }
+        
+        // Check if any entry was in a previous year
+        return entriesForMovie.contains { date in
+            calendar.component(.year, from: date) < movieYear
+        }
+    }
+    
+    private func wasWatchedInReleaseYear(_ movie: Movie) -> Bool {
+        guard let watchDate = movie.watch_date,
+              let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate),
+              let releaseYear = movie.release_year else { return false }
+        
+        let calendar = Calendar.current
+        let watchYear = calendar.component(.year, from: movieWatchDate)
+        
+        return watchYear == releaseYear
+    }
+    
+    private func shouldHighlightMustWatchTitle(_ movie: Movie) -> Bool {
+        guard let watchDate = movie.watch_date,
+              let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate) else { return false }
+        
+        let calendar = Calendar.current
+        let watchYear = calendar.component(.year, from: movieWatchDate)
+        
+        let isOnMustWatches = isOnMustWatchesList(movie, for: watchYear)
+        let isWatchedInReleaseYear = wasWatchedInReleaseYear(movie)
+        
+        // Highlight title for must watches when there's no overlap with release year highlighting
+        // OR when there is overlap (both conditions true), prioritize must watch on title
+        return isOnMustWatches && (!isWatchedInReleaseYear || isWatchedInReleaseYear)
+    }
+    
+    private func shouldHighlightReleaseYearTitle(_ movie: Movie) -> Bool {
+        guard let watchDate = movie.watch_date,
+              let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate) else { return false }
+        
+        let calendar = Calendar.current
+        let watchYear = calendar.component(.year, from: movieWatchDate)
+        
+        let isOnMustWatches = isOnMustWatchesList(movie, for: watchYear)
+        let isWatchedInReleaseYear = wasWatchedInReleaseYear(movie)
+        
+        // Highlight title for release year only when there's no must watch overlap
+        return isWatchedInReleaseYear && !isOnMustWatches
+    }
+    
+    private func shouldHighlightReleaseYearOnYear(_ movie: Movie) -> Bool {
+        guard let watchDate = movie.watch_date,
+              let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate) else { return false }
+        
+        let calendar = Calendar.current
+        let watchYear = calendar.component(.year, from: movieWatchDate)
+        
+        let isOnMustWatches = isOnMustWatchesList(movie, for: watchYear)
+        let isWatchedInReleaseYear = wasWatchedInReleaseYear(movie)
+        
+        // Fallback: highlight year only when both conditions are true (overlap scenario)
+        return isWatchedInReleaseYear && isOnMustWatches
+    }
+    
+    // MARK: - Centennial Milestone Logic
+    
+    private func isCentennialUniqueFilm(_ movie: Movie) -> Bool {
+        // Sort movies by watch date to get chronological order
+        let sortedMovies = allMoviesForColorCalculation.sorted { movie1, movie2 in
+            guard let date1 = movie1.watch_date, let date2 = movie2.watch_date else { return false }
+            return date1 < date2
+        }
+        
+        // Track unique titles encountered
+        var uniqueTitles: Set<String> = []
+        var centennialPositions: Set<Int> = []
+        
+        for (index, sortedMovie) in sortedMovies.enumerated() {
+            let title = sortedMovie.title.lowercased().trimmingCharacters(in: .whitespaces)
+            if !uniqueTitles.contains(title) {
+                uniqueTitles.insert(title)
+                let uniqueCount = uniqueTitles.count
+                
+                // Check if this is a centennial milestone (100, 200, 300, etc.)
+                if uniqueCount % 100 == 0 {
+                    centennialPositions.insert(index)
+                }
+            }
+        }
+        
+        // Check if current movie is at a centennial position
+        if let movieIndex = sortedMovies.firstIndex(where: { $0.id == movie.id }) {
+            return centennialPositions.contains(movieIndex)
+        }
+        
+        return false
+    }
+    
+    private func isCentennialTotalLog(_ movie: Movie) -> Bool {
+        // Sort movies by watch date to get chronological order
+        let sortedMovies = allMoviesForColorCalculation.sorted { movie1, movie2 in
+            guard let date1 = movie1.watch_date, let date2 = movie2.watch_date else { return false }
+            return date1 < date2
+        }
+        
+        // Find the position of this movie in the sorted list
+        if let movieIndex = sortedMovies.firstIndex(where: { $0.id == movie.id }) {
+            let position = movieIndex + 1 // 1-based indexing
+            return position % 100 == 0
+        }
+        
+        return false
+    }
+    
+    private func getCentennialMilestoneNumber(_ movie: Movie) -> (uniquePosition: Int?, totalPosition: Int?) {
+        // Sort movies by watch date to get chronological order
+        let sortedMovies = allMoviesForColorCalculation.sorted { movie1, movie2 in
+            guard let date1 = movie1.watch_date, let date2 = movie2.watch_date else { return false }
+            return date1 < date2
+        }
+        
+        guard let movieIndex = sortedMovies.firstIndex(where: { $0.id == movie.id }) else {
+            return (nil, nil)
+        }
+        
+        let totalPosition = movieIndex + 1
+        var uniquePosition: Int? = nil
+        
+        // Track unique titles encountered up to this movie
+        var uniqueTitles: Set<String> = []
+        for (index, sortedMovie) in sortedMovies.enumerated() {
+            let title = sortedMovie.title.lowercased().trimmingCharacters(in: .whitespaces)
+            if !uniqueTitles.contains(title) {
+                uniqueTitles.insert(title)
+                if index == movieIndex {
+                    uniquePosition = uniqueTitles.count
+                    break
+                }
+            }
+        }
+        
+        return (uniquePosition, totalPosition)
+    }
+    
+    private func isOnMustWatchesList(_ movie: Movie, for year: Int) -> Bool {
+        guard let tmdbId = movie.tmdb_id else { return false }
+        
+        // Look for list named exactly "Must Watches for xxxx"
+        let mustWatchesListName = "Must Watches for \(year)"
+        guard let mustWatchesList = listService.movieLists.first(where: { $0.name == mustWatchesListName }) else {
+            return false
+        }
+        
+        let listItems = listService.getListItems(mustWatchesList)
+        return listItems.contains(where: { $0.tmdbId == tmdbId })
+    }
+}
+
+// MARK: - DateFormatter Extension for MovieDetailsView
+extension DateFormatter {
+    static let detailsMovieDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 }
 
 struct EditReviewSheet: View {
@@ -810,7 +1233,7 @@ struct EditReviewSheet: View {
                         .font(.body)
                         .foregroundColor(.white)
                         .scrollContentBackground(.hidden)
-                        .background(Color.gray.opacity(0.2))
+        .background(Color(.secondarySystemFill))
                         .cornerRadius(12)
                         .frame(minHeight: 200)
                 }
@@ -820,7 +1243,7 @@ struct EditReviewSheet: View {
             }
             .padding(.top)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black.ignoresSafeArea())
+            .background(Color(.systemBackground).ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -844,7 +1267,7 @@ struct EditReviewSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+            
     }
 }
 
@@ -1062,7 +1485,7 @@ struct AddMovieFromListView: View {
                 .padding()
             }
             .background(Color.black)
-            .preferredColorScheme(.dark)
+            
             .navigationTitle("Add Movie")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1311,6 +1734,517 @@ struct AddMovieFromListView: View {
                 showingAlert = true
             }
         }
+    }
+}
+
+// MARK: - Change Film View
+struct ChangeFilmView: View {
+    let currentMovie: Movie
+    let onFilmChanged: (Movie) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var tmdbService = TMDBService.shared
+    @StateObject private var movieService = SupabaseMovieService.shared
+    @StateObject private var listService = SupabaseListService.shared
+    
+    @State private var searchText = ""
+    @State private var tmdbIdText = ""
+    @State private var searchResults: [TMDBMovie] = []
+    @State private var isSearching = false
+    @State private var searchTask: Task<Void, Never>?
+    @State private var isUpdating = false
+    @State private var showingAlert = false
+    @State private var alertMessage = ""
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Current film info
+                    currentFilmSection
+                    
+                    // Search by name
+                    searchByNameSection
+                    
+                    // Search by TMDB ID
+                    searchByIdSection
+                    
+                    // Search results
+                    if !searchResults.isEmpty {
+                        searchResultsSection
+                    }
+                    
+                    Spacer(minLength: 100)
+                }
+                .padding()
+            }
+            .background(Color.black)
+            .navigationTitle("Change Film")
+            .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel", systemImage: "xmark") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+            }
+            .alert("Error", isPresented: $showingAlert) {
+                Button("OK") { }
+            } message: {
+                Text(alertMessage)
+            }
+            .onDisappear {
+                searchTask?.cancel()
+            }
+        }
+    }
+    
+    private var currentFilmSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("CURRENT FILM")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.gray)
+                .textCase(.uppercase)
+                .tracking(0.5)
+            
+            HStack(spacing: 15) {
+                AsyncImage(url: currentMovie.posterURL) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                }
+                .frame(width: 60, height: 90)
+                .cornerRadius(8)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(currentMovie.title)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    
+                    Text(currentMovie.formattedReleaseYear)
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                    
+                    if let tmdbId = currentMovie.tmdb_id {
+                        Text("TMDB ID: \(String(tmdbId))")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                Spacer()
+            }
+        }
+        .padding(.vertical, 16)
+        .padding(.horizontal, 16)
+        .glassEffect(in: .rect(cornerRadius: 16.0))
+    }
+    
+    private var searchByNameSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SEARCH BY NAME")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.gray)
+                .textCase(.uppercase)
+                .tracking(0.5)
+            
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
+                
+                TextField("Search movies...", text: $searchText)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .foregroundColor(.white)
+                    .onSubmit {
+                        performSearch()
+                    }
+                    .onChange(of: searchText) { _, newValue in
+                        searchTask?.cancel()
+                        if !newValue.isEmpty {
+                            searchTask = Task {
+                                try? await Task.sleep(nanoseconds: 500_000_000)
+                                if !Task.isCancelled {
+                                    await performSearchDelayed()
+                                }
+                            }
+                        } else {
+                            searchResults = []
+                        }
+                    }
+                
+                if isSearching {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                }
+            }
+            .padding()
+            .background(Color.gray.opacity(0.2))
+            .cornerRadius(10)
+        }
+    }
+    
+    private var searchByIdSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SEARCH BY TMDB ID")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.gray)
+                .textCase(.uppercase)
+                .tracking(0.5)
+            
+            HStack {
+                Image(systemName: "number")
+                    .foregroundColor(.gray)
+                
+                TextField("Enter TMDB ID...", text: $tmdbIdText)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .foregroundColor(.white)
+                    .keyboardType(.numberPad)
+                    .onSubmit {
+                        searchByTmdbId()
+                    }
+                
+                Button("Search", systemImage: "arrow.right.circle") {
+                    searchByTmdbId()
+                }
+                .foregroundColor(.blue)
+                .disabled(tmdbIdText.isEmpty || isSearching)
+            }
+            .padding()
+            .background(Color.gray.opacity(0.2))
+            .cornerRadius(10)
+        }
+    }
+    
+    private var searchResultsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SEARCH RESULTS")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.gray)
+                .textCase(.uppercase)
+                .tracking(0.5)
+            
+            LazyVStack(spacing: 8) {
+                ForEach(searchResults) { movie in
+                    ChangeFilmSearchRow(movie: movie) {
+                        Task {
+                            await changeToFilm(movie)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func performSearch() {
+        searchTask?.cancel()
+        searchTask = Task {
+            await performSearchDelayed()
+        }
+    }
+    
+    @MainActor
+    private func performSearchDelayed() {
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else {
+            searchResults = []
+            return
+        }
+        
+        isSearching = true
+        
+        Task {
+            do {
+                let response = try await tmdbService.searchMovies(query: searchText)
+                await MainActor.run {
+                    searchResults = response.results
+                    isSearching = false
+                }
+            } catch {
+                await MainActor.run {
+                    searchResults = []
+                    isSearching = false
+                    alertMessage = "Search failed: \(error.localizedDescription)"
+                    showingAlert = true
+                }
+            }
+        }
+    }
+    
+    private func searchByTmdbId() {
+        guard let tmdbId = Int(tmdbIdText.trimmingCharacters(in: .whitespaces)) else {
+            alertMessage = "Please enter a valid TMDB ID"
+            showingAlert = true
+            return
+        }
+        
+        isSearching = true
+        
+        Task {
+            do {
+                let movieDetails = try await tmdbService.getMovieDetails(movieId: tmdbId)
+                let tmdbMovie = TMDBMovie(
+                    id: movieDetails.id,
+                    title: movieDetails.title,
+                    originalTitle: movieDetails.originalTitle,
+                    overview: movieDetails.overview,
+                    releaseDate: movieDetails.releaseDate,
+                    posterPath: movieDetails.posterPath,
+                    backdropPath: movieDetails.backdropPath,
+                    voteAverage: movieDetails.voteAverage,
+                    voteCount: movieDetails.voteCount,
+                    popularity: movieDetails.popularity,
+                    originalLanguage: movieDetails.originalLanguage,
+                    genreIds: nil,
+                    adult: movieDetails.adult,
+                    video: movieDetails.video
+                )
+                
+                await MainActor.run {
+                    searchResults = [tmdbMovie]
+                    isSearching = false
+                }
+            } catch {
+                await MainActor.run {
+                    isSearching = false
+                    alertMessage = "Failed to find movie with ID \(tmdbId): \(error.localizedDescription)"
+                    showingAlert = true
+                }
+            }
+        }
+    }
+    
+    private func changeToFilm(_ tmdbMovie: TMDBMovie) async {
+        isUpdating = true
+        
+        do {
+            let isUnloggedMovie = currentMovie.id == -1
+            
+            if isUnloggedMovie {
+                // Update list item
+                if let tmdbId = currentMovie.tmdb_id {
+                    try await listService.updateListItemTMDBData(
+                        currentTmdbId: tmdbId,
+                        newTmdbId: tmdbMovie.id,
+                        newTitle: tmdbMovie.title,
+                        newReleaseYear: extractYear(from: tmdbMovie.releaseDate),
+                        newPosterUrl: tmdbMovie.posterPath.map { "https://image.tmdb.org/t/p/w500\($0)" },
+                        newBackdropUrl: tmdbMovie.backdropPath.map { "https://image.tmdb.org/t/p/w1280\($0)" }
+                    )
+                }
+            } else {
+                // Update logged movie
+                let movieDetails = try await tmdbService.getMovieDetails(movieId: tmdbMovie.id)
+                let (_, director) = try await tmdbService.getCompleteMovieData(movieId: tmdbMovie.id)
+                
+                let updateRequest = UpdateMovieRequest(
+                    title: movieDetails.title,
+                    release_year: extractYear(from: movieDetails.releaseDate),
+                    release_date: movieDetails.releaseDate,
+                    rating: nil, // Preserve user data
+                    ratings100: nil, // Preserve user data
+                    reviews: nil, // Preserve user data
+                    tags: nil, // Preserve user data
+                    watched_date: nil, // Preserve user data
+                    rewatch: nil, // Preserve user data
+                    tmdb_id: movieDetails.id,
+                    overview: movieDetails.overview,
+                    poster_url: movieDetails.posterPath.map { "https://image.tmdb.org/t/p/w500\($0)" },
+                    backdrop_path: movieDetails.backdropPath.map { "https://image.tmdb.org/t/p/w1280\($0)" },
+                    director: director,
+                    runtime: movieDetails.runtime,
+                    vote_average: movieDetails.voteAverage,
+                    vote_count: movieDetails.voteCount,
+                    popularity: movieDetails.popularity,
+                    original_language: movieDetails.originalLanguage,
+                    original_title: movieDetails.originalTitle,
+                    tagline: movieDetails.tagline,
+                    status: movieDetails.status,
+                    budget: movieDetails.budget,
+                    revenue: movieDetails.revenue,
+                    imdb_id: movieDetails.imdbId,
+                    homepage: movieDetails.homepage,
+                    genres: movieDetails.genreNames
+                )
+                
+                let updatedMovie = try await movieService.updateMovie(id: currentMovie.id, with: updateRequest)
+                
+                await MainActor.run {
+                    onFilmChanged(updatedMovie)
+                    dismiss()
+                }
+                return
+            }
+            
+            // For unlogged movies, create updated movie object
+            let updatedMovie = Movie(
+                id: currentMovie.id,
+                title: tmdbMovie.title,
+                release_year: extractYear(from: tmdbMovie.releaseDate),
+                release_date: tmdbMovie.releaseDate,
+                rating: currentMovie.rating,
+                detailed_rating: currentMovie.detailed_rating,
+                review: currentMovie.review,
+                tags: currentMovie.tags,
+                watch_date: currentMovie.watch_date,
+                is_rewatch: currentMovie.is_rewatch,
+                tmdb_id: tmdbMovie.id,
+                overview: tmdbMovie.overview,
+                poster_url: tmdbMovie.posterPath.map { "https://image.tmdb.org/t/p/w500\($0)" },
+                backdrop_path: tmdbMovie.backdropPath.map { "https://image.tmdb.org/t/p/w1280\($0)" },
+                director: currentMovie.director,
+                runtime: currentMovie.runtime,
+                vote_average: tmdbMovie.voteAverage,
+                vote_count: tmdbMovie.voteCount,
+                popularity: tmdbMovie.popularity,
+                original_language: tmdbMovie.originalLanguage,
+                original_title: tmdbMovie.originalTitle,
+                tagline: currentMovie.tagline,
+                status: currentMovie.status,
+                budget: currentMovie.budget,
+                revenue: currentMovie.revenue,
+                imdb_id: currentMovie.imdb_id,
+                homepage: currentMovie.homepage,
+                genres: currentMovie.genres,
+                created_at: currentMovie.created_at,
+                updated_at: currentMovie.updated_at
+            )
+            
+            await MainActor.run {
+                onFilmChanged(updatedMovie)
+                dismiss()
+            }
+            
+        } catch {
+            await MainActor.run {
+                isUpdating = false
+                alertMessage = "Failed to change film: \(error.localizedDescription)"
+                showingAlert = true
+            }
+        }
+    }
+    
+    private func extractYear(from dateString: String?) -> Int? {
+        guard let dateString = dateString else { return nil }
+        let year = String(dateString.prefix(4))
+        return Int(year)
+    }
+}
+
+// MARK: - Change Film Search Result Row
+struct ChangeFilmSearchRow: View {
+    let movie: TMDBMovie
+    let onSelect: () -> Void
+    
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                AsyncImage(url: URL(string: "https://image.tmdb.org/t/p/w92\(movie.posterPath ?? "")")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                }
+                .frame(width: 40, height: 60)
+                .cornerRadius(6)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(movie.title)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.leading)
+                    
+                    if let releaseDate = movie.releaseDate, !releaseDate.isEmpty {
+                        Text(String(releaseDate.prefix(4)))
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    
+                    Text("TMDB ID: \(String(movie.id))")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+                
+                Spacer()
+                
+                Image(systemName: "checkmark.circle")
+                    .foregroundColor(.green)
+                    .font(.system(size: 20))
+            }
+            .padding(12)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(12)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - List Row Component
+struct ListRow: View {
+    let list: MovieList
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                // List icon
+                Image(systemName: list.pinned ? "pin.fill" : "list.bullet")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(list.pinned ? .yellow : .blue)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill((list.pinned ? Color.yellow : Color.blue).opacity(0.15))
+                    )
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(list.name)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(1)
+                    
+                    HStack(spacing: 8) {
+                        Text("\(list.itemCount) films")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        
+                        if list.ranked {
+                            HStack(spacing: 2) {
+                                Image(systemName: "number")
+                                    .font(.system(size: 10, weight: .medium))
+                                Text("Ranked")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.orange)
+                        }
+                    }
+                }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.gray)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemFill))
+            .cornerRadius(12)
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 }
 

@@ -11,6 +11,7 @@ struct TheaterTicketView: View {
     let item: ListItem
     let list: MovieList
     let rank: Int?
+    let showSpecialLayout: Bool
     @StateObject private var dataManager = DataManager.shared
     @State private var selectedMovie: Movie?
     @State private var showingMovieDetails = false
@@ -25,7 +26,41 @@ struct TheaterTicketView: View {
     }
     
     private var director: String {
-        movieDetails?.director ?? "Unknown Director"
+        movieDetails?.director ?? ""
+    }
+    
+    private var rating: Double {
+        movieDetails?.rating ?? 0.0
+    }
+    
+    private var detailedRating: String? {
+        guard let rating = movieDetails?.detailed_rating else { return nil }
+        return String(format: "%.0f", rating)
+    }
+    
+    private func wrappedTitle(_ title: String) -> String {
+        let uppercaseTitle = title.uppercased()
+        let words = uppercaseTitle.components(separatedBy: " ")
+        var lines: [String] = []
+        var currentLine = ""
+        
+        for word in words {
+            let testLine = currentLine.isEmpty ? word : "\(currentLine) \(word)"
+            if testLine.count <= 12 {
+                currentLine = testLine
+            } else {
+                if !currentLine.isEmpty {
+                    lines.append(currentLine)
+                }
+                currentLine = word
+            }
+        }
+        
+        if !currentLine.isEmpty {
+            lines.append(currentLine)
+        }
+        
+        return lines.joined(separator: "\n")
     }
     
     var body: some View {
@@ -34,13 +69,110 @@ struct TheaterTicketView: View {
                 await loadLatestMovieEntry()
             }
         }) {
-            VStack(spacing: 0) {
-                ticketStub
-                ticketBody
+            ZStack {
+                // Use the actual ticket image as background
+                if let uiImage = UIImage(named: "ticket_blue_image") {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 240) // Increased by 50% (160 * 1.5 = 240)
+                } else {
+                    // Fallback: recreate the ticket design if image not found
+                    HStack(spacing: 0) {
+                        // Blue section
+                        Rectangle()
+                            .fill(Color(red: 0.15, green: 0.5, blue: 0.95))
+                            .frame(width: 360) // Increased by 50%
+                        
+                        // White section
+                        Rectangle()
+                            .fill(Color(white: 0.96))
+                            .frame(width: 150) // Increased by 50%
+                    }
+                    .frame(height: 240) // Increased by 50%
+                    .cornerRadius(8)
+                }
+                
+                // Overlay content on the ticket image
+                HStack(spacing: 0) {
+                    // Blue section content
+                    VStack(spacing: 8) {
+                        // Title section (positioned where the clapperboard is in the image)
+                        VStack {
+                            Text(wrappedTitle(item.movieTitle))
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.white)
+                                .lineLimit(3)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 10)
+                        }
+                        .padding(.top, 35)
+                        
+                        // Star rating section (centered on blue section)
+                        VStack {
+                            StarRatingDisplayView(rating: rating, maxRating: 5, size: 18)
+                        }
+                        .padding(.top, 2)
+                        
+                        // Details section (under the white line)
+                        VStack(alignment: .center, spacing: 2) {
+                            if let detailedRating = detailedRating {
+                                Text(detailedRating)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.95))
+                            }
+                            
+                            if !director.isEmpty {
+                                Text("Dir: \(director)")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.95))
+                                    .lineLimit(1)
+                            }
+                            
+                            if let year = item.movieYear {
+                                Text("\(String(year)) • \(ticketDate)")
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.9))
+                            } else {
+                                Text(ticketDate)
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        
+                        Spacer()
+                    }
+                    .frame(width: 360) // Increased by 50%
+                    
+                    // Right section for rank if applicable
+                    VStack {
+                        if let rank = rank {
+                            Text("#\(rank)")
+                                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                .foregroundColor(.black.opacity(0.7))
+                                .rotationEffect(.degrees(90))
+                        }
+                    }
+                    .frame(width: 100)
+                    .padding(.trailing, 20)
+                }
+                
+                // Loading overlay
+                if isLoadingMovie {
+                    Color.black.opacity(0.3)
+                        .overlay(
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        )
+                        .cornerRadius(8)
+                }
             }
+            .frame(height: 160)
+            .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 3)
         }
         .buttonStyle(PlainButtonStyle())
-        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
         .sheet(isPresented: $showingMovieDetails) {
             if let selectedMovie = selectedMovie {
                 MovieDetailsView(movie: selectedMovie)
@@ -49,171 +181,6 @@ struct TheaterTicketView: View {
         .task {
             await loadMovieDetails()
         }
-    }
-    
-    private var ticketStub: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("ADMIT ONE")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white)
-                    .tracking(1)
-                
-                Text(ticketDate)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.8))
-                
-                // Rank number for ranked lists
-                if let rank = rank {
-                    Text("#\(rank)")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundColor(.yellow)
-                        .tracking(1)
-                }
-            }
-            
-            Spacer()
-            
-            // Ticket stub number
-            Text(String(format: "%06d", item.tmdbId % 1000000))
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.7))
-                .rotationEffect(.degrees(90))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(height: 60)
-        .background(
-            LinearGradient(
-                colors: [Color.blue.opacity(0.9), Color.blue.opacity(0.7)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .overlay(
-            // Perforation line
-            VStack {
-                Spacer()
-                Rectangle()
-                    .fill(Color.white.opacity(0.3))
-                    .frame(height: 1)
-                    .mask(
-                        HStack(spacing: 4) {
-                            ForEach(0..<50, id: \.self) { _ in
-                                Circle()
-                                    .frame(width: 3, height: 3)
-                            }
-                        }
-                    )
-            }
-        )
-    }
-    
-    private var ticketBody: some View {
-        HStack(spacing: 16) {
-            // Movie poster
-            AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
-                image
-                    .resizable()
-                    .aspectRatio(2/3, contentMode: .fill)
-            } placeholder: {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-                    .overlay(
-                        Group {
-                            if isLoadingMovie {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .gray))
-                                    .scaleEffect(0.6)
-                            } else {
-                                Image(systemName: "photo")
-                                    .foregroundColor(.gray)
-                                    .font(.system(size: 16))
-                            }
-                        }
-                    )
-            }
-            .frame(width: 80, height: 120)
-            .cornerRadius(8)
-            .clipped()
-            
-            // Movie details
-            VStack(alignment: .leading, spacing: 8) {
-                Text(item.movieTitle.uppercased())
-                    .font(.system(size: 18, weight: .bold, design: .default))
-                    .foregroundColor(.black)
-                    .lineLimit(3)
-                    .tracking(0.5)
-                
-                if let year = item.movieYear {
-                    Text(String(year))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.black.opacity(0.7))
-                }
-                
-                Text("DIRECTED BY")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundColor(.black.opacity(0.5))
-                    .tracking(1)
-                
-                Text(director.uppercased())
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.black.opacity(0.8))
-                    .lineLimit(2)
-                    .tracking(0.3)
-                
-                Spacer()
-                
-                // Theater branding
-                HStack {
-                    Image(systemName: "film.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(.blue.opacity(0.7))
-                    
-                    Text("REELAY THEATERS")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundColor(.blue.opacity(0.7))
-                        .tracking(1)
-                }
-            }
-            
-            Spacer(minLength: 0)
-            
-            // Ticket validation area
-            VStack(spacing: 8) {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 20))
-                    .foregroundColor(.blue.opacity(0.6))
-                
-                Text("VALID")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundColor(.blue.opacity(0.6))
-                    .tracking(1)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 20)
-        .frame(height: 140)
-        .background(
-            LinearGradient(
-                colors: [Color.white, Color.gray.opacity(0.1)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-        .overlay(
-            // Loading overlay
-            Group {
-                if isLoadingMovie {
-                    Color.black.opacity(0.3)
-                        .overlay(
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.8)
-                        )
-                }
-            }
-        )
     }
     
     private func formatTicketDate(_ dateString: String) -> String {
@@ -245,7 +212,7 @@ struct TheaterTicketView: View {
                 }
             }
         } catch {
-            print("Failed to load movie details for ticket: \(error)")
+            // Silently handle error
         }
     }
     
@@ -312,10 +279,60 @@ struct TheaterTicketView: View {
                 }
             }
         } catch {
-            print("Error loading latest movie entry: \(error)")
             await MainActor.run {
                 isLoadingMovie = false
             }
+        }
+    }
+}
+
+// MARK: - StarRatingDisplayView
+struct StarRatingDisplayView: View {
+    let rating: Double
+    let maxRating: Int
+    let size: CGFloat
+    
+    init(rating: Double, maxRating: Int = 5, size: CGFloat = 20) {
+        self.rating = rating
+        self.maxRating = maxRating
+        self.size = size
+    }
+    
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(1...maxRating, id: \.self) { starIndex in
+                star(for: starIndex)
+                    .foregroundColor(starColor(for: starIndex))
+                    .font(.system(size: size))
+            }
+        }
+    }
+    
+    private func star(for index: Int) -> some View {
+        let starValue = Double(index)
+        let difference = rating - starValue + 1.0
+        
+        if difference >= 1.0 {
+            // Full star
+            return Image(systemName: "star.fill")
+        } else if difference >= 0.5 {
+            // Half star
+            return Image(systemName: "star.leadinghalf.filled")
+        } else {
+            // Empty star
+            return Image(systemName: "star")
+        }
+    }
+    
+    private func starColor(for index: Int) -> Color {
+        let starValue = Double(index)
+        
+        if rating > 0 && rating >= starValue - 0.25 {
+            // Yellow for rated films
+            return .yellow
+        } else {
+            // Grey for unrated films or empty stars
+            return Color.white.opacity(0.4)
         }
     }
 }
@@ -363,8 +380,9 @@ extension Date {
             name: "Films Watched in Theaters",
             description: "Movies I've seen on the big screen"
         ),
-        rank: 1
+        rank: 1,
+        showSpecialLayout: true
     )
     .padding()
-    .background(Color.black)
+    .background(Color.gray.opacity(0.2))
 }

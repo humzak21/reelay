@@ -16,6 +16,9 @@ class SupabaseMovieService: ObservableObject {
     @Published var isLoggedIn = false
     @Published var currentUser: User?
     
+    // Expose the authenticated client so other services (e.g., Watchlist) share the same auth/session
+    var client: SupabaseClient { supabase }
+    
     private init() {
         guard let supabaseURL = URL(string: Config.supabaseURL) else {
             fatalError("Missing Supabase URL configuration")
@@ -85,7 +88,7 @@ class SupabaseMovieService: ObservableObject {
         searchQuery: String? = nil,
         sortBy: MovieSortField = .watchDate,
         ascending: Bool = false,
-        limit: Int = 50,
+        limit: Int = 3000,
         offset: Int = 0
     ) async throws -> [Movie] {
         
@@ -131,6 +134,19 @@ class SupabaseMovieService: ObservableObject {
         let movies: [Movie] = try JSONDecoder().decode([Movie].self, from: response.data)
         guard let movie = movies.first else {
             throw SupabaseMovieError.noMovieReturned
+        }
+        
+        // Automatically remove from watchlist after successfully adding to diary
+        if let tmdbId = movieData.tmdb_id {
+            Task { @MainActor in
+                do {
+                    try await SupabaseWatchlistService.shared.deleteItem(tmdbId: tmdbId)
+                    // Refresh the watchlist data to update the UI
+                    await DataManager.shared.refreshWatchlist()
+                } catch {
+                    // Don't throw - the movie was successfully added to diary
+                }
+            }
         }
         
         return movie
@@ -189,7 +205,7 @@ class SupabaseMovieService: ObservableObject {
     }
     
     /// Get movies with detailed ratings in the specified range
-    nonisolated func getMoviesInRatingRange(minRating: Double, maxRating: Double, limit: Int = 10) async throws -> [Movie] {
+    nonisolated func getMoviesInRatingRange(minRating: Double, maxRating: Double, limit: Int = 3000) async throws -> [Movie] {
         let response = try await supabase
             .from("diary")
             .select()
@@ -202,6 +218,51 @@ class SupabaseMovieService: ObservableObject {
         
         let movies: [Movie] = try JSONDecoder().decode([Movie].self, from: response.data)
         return movies
+    }
+    
+    /// Get watched movie count for multiple TMDB IDs (batch query for efficiency)
+    nonisolated func getWatchedCountForTmdbIds(tmdbIds: [Int]) async throws -> [Int: Int] {
+        guard !tmdbIds.isEmpty else { return [:] }
+        
+        let response = try await supabase
+            .from("diary")
+            .select("tmdb_id")
+            .in("tmdb_id", values: tmdbIds)
+            .execute()
+        
+        struct TmdbIdResult: Codable {
+            let tmdb_id: Int
+        }
+        
+        let results: [TmdbIdResult] = try JSONDecoder().decode([TmdbIdResult].self, from: response.data)
+        
+        // Count occurrences of each TMDB ID
+        var counts: [Int: Int] = [:]
+        for result in results {
+            counts[result.tmdb_id, default: 0] += 1
+        }
+        
+        return counts
+    }
+    
+    /// Check which TMDB IDs have watched entries (batch query for efficiency)
+    nonisolated func checkWatchedStatusForTmdbIds(tmdbIds: [Int]) async throws -> Set<Int> {
+        guard !tmdbIds.isEmpty else { return Set() }
+        
+        let response = try await supabase
+            .from("diary")
+            .select("tmdb_id")
+            .in("tmdb_id", values: tmdbIds)
+            .execute()
+        
+        struct TmdbIdResult: Codable {
+            let tmdb_id: Int
+        }
+        
+        let results: [TmdbIdResult] = try JSONDecoder().decode([TmdbIdResult].self, from: response.data)
+        
+        // Return unique TMDB IDs that have entries
+        return Set(results.map { $0.tmdb_id })
     }
 }
 

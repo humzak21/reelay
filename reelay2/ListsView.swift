@@ -11,17 +11,27 @@ struct ListsView: View {
     @StateObject private var dataManager = DataManager.shared
     @StateObject private var movieService = SupabaseMovieService.shared
     @State private var showingCreateList = false
+    @State private var showingEditWatchlist = false
     @State private var selectedList: MovieList?
+    @State private var listToEdit: MovieList?
+    @State private var listToDelete: MovieList?
+    @State private var showingDeleteListAlert = false
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showingCSVImport = false
+    
+    // MARK: - Efficient Loading States
+    @State private var hasLoadedInitially = false
+    @State private var lastRefreshTime: Date = Date.distantPast
+    @State private var isRefreshing = false
+    
+    private let refreshInterval: TimeInterval = 300 // 5 minutes
     
     var body: some View {
         contentView
             .navigationTitle("Lists")
             .navigationBarTitleDisplayMode(.large)
-            .background(Color.black)
-            .preferredColorScheme(.dark)
+            .background(Color(.systemBackground))
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: {
@@ -32,22 +42,46 @@ struct ListsView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        showingCreateList = true
-                    }) {
+                    Menu {
+                        Button("Create New List", systemImage: "list.bullet") {
+                            showingCreateList = true
+                        }
+                        Button("Add to Watchlist", systemImage: "bookmark") {
+                            showingEditWatchlist = true
+                        }
+                    } label: {
                         Image(systemName: "plus")
                     }
                 }
             }
             .task {
-                if movieService.isLoggedIn {
-                    await loadLists()
+                if movieService.isLoggedIn && !hasLoadedInitially {
+                    // Test Railway cache performance
+                    Task {
+                        await DataManagerRailway.shared.enableDetailedLogging()
+                        await DataManagerRailway.shared.runCachePerformanceTest()
+                    }
+                    
+                    await loadListsIfNeeded(force: true)
+                    hasLoadedInitially = true
                 }
             }
             .onChange(of: movieService.isLoggedIn) { _, isLoggedIn in
                 if isLoggedIn {
                     Task {
-                        await loadLists()
+                        await loadListsIfNeeded(force: true)
+                        hasLoadedInitially = true
+                    }
+                } else {
+                    hasLoadedInitially = false
+                    lastRefreshTime = Date.distantPast
+                }
+            }
+            .onAppear {
+                // Only load if we haven't loaded initially or data is stale
+                if movieService.isLoggedIn && shouldRefreshData() {
+                    Task {
+                        await loadListsIfNeeded(force: false)
                     }
                 }
             }
@@ -55,13 +89,33 @@ struct ListsView: View {
                 CreateListView()
             }
             .sheet(isPresented: $showingCSVImport) {
-                CSVImportView()
+                CSVImportTabbedView()
+            }
+            .sheet(isPresented: $showingEditWatchlist) {
+                WatchlistEditView()
             }
             .sheet(item: $selectedList) { list in
                 ListDetailsView(list: list)
             }
+            .sheet(item: $listToEdit) { list in
+                EditListView(list: list)
+            }
+            .alert("Delete List", isPresented: $showingDeleteListAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete", role: .destructive) {
+                    if let list = listToDelete {
+                        Task { await deleteList(list) }
+                    }
+                }
+            } message: {
+                if let list = listToDelete {
+                    Text("Are you sure you want to delete '\(list.name)'? This action cannot be undone.")
+                } else {
+                    Text("")
+                }
+            }
             .refreshable {
-                await loadLists()
+                await refreshLists()
             }
     }
     
@@ -92,7 +146,7 @@ struct ListsView: View {
             Text("Sign In Required")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
 
             Text("Please sign in to view and manage your movie lists.")
                 .font(.body)
@@ -143,7 +197,7 @@ struct ListsView: View {
             Text("Error Loading Lists")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
             Text(errorMessage)
                 .font(.body)
                 .foregroundColor(.gray)
@@ -161,7 +215,7 @@ struct ListsView: View {
             Text("No Lists Yet")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
             Text("Create your first movie list to get started.")
                 .font(.body)
                 .foregroundColor(.gray)
@@ -182,6 +236,40 @@ struct ListsView: View {
                         ListCardView(list: list) {
                             selectedList = list
                         }
+                        .contextMenu {
+                            if list.pinned {
+                                Button("Unpin List", systemImage: "pin.slash") {
+                                    Task {
+                                        do {
+                                            try await dataManager.unpinList(list)
+                                        } catch {
+                                            await MainActor.run {
+                                                errorMessage = error.localizedDescription
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Button("Pin List", systemImage: "pin.fill") {
+                                    Task {
+                                        do {
+                                            try await dataManager.pinList(list)
+                                        } catch {
+                                            await MainActor.run {
+                                                errorMessage = error.localizedDescription
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Button("Edit List", systemImage: "pencil") {
+                                listToEdit = list
+                            }
+                            Button("Remove List", systemImage: "trash", role: .destructive) {
+                                listToDelete = list
+                                showingDeleteListAlert = true
+                            }
+                        }
                         .padding(.horizontal, 20)
                     }
                 }
@@ -191,15 +279,59 @@ struct ListsView: View {
         .scrollContentBackground(.hidden)
     }
     
-    private func loadLists() async {
-        print("📋 ListsView: Starting to load lists...")
+    // MARK: - Efficient Loading Functions
+    
+    private func shouldRefreshData() -> Bool {
+        return Date().timeIntervalSince(lastRefreshTime) > refreshInterval || !hasLoadedInitially
+    }
+    
+    private func loadListsIfNeeded(force: Bool) async {
+        // If force is false and data is still fresh, skip loading
+        if !force && !shouldRefreshData() && !dataManager.movieLists.isEmpty {
+            return
+        }
+        
+        guard !isLoading else { return }
+        
         isLoading = true
         errorMessage = nil
         
         await dataManager.refreshLists()
-        print("📋 ListsView: Lists loaded, count: \(dataManager.movieLists.count)")
+        lastRefreshTime = Date()
         
         isLoading = false
+    }
+    
+    private func refreshLists() async {
+        guard !isRefreshing else { return }
+        
+        isRefreshing = true
+        errorMessage = nil
+        
+        await dataManager.refreshLists()
+        lastRefreshTime = Date()
+        
+        isRefreshing = false
+    }
+    
+    private func loadLists() async {
+        await loadListsIfNeeded(force: true)
+    }
+    
+    private func deleteList(_ list: MovieList) async {
+        do {
+            try await dataManager.deleteList(list)
+            await MainActor.run {
+                listToDelete = nil
+                showingDeleteListAlert = false
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                listToDelete = nil
+                showingDeleteListAlert = false
+            }
+        }
     }
 }
 
@@ -297,7 +429,7 @@ struct ListCardView: View {
                 }
             }
             .padding(16)
-            .background(Color.gray.opacity(0.15))
+            .background(Color(.secondarySystemFill))
             .cornerRadius(16)
         }
         .buttonStyle(PlainButtonStyle())
@@ -369,7 +501,6 @@ struct CreateListView: View {
             }
             .padding()
             .background(Color.black)
-            .preferredColorScheme(.dark)
             .navigationTitle("Create List")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

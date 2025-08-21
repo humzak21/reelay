@@ -160,7 +160,8 @@ class SupabaseListService: ObservableObject {
             createdAt: list.createdAt,
             updatedAt: list.updatedAt,
             itemCount: list.itemCount,
-            pinned: true
+            pinned: true,
+            ranked: list.ranked
         )
         
         _ = try await updateListPinnedStatus(updatedList, pinned: true)
@@ -175,7 +176,8 @@ class SupabaseListService: ObservableObject {
             createdAt: list.createdAt,
             updatedAt: list.updatedAt,
             itemCount: list.itemCount,
-            pinned: false
+            pinned: false,
+            ranked: list.ranked
         )
         
         _ = try await updateListPinnedStatus(updatedList, pinned: false)
@@ -188,9 +190,15 @@ class SupabaseListService: ObservableObject {
         defer { isLoading = false }
         
         do {
+            let now = Date()
+            struct UpdatePinnedPayload: Codable {
+                let pinned: Bool
+                let updated_at: String
+            }
+            // Update pinned and bump updated_at in a single typed payload
             try await supabaseClient
                 .from("lists")
-                .update(["pinned": pinned])
+                .update(UpdatePinnedPayload(pinned: pinned, updated_at: ISO8601DateFormatter().string(from: now)))
                 .eq("id", value: list.id.uuidString)
                 .execute()
             
@@ -200,9 +208,10 @@ class SupabaseListService: ObservableObject {
                 name: list.name,
                 description: list.description,
                 createdAt: list.createdAt,
-                updatedAt: list.updatedAt,
+                updatedAt: now,
                 itemCount: list.itemCount,
-                pinned: pinned
+                pinned: pinned,
+                ranked: list.ranked
             )
             
             // Update local data
@@ -240,6 +249,16 @@ class SupabaseListService: ObservableObject {
             // Get the next sort order
             let nextSortOrder = (currentItems.map(\.sortOrder).max() ?? 0) + 1
             
+            // Auto-fetch release date from TMDB when adding to a list
+            var fetchedReleaseDate: String? = nil
+            do {
+                let details = try await TMDBService.shared.getMovieDetails(movieId: tmdbId)
+                fetchedReleaseDate = details.releaseDate
+            } catch {
+                // Non-fatal: if TMDB lookup fails, continue without a release date
+                fetchedReleaseDate = nil
+            }
+            
             let insertData = AddListItemInsert(
                 listId: listId.uuidString,
                 tmdbId: tmdbId,
@@ -247,6 +266,7 @@ class SupabaseListService: ObservableObject {
                 moviePosterUrl: posterUrl,
                 movieBackdropPath: backdropPath,
                 movieYear: year,
+                movieReleaseDate: fetchedReleaseDate,
                 sortOrder: nextSortOrder
             )
             
@@ -269,8 +289,9 @@ class SupabaseListService: ObservableObject {
             listItems[listId]?.append(newItem)
             listItems[listId]?.sort { $0.sortOrder < $1.sortOrder }
             
-            // Update the list's item count
+            // Update the list's item count and bump updated_at
             await refreshListItemCount(listId)
+            await touchListUpdatedAt(listId)
             
         } catch {
             self.error = error
@@ -304,8 +325,9 @@ class SupabaseListService: ObservableObject {
             // Update in-memory data
             listItems[listId]?.removeAll { $0.id == itemToRemove.id }
             
-            // Update the list's item count
+            // Update the list's item count and bump updated_at
             await refreshListItemCount(listId)
+            await touchListUpdatedAt(listId)
             
         } catch {
             self.error = error
@@ -322,6 +344,8 @@ class SupabaseListService: ObservableObject {
         do {
             // Create update requests for each item with new sort order
             for (index, item) in items.enumerated() {
+                // Renumber sort_order to be 1-based and contiguous
+                let newSortOrder = index + 1
                 let updatedItem = ListItem(
                     id: item.id,
                     listId: item.listId,
@@ -330,14 +354,15 @@ class SupabaseListService: ObservableObject {
                     moviePosterUrl: item.moviePosterUrl,
                     movieBackdropPath: item.movieBackdropPath,
                     movieYear: item.movieYear,
+                    movieReleaseDate: item.movieReleaseDate,
                     addedAt: item.addedAt,
-                    sortOrder: index
+                    sortOrder: newSortOrder
                 )
                 
                 // Update in Supabase
                 try await supabaseClient
                     .from("list_items")
-                    .update(["sort_order": index])
+                    .update(["sort_order": newSortOrder])
                     .eq("id", value: String(item.id))
                     .execute()
                 
@@ -347,7 +372,8 @@ class SupabaseListService: ObservableObject {
             
             // Update in-memory data
             listItems[listId] = items.enumerated().map { index, item in
-                ListItem(
+                let newSortOrder = index + 1
+                return ListItem(
                     id: item.id,
                     listId: item.listId,
                     tmdbId: item.tmdbId,
@@ -355,9 +381,92 @@ class SupabaseListService: ObservableObject {
                     moviePosterUrl: item.moviePosterUrl,
                     movieBackdropPath: item.movieBackdropPath,
                     movieYear: item.movieYear,
+                    movieReleaseDate: item.movieReleaseDate,
                     addedAt: item.addedAt,
-                    sortOrder: index
+                    sortOrder: newSortOrder
                 )
+            }
+            // Bump list updated_at and resort
+            await touchListUpdatedAt(listId)
+        } catch {
+            self.error = error
+            throw error
+        }
+    }
+    
+    func updateListItemTMDBData(currentTmdbId: Int, newTmdbId: Int, newTitle: String, newReleaseYear: Int?, newPosterUrl: String?, newBackdropUrl: String?) async throws {
+        isLoading = true
+        error = nil
+        
+        defer { isLoading = false }
+        
+        do {
+            // Find all list items with the current TMDB ID
+            var affectedLists: Set<UUID> = Set()
+            
+            for (listId, items) in listItems {
+                for item in items {
+                    if item.tmdbId == currentTmdbId {
+                        affectedLists.insert(listId)
+                        
+                        // Update in Supabase
+                        struct UpdateData: Codable {
+                            let tmdbId: Int
+                            let movieTitle: String
+                            let movieYear: Int?
+                            let moviePosterUrl: String?
+                            let movieBackdropPath: String?
+                            
+                            enum CodingKeys: String, CodingKey {
+                                case tmdbId = "tmdb_id"
+                                case movieTitle = "movie_title"
+                                case movieYear = "movie_year"
+                                case moviePosterUrl = "movie_poster_url"
+                                case movieBackdropPath = "movie_backdrop_path"
+                            }
+                        }
+                        
+                        let updateData = UpdateData(
+                            tmdbId: newTmdbId,
+                            movieTitle: newTitle,
+                            movieYear: newReleaseYear,
+                            moviePosterUrl: newPosterUrl,
+                            movieBackdropPath: newBackdropUrl
+                        )
+                        
+                        try await supabaseClient
+                            .from("list_items")
+                            .update(updateData)
+                            .eq("id", value: String(item.id))
+                            .execute()
+                        
+                        // Update locally
+                        let updatedItem = ListItem(
+                            id: item.id,
+                            listId: item.listId,
+                            tmdbId: newTmdbId,
+                            movieTitle: newTitle,
+                            moviePosterUrl: newPosterUrl,
+                            movieBackdropPath: newBackdropUrl,
+                            movieYear: newReleaseYear,
+                            movieReleaseDate: item.movieReleaseDate,
+                            addedAt: item.addedAt,
+                            sortOrder: item.sortOrder
+                        )
+                        
+                        try saveListItemLocally(updatedItem)
+                        
+                        // Update in-memory data
+                        if let itemIndex = listItems[listId]?.firstIndex(where: { $0.id == item.id }) {
+                            listItems[listId]?[itemIndex] = updatedItem
+                        }
+                    }
+                }
+            }
+            
+            // Touch updated_at for all affected lists
+            for listId in affectedLists {
+                await touchListUpdatedAt(listId)
             }
             
         } catch {
@@ -392,6 +501,28 @@ class SupabaseListService: ObservableObject {
         
         return items
     }
+
+    /// Force reload items for a list from Supabase, bypassing cache
+    func reloadItemsForList(_ listId: UUID) async throws -> [ListItem] {
+        let response = try await supabaseClient
+            .from("list_items")
+            .select()
+            .eq("list_id", value: listId.uuidString)
+            .order("sort_order", ascending: true)
+            .execute()
+        
+        let items = try JSONDecoder().decode([ListItem].self, from: response.data)
+        
+        // Update cache
+        listItems[listId] = items
+        
+        // Save locally
+        for item in items {
+            try? saveListItemLocally(item)
+        }
+        
+        return items
+    }
     
     func getListItems(_ list: MovieList) -> [ListItem] {
         guard let items = listItems[list.id] else { return [] }
@@ -408,11 +539,8 @@ class SupabaseListService: ObservableObject {
         
         do {
             guard let currentUserId = getCurrentUserId() else {
-                print("🔒 Not authenticated - skipping sync")
                 return
             }
-            
-            print("🔄 Syncing lists for user: \(currentUserId)")
             
             // Get lists for current user
             let response = try await supabaseClient
@@ -422,10 +550,7 @@ class SupabaseListService: ObservableObject {
                 .order("created_at", ascending: false)
                 .execute()
             
-            print("📡 Raw response data: \(String(data: response.data, encoding: .utf8) ?? "nil")")
-            
             let lists = try JSONDecoder().decode([MovieList].self, from: response.data)
-            print("✅ Decoded \(lists.count) lists")
             
             // Calculate item counts manually since we can't rely on the join query
             var listsWithCounts: [MovieList] = []
@@ -440,13 +565,12 @@ class SupabaseListService: ObservableObject {
                         createdAt: list.createdAt,
                         updatedAt: list.updatedAt,
                         itemCount: items.count,
-                        pinned: list.pinned
+                        pinned: list.pinned,
+                        ranked: list.ranked
                     )
                     listsWithCounts.append(listWithCount)
                     listItems[list.id] = items
-                    print("📝 List '\(list.name)' has \(items.count) items")
                 } catch {
-                    print("⚠️ Failed to load items for list \(list.name): \(error)")
                     listsWithCounts.append(list) // Add with original count
                 }
             }
@@ -460,10 +584,7 @@ class SupabaseListService: ObservableObject {
             self.movieLists = listsWithCounts
             sortLists()
             
-            print("🎉 Successfully synced \(listsWithCounts.count) lists")
-            
         } catch {
-            print("❌ Error syncing lists: \(error)")
             self.error = error
         }
     }
@@ -573,26 +694,19 @@ class SupabaseListService: ObservableObject {
     private func getCurrentUserId() -> UUID? {
         // Check if SupabaseMovieService has authentication
         let movieService = SupabaseMovieService.shared
-        print("🔐 Auth check - isLoggedIn: \(movieService.isLoggedIn)")
         
         guard movieService.isLoggedIn else {
-            print("🔐 User not logged in")
             return nil
         }
         
         guard let currentUser = movieService.currentUser else {
-            print("🔐 No current user found")
             return nil
         }
-        
-        print("🔐 Current user ID: \(currentUser.id)")
         
         guard let userId = UUID(uuidString: currentUser.id.uuidString) else {
-            print("🔐 Failed to convert user ID to UUID: \(currentUser.id.uuidString)")
             return nil
         }
         
-        print("🔐 Successfully got user UUID: \(userId)")
         return userId
     }
     
@@ -607,7 +721,8 @@ class SupabaseListService: ObservableObject {
                 createdAt: movieLists[listIndex].createdAt,
                 updatedAt: movieLists[listIndex].updatedAt,
                 itemCount: itemCount,
-                pinned: movieLists[listIndex].pinned
+                pinned: movieLists[listIndex].pinned,
+                ranked: movieLists[listIndex].ranked
             )
             movieLists[listIndex] = updatedList
             try? saveListLocally(updatedList)
@@ -625,6 +740,38 @@ class SupabaseListService: ObservableObject {
                 // Both pinned or both unpinned, sort by updated date (most recent first)
                 return list1.updatedAt > list2.updatedAt
             }
+        }
+    }
+
+    // MARK: - Updated At Helper
+    private func touchListUpdatedAt(_ listId: UUID) async {
+        let now = Date()
+        do {
+            try await supabaseClient
+                .from("lists")
+                .update(["updated_at": ISO8601DateFormatter().string(from: now)])
+                .eq("id", value: listId.uuidString)
+                .execute()
+        } catch {
+            // Non-fatal; we'll still update locally
+        }
+        
+        if let index = movieLists.firstIndex(where: { $0.id == listId }) {
+            let list = movieLists[index]
+            let bumped = MovieList(
+                id: list.id,
+                userId: list.userId,
+                name: list.name,
+                description: list.description,
+                createdAt: list.createdAt,
+                updatedAt: now,
+                itemCount: list.itemCount,
+                pinned: list.pinned,
+                ranked: list.ranked
+            )
+            try? saveListLocally(bumped)
+            movieLists[index] = bumped
+            sortLists()
         }
     }
 }
@@ -669,6 +816,7 @@ struct AddListItemInsert: Codable {
     let moviePosterUrl: String?
     let movieBackdropPath: String?
     let movieYear: Int?
+    let movieReleaseDate: String?
     let sortOrder: Int
     
     enum CodingKeys: String, CodingKey {
@@ -678,6 +826,7 @@ struct AddListItemInsert: Codable {
         case moviePosterUrl = "movie_poster_url"
         case movieBackdropPath = "movie_backdrop_path"
         case movieYear = "movie_year"
+        case movieReleaseDate = "movie_release_date"
         case sortOrder = "sort_order"
     }
 }

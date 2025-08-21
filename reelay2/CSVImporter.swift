@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import Auth
 
 // MARK: - Models for CSV Import
 
@@ -206,7 +207,6 @@ class CSVImporter {
     private func convertRowToListEntry(_ row: CSVRow) -> ListEntry? {
         // Try to extract required fields from the row
         guard let name = extractMovieName(from: row) else {
-            print("⚠️ Skipping row \(row.rowNumber): No movie name found")
             return nil
         }
         
@@ -439,9 +439,6 @@ struct CSVImportView: View {
     @State private var errorMessage: String?
     @State private var importProgress = 0.0
     @State private var currentlyProcessing = ""
-    @State private var matchedMovies: [UUID: TMDBMovie] = [:]
-    @State private var unmatchedEntries: [ListEntry] = []
-    @State private var existingInDiary: [UUID: Bool] = [:]
     
     var body: some View {
         NavigationView {
@@ -454,8 +451,7 @@ struct CSVImportView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            .preferredColorScheme(.dark)
+            .background(Color(.systemBackground))
             .navigationTitle("Import CSV")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -484,8 +480,8 @@ struct CSVImportView: View {
                 handleFileImport(result)
             }
         }
-        .background(Color.black)
-        .toolbarBackground(Color.black, for: .navigationBar)
+        .background(Color(.systemBackground))
+        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
     }
     
@@ -584,20 +580,9 @@ struct CSVImportView: View {
                 
                 Spacer()
                 
-                VStack(alignment: .trailing, spacing: 2) {
-                    if !unmatchedEntries.isEmpty {
-                        Text("\(unmatchedEntries.count) not matched")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                    
-                    let diaryCount = existingInDiary.values.filter { $0 }.count
-                    if diaryCount > 0 {
-                        Text("\(diaryCount) in diary")
-                            .font(.caption)
-                            .foregroundColor(.blue)
-                    }
-                }
+                Text("Ready to import")
+                    .font(.caption)
+                    .foregroundColor(.blue)
             }
             
             if isImporting {
@@ -658,27 +643,6 @@ struct CSVImportView: View {
             }
             
             Spacer()
-            
-            HStack(spacing: 4) {
-                // TMDB match status
-                if matchedMovies[entry.id] != nil {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.caption)
-                } else {
-                    Image(systemName: "questionmark.circle")
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                }
-                
-                // Diary status
-                if existingInDiary[entry.id] == true {
-                    Image(systemName: "book.circle.fill")
-                        .foregroundColor(.blue)
-                        .font(.caption)
-                        .help("Already in diary")
-                }
-            }
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
@@ -741,9 +705,6 @@ struct CSVImportView: View {
                 self.currentlyProcessing = ""
             }
             
-            await searchMoviesForEntries(entries)
-            await checkExistingInDiary(entries)
-            
         } catch {
             await MainActor.run {
                 self.errorMessage = error.localizedDescription
@@ -753,56 +714,31 @@ struct CSVImportView: View {
         }
     }
     
-    private func searchMoviesForEntries(_ entries: [ListEntry]) async {
-        await MainActor.run {
-            currentlyProcessing = "Searching for movies..."
-        }
-        
-        var matched: [UUID: TMDBMovie] = [:]
-        var unmatched: [ListEntry] = []
-        
-        for (_, entry) in entries.enumerated() {
-            await MainActor.run {
-                currentlyProcessing = "Searching: \(entry.name)"
-            }
-            
-            if let bestMatch = await searchForMovie(entry: entry) {
-                matched[entry.id] = bestMatch
-            } else {
-                unmatched.append(entry)
-            }
-            
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-        
-        await MainActor.run {
-            self.matchedMovies = matched
-            self.unmatchedEntries = unmatched
-            self.currentlyProcessing = ""
-        }
-    }
     
     private func searchForMovie(entry: ListEntry) async -> TMDBMovie? {
         // Try multiple search strategies in order of preference
         let searchStrategies = buildSearchStrategies(for: entry)
-        print("🎯 Searching '\(entry.name)' with \(searchStrategies.count) strategies")
+        print("   🔍 Built \(searchStrategies.count) search strategies for '\(entry.name)'")
         
-        for strategy in searchStrategies {
+        for (index, strategy) in searchStrategies.enumerated() {
             do {
+                print("   🌐 Trying strategy \(index + 1): '\(strategy.query)'")
                 let searchResponse = try await tmdbService.searchMovies(query: strategy.query)
-                print("🔍 Searching '\(entry.name)' with query: '\(strategy.query)' - Found \(searchResponse.results.count) results")
+                print("   📊 TMDB returned \(searchResponse.results.count) results")
                 
                 if let match = findBestMatchInResults(entry: entry, results: searchResponse.results, strategy: strategy) {
-                    print("✅ Matched '\(entry.name)' -> '\(match.title)' (TMDB ID: \(match.id))")
+                    print("   ✅ Found match: \(match.title)")
                     return match
+                } else {
+                    print("   ❌ No suitable match in results")
                 }
                 
             } catch {
-                print("❌ Search failed for query '\(strategy.query)': \(error)")
+                print("   ⚠️ Search failed for '\(strategy.query)': \(error)")
             }
         }
         
-        print("❌ No match found for '\(entry.name)' after trying \(searchStrategies.count) strategies")
+        print("   ❌ All strategies failed for '\(entry.name)'")
         return nil
     }
     
@@ -954,37 +890,6 @@ struct CSVImportView: View {
         return Int(String(dateString.prefix(4)))
     }
     
-    private func checkExistingInDiary(_ entries: [ListEntry]) async {
-        await MainActor.run {
-            currentlyProcessing = "Checking diary entries..."
-        }
-        
-        var diaryStatus: [UUID: Bool] = [:]
-        
-        for entry in entries {
-            if let tmdbMovie = matchedMovies[entry.id] {
-                do {
-                    let existingMovies = try await dataManager.getMoviesByTmdbId(tmdbId: tmdbMovie.id)
-                    let isInDiary = !existingMovies.isEmpty
-                    diaryStatus[entry.id] = isInDiary
-                    
-                    if isInDiary {
-                        print("📖 '\(entry.name)' found in diary (TMDB ID: \(tmdbMovie.id)) - \(existingMovies.count) entries")
-                    }
-                    
-                    try await Task.sleep(nanoseconds: 50_000_000)
-                } catch {
-                    print("❌ Failed to check diary for movie: \(entry.name) - \(error)")
-                    diaryStatus[entry.id] = false
-                }
-            }
-        }
-        
-        await MainActor.run {
-            self.existingInDiary = diaryStatus
-            self.currentlyProcessing = ""
-        }
-    }
     
     
     private func importList() async {
@@ -996,20 +901,34 @@ struct CSVImportView: View {
             let trimmedName = listName.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedDescription = listDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             
+            print("🚀 Creating new list: '\(trimmedName)'")
             let newList = try await dataManager.createList(
                 name: trimmedName,
                 description: trimmedDescription.isEmpty ? nil : trimmedDescription
             )
+            print("✅ Created list with ID: \(newList.id)")
+            print("📊 Starting to search and import \(importedEntries.count) movies to list")
+            
+            var successfullyAdded = 0
+            var searchFailures = 0
             
             for (index, entry) in importedEntries.enumerated() {
                 await MainActor.run {
-                    currentlyProcessing = entry.name
+                    currentlyProcessing = "Searching: \(entry.name)"
                     importProgress = Double(index)
                 }
                 
-                // Add all TMDB-matched movies to the list, regardless of diary status
-                // This ensures we can add movies even if they haven't been logged yet
-                if let tmdbMovie = matchedMovies[entry.id] {
+                print("🔍 [Movie \(index + 1)/\(importedEntries.count)] Searching for: '\(entry.name)' (Year: \(entry.year?.description ?? "nil"))")
+                
+                // Search for movie on TMDB
+                if let tmdbMovie = await searchForMovie(entry: entry) {
+                    print("✅ Found TMDB match: \(tmdbMovie.title) (ID: \(tmdbMovie.id))")
+                    
+                    await MainActor.run {
+                        currentlyProcessing = "Adding: \(tmdbMovie.title)"
+                    }
+                    
+                    // Immediately add to list
                     do {
                         let posterUrl = tmdbMovie.posterPath.map { "https://image.tmdb.org/t/p/w500\($0)" }
                         let backdropPath = tmdbMovie.backdropPath
@@ -1024,13 +943,23 @@ struct CSVImportView: View {
                             listId: newList.id
                         )
                         
-                        try await Task.sleep(nanoseconds: 200_000_000)
+                        successfullyAdded += 1
+                        print("✅ Successfully added \(tmdbMovie.title) to list! (\(successfullyAdded) total)")
                         
                     } catch {
-                        print("Failed to add movie \(entry.name): \(error)")
+                        print("❌ Failed to add \(tmdbMovie.title) to list: \(error)")
+                        print("❌ Error details: \(error.localizedDescription)")
                     }
+                } else {
+                    searchFailures += 1
+                    print("❌ No TMDB match found for: '\(entry.name)' (\(searchFailures) total failures)")
                 }
+                
+                try await Task.sleep(nanoseconds: 200_000_000)
             }
+            
+            print("🎯 List import completed!")
+            print("📊 Processed \(importedEntries.count) entries: \(successfullyAdded) added, \(searchFailures) not found")
             
             await MainActor.run {
                 importProgress = Double(importedEntries.count)
@@ -1047,5 +976,545 @@ struct CSVImportView: View {
                 isImporting = false
             }
         }
+    }
+}
+
+// MARK: - Watchlist Import
+
+struct WatchlistEntry: Identifiable {
+    let id = UUID()
+    let date: Date?
+    let name: String
+    let year: Int?
+    let letterboxdURI: String?
+}
+
+struct WatchlistImportView: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var dataManager = DataManager.shared
+    @StateObject private var tmdbService = TMDBService.shared
+
+    @State private var showingFilePicker = false
+    @State private var selectedFileURL: URL?
+    @State private var importedEntries: [WatchlistEntry] = []
+    @State private var listName = ""
+    @State private var listDescription = ""
+    @State private var isProcessing = false
+    @State private var isImporting = false
+    @State private var errorMessage: String?
+    @State private var importProgress = 0.0
+    @State private var currentlyProcessing = ""
+    @State private var matchedMovies: [UUID: TMDBMovie] = [:]
+
+    var body: some View {
+        NavigationView {
+            VStack(alignment: .leading, spacing: 20) {
+                if importedEntries.isEmpty {
+                    initialView
+                } else {
+                    importPreviewView
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
+            .navigationTitle("Import Watchlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel", systemImage: "xmark") { dismiss() }
+                }
+                if !importedEntries.isEmpty {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Import", systemImage: "checkmark") {
+                            Task { await importWatchlist() }
+                        }
+                        .disabled(importedEntries.isEmpty || isImporting)
+                    }
+                }
+            }
+            .fileImporter(
+                isPresented: $showingFilePicker,
+                allowedContentTypes: [UTType.commaSeparatedText, UTType.plainText],
+                allowsMultipleSelection: false
+            ) { result in
+                handleFileImport(result)
+            }
+        }
+        .background(Color(.systemBackground))
+        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+    }
+
+    @ViewBuilder
+    private var initialView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 64))
+                .foregroundColor(.gray)
+            Text("Import Watchlist CSV")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+            Text("Select a watchlist CSV (Date, Name, Year, Letterboxd URI). We'll match titles to TMDB and add them to your Watchlist.")
+                .font(.body)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+            if isProcessing {
+                VStack(spacing: 8) {
+                    ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("Processing CSV file...").foregroundColor(.gray).font(.caption)
+                    if !currentlyProcessing.isEmpty {
+                        Text(currentlyProcessing).foregroundColor(.blue).font(.caption2)
+                    }
+                }
+            } else {
+                Button(action: { showingFilePicker = true }) {
+                    HStack { Image(systemName: "folder"); Text("Choose CSV File") }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+            }
+            if let errorMessage = errorMessage {
+                Text(errorMessage).foregroundColor(.red).font(.caption).multilineTextAlignment(.center).padding(.horizontal)
+            }
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var importPreviewView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Watchlist Entries").font(.headline).foregroundColor(.white)
+            HStack {
+                Text("Found \(importedEntries.count) movies").font(.headline).foregroundColor(.white)
+                Spacer()
+                if isImporting {
+                    ProgressView(value: importProgress, total: Double(importedEntries.count)).progressViewStyle(LinearProgressViewStyle())
+                }
+            }
+            if isImporting {
+                VStack(spacing: 8) {
+                    Text("Importing movies... (\(Int(importProgress))/\(importedEntries.count))").foregroundColor(.gray).font(.caption)
+                    if !currentlyProcessing.isEmpty { Text("Adding: \(currentlyProcessing)").foregroundColor(.blue).font(.caption2) }
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(Array(importedEntries.enumerated()), id: \.offset) { index, entry in
+                            watchlistPreviewRow(entry: entry, index: index)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+                .frame(maxHeight: 400)
+                .background(Color.black)
+            }
+            if let errorMessage = errorMessage { Text(errorMessage).foregroundColor(.red).font(.caption) }
+        }
+    }
+
+    @ViewBuilder
+    private func watchlistPreviewRow(entry: WatchlistEntry, index: Int) -> some View {
+        HStack {
+            Text("\(index + 1)").font(.caption).foregroundColor(.gray).frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name).font(.body).foregroundColor(.white).lineLimit(1)
+                if let year = entry.year { Text("(\(year))").font(.caption).foregroundColor(.gray) }
+            }
+            Spacer()
+            if matchedMovies[entry.id] != nil {
+                Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
+            } else {
+                Image(systemName: "questionmark.circle").foregroundColor(.orange).font(.caption)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(8)
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            selectedFileURL = url
+            Task { await processCSVFile(url) }
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func processCSVFile(_ url: URL) async {
+        isProcessing = true
+        errorMessage = nil
+        currentlyProcessing = "Reading CSV file..."
+        do {
+            let csvContent = try CSVImporter.shared.importCSVFile(from: url)
+            let entries = parseWatchlistCSV(csvContent)
+            await MainActor.run {
+                self.importedEntries = entries
+                self.listName = defaultListName(from: url)
+                self.isProcessing = false
+                self.currentlyProcessing = ""
+            }
+            await searchMoviesForEntries(entries)
+        } catch {
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                self.isProcessing = false
+                self.currentlyProcessing = ""
+            }
+        }
+    }
+
+    private func parseWatchlistCSV(_ csv: String) -> [WatchlistEntry] {
+        let lines = csv.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else {
+            print("❌ CSV is empty")
+            return []
+        }
+        
+        let header = parseCSVLineWatchlist(lines[0]).map { $0.lowercased() }
+        print("📋 CSV Headers found: \(header)")
+        
+        let dataLines = Array(lines.dropFirst())
+        print("📊 CSV has \(dataLines.count) data rows")
+        
+        var entries: [WatchlistEntry] = []
+        for (lineIndex, line) in dataLines.enumerated() {
+            let cols = parseCSVLineWatchlist(line)
+            if cols.isEmpty { continue }
+            
+            func val(_ key: String) -> String? {
+                if let idx = header.firstIndex(of: key), idx < cols.count {
+                    let v = cols[idx].trimmingCharacters(in: .whitespacesAndNewlines)
+                    return v.isEmpty ? nil : v
+                }
+                return nil
+            }
+            
+            let name = val("name") ?? val("title")
+            guard let title = name else {
+                print("⚠️ Row \(lineIndex + 1): No title found")
+                continue
+            }
+            
+            let yearStr = val("year")
+            let year = yearStr.flatMap { Int($0) }
+            let dateStr = val("date")
+            let date = dateStr.flatMap { DateFormatter.yyyyMMdd.date(from: $0) }
+            let uri = val("letterboxd uri") ?? val("letterboxd") ?? val("url")
+            
+            // Log first few entries to verify parsing
+            if lineIndex < 5 {
+                print("📝 Row \(lineIndex + 1): Title='\(title)', Year=\(year?.description ?? "nil"), Date=\(dateStr ?? "nil")")
+            }
+            
+            entries.append(WatchlistEntry(date: date, name: title, year: year, letterboxdURI: uri))
+        }
+        
+        print("✅ Parsed \(entries.count) watchlist entries from CSV")
+        return entries
+    }
+
+    private func parseCSVLineWatchlist(_ line: String) -> [String] {
+        var values: [String] = []
+        var currentValue = ""
+        var insideQuotes = false
+        var i = line.startIndex
+        while i < line.endIndex {
+            let char = line[i]
+            if char == "\"" {
+                if insideQuotes {
+                    let nextIndex = line.index(after: i)
+                    if nextIndex < line.endIndex && line[nextIndex] == "\"" {
+                        currentValue.append("\"")
+                        i = line.index(after: nextIndex)
+                        continue
+                    } else { insideQuotes = false }
+                } else { insideQuotes = true }
+            } else if char == "," && !insideQuotes {
+                values.append(currentValue)
+                currentValue = ""
+            } else {
+                currentValue.append(char)
+            }
+            i = line.index(after: i)
+        }
+        values.append(currentValue)
+        return values
+    }
+
+    private func defaultListName(from url: URL) -> String {
+        let base = url.deletingPathExtension().lastPathComponent
+        return base.isEmpty ? "Imported Watchlist" : base.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
+    }
+
+    private func searchMoviesForEntries(_ entries: [WatchlistEntry]) async {
+        await MainActor.run { currentlyProcessing = "Searching for movies..." }
+        var matched: [UUID: TMDBMovie] = [:]
+        var successfullyWritten = 0
+        
+        print("🔍 Starting TMDB search and immediate database writing for \(entries.count) entries")
+        
+        for (index, entry) in entries.enumerated() {
+            await MainActor.run {
+                currentlyProcessing = "Processing: \(entry.name)"
+                importProgress = Double(index)
+            }
+            print("🔍 [\(index + 1)/\(entries.count)] Searching TMDB for: '\(entry.name)' (Year: \(entry.year?.description ?? "nil"))")
+            
+            if let bestMatch = await searchForMovie(entry: entry) {
+                print("✅ Found TMDB match: \(bestMatch.title) (ID: \(bestMatch.id))")
+                matched[entry.id] = bestMatch
+                
+                // Write to database immediately
+                await MainActor.run { currentlyProcessing = "Saving: \(entry.name)" }
+                
+                do {
+                    print("💾 Writing \(bestMatch.title) to database...")
+                    let posterUrl = bestMatch.posterPath.map { "https://image.tmdb.org/t/p/w500\($0)" }
+                    let backdropPath = bestMatch.backdropPath
+                    let year = bestMatch.releaseDate.flatMap { String($0.prefix(4)) }.flatMap(Int.init)
+                    let releaseDate = bestMatch.releaseDate
+                    let addedAt = entry.date ?? Date()
+                    
+                    try await SupabaseWatchlistService.shared.upsertItem(
+                        tmdbId: bestMatch.id,
+                        title: bestMatch.title,
+                        posterUrl: posterUrl,
+                        backdropPath: backdropPath,
+                        year: year,
+                        releaseDate: releaseDate,
+                        addedAt: addedAt
+                    )
+                    
+                    successfullyWritten += 1
+                    print("✅ Successfully wrote \(bestMatch.title) to database! (\(successfullyWritten) total)")
+                    
+                } catch {
+                    print("❌ Failed to write \(bestMatch.title) to database: \(error)")
+                    print("❌ Error details: \(error.localizedDescription)")
+                }
+                
+            } else {
+                print("❌ No TMDB match found for: '\(entry.name)'")
+            }
+            
+            try? await Task.sleep(nanoseconds: 120_000_000) // Slightly longer delay for database writes
+        }
+        
+        await MainActor.run {
+            self.matchedMovies = matched
+            self.currentlyProcessing = ""
+            self.importProgress = Double(entries.count)
+        }
+        
+        print("🎯 TMDB search and database writing completed!")
+        print("📊 Found \(matched.count) TMDB matches out of \(entries.count) entries")
+        print("💾 Successfully wrote \(successfullyWritten) movies to database")
+        
+        if successfullyWritten != matched.count {
+            print("⚠️ Database write mismatch: \(matched.count) found vs \(successfullyWritten) written")
+        }
+    }
+
+    private func searchForMovie(entry: WatchlistEntry) async -> TMDBMovie? {
+        let strategies = buildSearchStrategies(for: entry)
+        print("🔍 Built \(strategies.count) search strategies for '\(entry.name)':")
+        for (index, strategy) in strategies.enumerated() {
+            print("   \(index + 1). \(strategy.type) - '\(strategy.query)'")
+        }
+        
+        for (strategyIndex, strategy) in strategies.enumerated() {
+            do {
+                print("🌐 Trying TMDB search [\(strategyIndex + 1)/\(strategies.count)]: '\(strategy.query)'")
+                let searchResponse = try await tmdbService.searchMovies(query: strategy.query)
+                print("📊 TMDB returned \(searchResponse.results.count) results for '\(strategy.query)'")
+                
+                if !searchResponse.results.isEmpty {
+                    print("🎬 First few results:")
+                    for (i, movie) in searchResponse.results.prefix(3).enumerated() {
+                        let year = movie.releaseDate?.prefix(4) ?? "Unknown"
+                        print("   \(i + 1). \(movie.title) (\(year)) - ID: \(movie.id)")
+                    }
+                }
+                
+                if let match = findBestMatchInResults(entry: entry, results: searchResponse.results, strategy: strategy) {
+                    print("✅ Found best match: \(match.title) (ID: \(match.id))")
+                    return match
+                } else {
+                    print("❌ No suitable match found in results for strategy '\(strategy.query)'")
+                }
+            } catch {
+                print("⚠️ TMDB search failed for '\(strategy.query)': \(error)")
+            }
+        }
+        print("❌ All search strategies failed for '\(entry.name)'")
+        return nil
+    }
+
+    private func buildSearchStrategies(for entry: WatchlistEntry) -> [SearchStrategy] {
+        var strategies: [SearchStrategy] = []
+        if let year = entry.year { strategies.append(SearchStrategy(query: "\(entry.name) \(year)", type: .exactWithYear, priority: 1)) }
+        strategies.append(SearchStrategy(query: entry.name, type: .exact, priority: 2))
+        let normalized = normalizeTitle(entry.name)
+        if let year = entry.year, normalized != entry.name { strategies.append(SearchStrategy(query: "\(normalized) \(year)", type: .normalizedWithYear, priority: 3)) }
+        if normalized != entry.name { strategies.append(SearchStrategy(query: normalized, type: .normalized, priority: 4)) }
+        let keywords = extractKeywords(entry.name)
+        if keywords != entry.name && keywords != normalized {
+            if let year = entry.year { strategies.append(SearchStrategy(query: "\(keywords) \(year)", type: .keywordsWithYear, priority: 5)) }
+            strategies.append(SearchStrategy(query: keywords, type: .keywords, priority: 6))
+        }
+        return strategies
+    }
+
+    private func normalizeTitle(_ title: String) -> String {
+        title.replacingOccurrences(of: ":", with: "")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "[()]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func extractKeywords(_ title: String) -> String {
+        let normalized = normalizeTitle(title)
+        let stopWords = ["the","a","an","and","or","but","in","on","at","to","for","of","with","by"]
+        let words = normalized.split(separator: " ").map { $0.lowercased() }.filter { !stopWords.contains($0) && $0.count > 2 }
+        return words.joined(separator: " ")
+    }
+
+    private func findBestMatchInResults(entry: WatchlistEntry, results: [TMDBMovie], strategy: SearchStrategy) -> TMDBMovie? {
+        guard !results.isEmpty else {
+            print("   ❌ No results to match against")
+            return nil
+        }
+        
+        let entryTitle = entry.name.lowercased()
+        let normalizedEntryTitle = normalizeTitle(entry.name).lowercased()
+        
+        print("   🔍 Matching '\(entry.name)' (Year: \(entry.year?.description ?? "nil")) against \(results.count) results:")
+        print("   📝 Entry title normalized: '\(normalizedEntryTitle)'")
+        
+        // Exact title matching with year check
+        for movie in results {
+            let movieTitle = movie.title.lowercased()
+            let normalizedMovieTitle = normalizeTitle(movie.title).lowercased()
+            let movieYear = movie.releaseDate.flatMap({ Int(String($0.prefix(4))) })
+            
+            print("   🎬 Checking: '\(movie.title)' (\(movieYear?.description ?? "No year")) - ID: \(movie.id)")
+            
+            if movieTitle == entryTitle || normalizedMovieTitle == normalizedEntryTitle {
+                print("   ✅ Title match found!")
+                if let entryYear = entry.year, let movieYear = movieYear {
+                    let yearDiff = abs(movieYear - entryYear)
+                    print("   📅 Year check: Entry(\(entryYear)) vs Movie(\(movieYear)) = diff \(yearDiff)")
+                    if yearDiff <= 1 {
+                        print("   ✅ Year match within tolerance!")
+                        return movie
+                    } else {
+                        print("   ❌ Year difference too large (\(yearDiff))")
+                    }
+                } else if entry.year == nil {
+                    print("   ✅ No year constraint, accepting match!")
+                    return movie
+                } else {
+                    print("   ❌ Movie has no release date")
+                }
+            }
+        }
+        
+        // Normalized partial matching
+        if strategy.type == .normalized || strategy.type == .normalizedWithYear {
+            print("   🔍 Trying normalized partial matching...")
+            for movie in results {
+                let movieTitle = normalizeTitle(movie.title).lowercased()
+                let movieYear = movie.releaseDate.flatMap({ Int(String($0.prefix(4))) })
+                
+                if movieTitle.contains(normalizedEntryTitle) || normalizedEntryTitle.contains(movieTitle) {
+                    print("   ✅ Partial match found: '\(movie.title)'")
+                    if let entryYear = entry.year, let movieYear = movieYear {
+                        let yearDiff = abs(movieYear - entryYear)
+                        if yearDiff <= 2 {
+                            print("   ✅ Year within extended tolerance (\(yearDiff))")
+                            return movie
+                        } else {
+                            print("   ❌ Year difference still too large (\(yearDiff))")
+                        }
+                    } else {
+                        print("   ✅ No year constraint for partial match")
+                        return movie
+                    }
+                }
+            }
+        }
+        
+        // Popularity fallback for keyword/exact searches
+        if strategy.type == .keywords || strategy.type == .keywordsWithYear || strategy.type == .exact {
+            let bestMovie = results.max(by: { $0.popularity ?? 0 < $1.popularity ?? 0 })
+            if let movie = bestMovie {
+                print("   📈 Using most popular result: '\(movie.title)' (popularity: \(movie.popularity ?? 0))")
+                return movie
+            }
+        }
+        
+        print("   ❌ No suitable match found using current strategy")
+        return nil
+    }
+
+    private func importWatchlist() async {
+        print("🚀 Starting watchlist import...")
+        isImporting = true
+        errorMessage = nil
+        importProgress = 0
+        
+        // Ensure user is authenticated
+        guard let currentUser = SupabaseMovieService.shared.currentUser else {
+            print("❌ Watchlist import failed: No authenticated user")
+            await MainActor.run { errorMessage = "You must be logged in to import a watchlist."; isImporting = false }
+            return
+        }
+        
+        print("✅ User authenticated: \(currentUser.id)")
+        print("📝 Starting search and immediate database writing for \(importedEntries.count) entries")
+        
+        // Search for movies and write them immediately to database
+        await searchMoviesForEntries(importedEntries)
+        
+        print("🔄 Refreshing local watchlist cache...")
+        // Refresh local cache to show the newly imported movies
+        await dataManager.refreshWatchlist()
+        
+        print("✅ Watchlist import completed successfully!")
+        await MainActor.run {
+            currentlyProcessing = "Complete!"
+            isImporting = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { dismiss() }
+        }
+    }
+}
+
+// MARK: - Tabbed Importer
+
+struct CSVImportTabbedView: View {
+    var body: some View {
+        TabView {
+            CSVImportView()
+                .tabItem { Label("Lists", systemImage: "list.bullet") }
+            WatchlistImportView()
+                .tabItem { Label("Watchlists", systemImage: "text.badge.plus") }
+        }
+         
     }
 }

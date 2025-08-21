@@ -45,6 +45,7 @@ struct ContentView: View {
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
+        .background(Color(.systemBackground))
     }
 
     private func addItem() {

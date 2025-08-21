@@ -134,6 +134,23 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
     }
 }
 
+// Synthetic Watchlist presentation in UI
+extension MovieList {
+    static func watchlistPlaceholder(userId: UUID) -> MovieList {
+        return MovieList(
+            id: SupabaseWatchlistService.watchlistListId,
+            userId: userId,
+            name: "Watchlist",
+            description: "Movies you plan to watch",
+            createdAt: Date(),
+            updatedAt: Date(),
+            itemCount: 0,
+            pinned: false,
+            ranked: false
+        )
+    }
+}
+
 struct ListItem: Codable, Identifiable, @unchecked Sendable {
     let id: Int64
     let listId: UUID
@@ -142,10 +159,11 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
     let moviePosterUrl: String?
     let movieBackdropPath: String?
     let movieYear: Int?
+    let movieReleaseDate: String?
     let addedAt: Date
     let sortOrder: Int
     
-    init(id: Int64, listId: UUID, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieBackdropPath: String? = nil, movieYear: Int? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
+    init(id: Int64, listId: UUID, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieBackdropPath: String? = nil, movieYear: Int? = nil, movieReleaseDate: String? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
         self.id = id
         self.listId = listId
         self.tmdbId = tmdbId
@@ -153,6 +171,7 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
         self.moviePosterUrl = moviePosterUrl
         self.movieBackdropPath = movieBackdropPath
         self.movieYear = movieYear
+        self.movieReleaseDate = movieReleaseDate
         self.addedAt = addedAt
         self.sortOrder = sortOrder
     }
@@ -165,6 +184,7 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
         case moviePosterUrl = "movie_poster_url"
         case movieBackdropPath = "movie_backdrop_path"
         case movieYear = "movie_year"
+        case movieReleaseDate = "movie_release_date"
         case addedAt = "added_at"
         case sortOrder = "sort_order"
     }
@@ -186,6 +206,7 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
         moviePosterUrl = try container.decodeIfPresent(String.self, forKey: .moviePosterUrl)
         movieBackdropPath = try container.decodeIfPresent(String.self, forKey: .movieBackdropPath)
         movieYear = try container.decodeIfPresent(Int.self, forKey: .movieYear)
+        movieReleaseDate = try container.decodeIfPresent(String.self, forKey: .movieReleaseDate)
         
         if let addedAtString = try? container.decode(String.self, forKey: .addedAt) {
             addedAt = MovieList.parseDate(addedAtString) ?? Date()
@@ -206,6 +227,7 @@ struct ListItem: Codable, Identifiable, @unchecked Sendable {
         try container.encodeIfPresent(moviePosterUrl, forKey: .moviePosterUrl)
         try container.encodeIfPresent(movieBackdropPath, forKey: .movieBackdropPath)
         try container.encodeIfPresent(movieYear, forKey: .movieYear)
+        try container.encodeIfPresent(movieReleaseDate, forKey: .movieReleaseDate)
         try container.encode(ISO8601DateFormatter().string(from: addedAt), forKey: .addedAt)
         try container.encode(sortOrder, forKey: .sortOrder)
     }
@@ -312,10 +334,11 @@ class PersistentListItem {
     var moviePosterUrl: String?
     var movieBackdropPath: String?
     var movieYear: Int?
+    var movieReleaseDate: String?
     var addedAt: Date
     var sortOrder: Int
     
-    init(id: Int64, listId: String, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieBackdropPath: String? = nil, movieYear: Int? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
+    init(id: Int64, listId: String, tmdbId: Int, movieTitle: String, moviePosterUrl: String? = nil, movieBackdropPath: String? = nil, movieYear: Int? = nil, movieReleaseDate: String? = nil, addedAt: Date = Date(), sortOrder: Int = 0) {
         self.id = id
         self.listId = listId
         self.tmdbId = tmdbId
@@ -323,6 +346,7 @@ class PersistentListItem {
         self.moviePosterUrl = moviePosterUrl
         self.movieBackdropPath = movieBackdropPath
         self.movieYear = movieYear
+        self.movieReleaseDate = movieReleaseDate
         self.addedAt = addedAt
         self.sortOrder = sortOrder
     }
@@ -336,6 +360,7 @@ class PersistentListItem {
             moviePosterUrl: listItem.moviePosterUrl,
             movieBackdropPath: listItem.movieBackdropPath,
             movieYear: listItem.movieYear,
+            movieReleaseDate: listItem.movieReleaseDate,
             addedAt: listItem.addedAt,
             sortOrder: listItem.sortOrder
         )
@@ -350,6 +375,7 @@ class PersistentListItem {
             moviePosterUrl: moviePosterUrl,
             movieBackdropPath: movieBackdropPath,
             movieYear: movieYear,
+            movieReleaseDate: movieReleaseDate,
             addedAt: addedAt,
             sortOrder: sortOrder
         )
@@ -363,6 +389,7 @@ class PersistentListItem {
         self.moviePosterUrl = listItem.moviePosterUrl
         self.movieBackdropPath = listItem.movieBackdropPath
         self.movieYear = listItem.movieYear
+        self.movieReleaseDate = listItem.movieReleaseDate
         self.addedAt = listItem.addedAt
         self.sortOrder = listItem.sortOrder
     }

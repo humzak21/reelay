@@ -10,24 +10,55 @@ import SwiftUI
 struct ListDetailsView: View {
     let list: MovieList
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var dataManager = DataManager.shared
     @State private var isLoading = false
     @State private var showingAddMovies = false
     @State private var showingEditList = false
+    @State private var showingEditWatchlist = false
     @State private var showingDeleteAlert = false
     @State private var errorMessage: String?
-    @State private var firstMovie: Movie?
+    @State private var showWatchedFaded = false
+    @State private var watchedCount = 0
+    @State private var isLoadingProgress = false
+    @State private var watchedTmdbIds: Set<Int> = []
+    @State private var showSpecialLayout = true
+    @State private var currentSortOption: ListSortOption = .sortOrder
+    @State private var showingSortMenu = false
     
+    private var currentList: MovieList {
+        dataManager.movieLists.first(where: { $0.id == list.id }) ?? list
+    }
+
     private var listItems: [ListItem] {
-        dataManager.getListItems(list)
+        let items = dataManager.getListItems(currentList)
+        return items.sorted(by: currentSortOption, watchedTmdbIds: watchedTmdbIds)
     }
     
     private var isTheaterList: Bool {
-        list.name.lowercased().contains("theater") || list.name.lowercased().contains("theatre")
+        currentList.name.lowercased().contains("theater") || currentList.name.lowercased().contains("theatre")
+    }
+    
+    private var isLookingForwardList: Bool {
+        currentList.name.lowercased().contains("looking forward")
     }
     
     private var firstMovieBackdropURL: URL? {
-        return firstMovie?.backdropURL
+        // Always prefer the list item's stored backdrop path for the hero image
+        return listItems.first?.backdropURL
+    }
+    
+    private var watchProgress: Double {
+        guard !listItems.isEmpty else { return 0.0 }
+        return Double(watchedCount) / Double(listItems.count)
+    }
+    
+    private var watchProgressPercentage: Int {
+        return Int(watchProgress * 100)
+    }
+    
+    private var appBackground: Color {
+        colorScheme == .dark ? .black : Color(.systemBackground)
     }
     
     var body: some View {
@@ -40,13 +71,20 @@ struct ListDetailsView: View {
                     // List Info Section (similar to watch date section)
                     listInfoSection
                     
+                    // Progress Section
+                    progressSection
+                    
                     // Content Section
                     VStack(spacing: 16) {
                         if listItems.isEmpty {
                             emptyStateView
                         } else {
-                            if isTheaterList {
-                                theaterTicketsView
+                            if (isLookingForwardList || isTheaterList) && showSpecialLayout {
+                                if isLookingForwardList {
+                                    lookingForwardCalendarView
+                                } else {
+                                    theaterTicketsView
+                                }
                             } else {
                                 moviesGridView
                             }
@@ -54,14 +92,14 @@ struct ListDetailsView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 16)
-                    .background(Color.black)
+                    .background(appBackground)
                     
                     Spacer(minLength: 100)
                 }
             }
-            .background(Color.black.ignoresSafeArea())
+            .background(appBackground.ignoresSafeArea())
             .ignoresSafeArea(edges: .top)
-            .preferredColorScheme(.dark)
+            
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -72,35 +110,72 @@ struct ListDetailsView: View {
                     .foregroundColor(.white)
                     .fontWeight(.medium)
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if isLookingForwardList || isTheaterList {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                showSpecialLayout.toggle()
+                            }
+                        }) {
+                            Image(systemName: showSpecialLayout ? "square.grid.3x3" : (isLookingForwardList ? "calendar" : "ticket"))
+                                .foregroundColor(.white)
+                                .fontWeight(.medium)
+                        }
+                        .accessibilityLabel(showSpecialLayout ? "Show Classic View" : (isLookingForwardList ? "Show Calendar View" : "Show Ticket View"))
+                    }
+
+                    Button(action: {
+                        showWatchedFaded.toggle()
+                    }) {
+                        Image(systemName: showWatchedFaded ? "eye.slash.fill" : "eye.fill")
+                            .foregroundColor(.white)
+                            .fontWeight(.medium)
+                    }
+
                     Menu {
-                        Button("Add Movies", systemImage: "plus") {
-                            showingAddMovies = true
+                        ForEach(ListSortOption.allCases) { option in
+                            Button(action: {
+                                currentSortOption = option
+                            }) {
+                                Label(option.displayName, systemImage: option.systemImage)
+                            }
                         }
-                        
-                        Button("Edit List", systemImage: "pencil") {
-                            showingEditList = true
-                        }
-                        
-                        if list.pinned {
-                            Button("Unpin List", systemImage: "pin.slash") {
-                                Task {
-                                    await unpinList()
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .foregroundColor(.white)
+                            .fontWeight(.medium)
+                    }
+
+                    Menu {
+                        if currentList.id != SupabaseWatchlistService.watchlistListId {
+                            Button("Add Movies", systemImage: "plus") {
+                                showingAddMovies = true
+                            }
+                            Button("Edit List", systemImage: "pencil") {
+                                showingEditList = true
+                            }
+                            if list.pinned {
+                                Button("Unpin List", systemImage: "pin.slash") {
+                                    Task { await unpinList() }
                                 }
+                            } else {
+                                Button("Pin List", systemImage: "pin.fill") {
+                                    Task { await pinList() }
+                                }
+                            }
+                            Divider()
+                            Button("Delete List", role: .destructive) {
+                                showingDeleteAlert = true
                             }
                         } else {
-                            Button("Pin List", systemImage: "pin.fill") {
-                                Task {
-                                    await pinList()
-                                }
+                            // Watchlist actions
+                            Button("Edit Watchlist", systemImage: "pencil") {
+                                showingEditWatchlist = true
                             }
-                        }
-                        
-                        Divider()
-                        
-                        Button("Delete List", role: .destructive) {
-                            showingDeleteAlert = true
+                            Button("Refresh", systemImage: "arrow.clockwise") {
+                                Task { await dataManager.refreshWatchlist() }
+                            }
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -110,10 +185,13 @@ struct ListDetailsView: View {
                 }
             }
             .sheet(isPresented: $showingAddMovies) {
-                AddMoviesToListView(list: list)
+                AddMoviesToListView(list: currentList)
             }
             .sheet(isPresented: $showingEditList) {
-                EditListView(list: list)
+                EditListView(list: currentList)
+            }
+            .sheet(isPresented: $showingEditWatchlist) {
+                WatchlistEditView()
             }
             .alert("Delete List", isPresented: $showingDeleteAlert) {
                 Button("Cancel", role: .cancel) { }
@@ -123,31 +201,362 @@ struct ListDetailsView: View {
                     }
                 }
             } message: {
-                Text("Are you sure you want to delete '\(list.name)'? This action cannot be undone.")
+                Text("Are you sure you want to delete '\(currentList.name)'? This action cannot be undone.")
             }
             .task {
-                await loadFirstMovie()
+                // Force-reload items from Supabase to capture new movie_release_date values
+                _ = try? await dataManager.reloadItemsForList(list.id)
+                await loadWatchedCount()
             }
         }
+    }
+    
+    // MARK: - Looking Forward Calendar State
+    @State private var lfSelectedDate: Date = Date()
+    @State private var lfCurrentCalendarMonth: Date = Date()
+    
+    // MARK: - Looking Forward Calendar View
+    @ViewBuilder
+    private var lookingForwardCalendarView: some View {
+        VStack(spacing: 16) {
+            // Calendar header
+            lfCalendarHeader
+            
+            // Calendar grid
+            lfCalendarGrid
+                .gesture(
+                    DragGesture()
+                        .onEnded { value in
+                            let threshold: CGFloat = 50
+                            if value.translation.width > threshold {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    lfCurrentCalendarMonth = Calendar.current.date(byAdding: .month, value: -1, to: lfCurrentCalendarMonth) ?? lfCurrentCalendarMonth
+                                }
+                            } else if value.translation.width < -threshold {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    lfCurrentCalendarMonth = Calendar.current.date(byAdding: .month, value: 1, to: lfCurrentCalendarMonth) ?? lfCurrentCalendarMonth
+                                }
+                            }
+                        }
+                )
+            
+            // Selected date releases
+            lfSelectedDateReleases
+            
+            // Items without release dates
+            lfNoReleaseDatesSection
+        }
+        .padding(.horizontal, 20)
+    }
+    
+    @ViewBuilder
+    private var lfCalendarHeader: some View {
+        HStack(alignment: .center) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    lfCurrentCalendarMonth = Calendar.current.date(byAdding: .month, value: -1, to: lfCurrentCalendarMonth) ?? lfCurrentCalendarMonth
+                }
+            }) {
+                Image(systemName: "chevron.left")
+                    .foregroundColor(.white)
+                    .font(.title2)
+            }
+            
+            Spacer()
+            
+            VStack(spacing: 6) {
+                Text(lfMonthYearFormatter.string(from: lfCurrentCalendarMonth))
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .onTapGesture(count: 2) {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            lfCurrentCalendarMonth = Date()
+                            lfSelectedDate = Date()
+                        }
+                    }
+                lfMonthCountPill
+            }
+            
+            Spacer()
+            
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    lfCurrentCalendarMonth = Calendar.current.date(byAdding: .month, value: 1, to: lfCurrentCalendarMonth) ?? lfCurrentCalendarMonth
+                }
+            }) {
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.white)
+                    .font(.title2)
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+    
+    @ViewBuilder
+    private var lfCalendarGrid: some View {
+        VStack(spacing: 8) {
+            // Weekday headers
+            HStack {
+                ForEach(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], id: \.self) { day in
+                    Text(day)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            
+            // Calendar days
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
+                ForEach(lfCalendarDays, id: \.self) { date in
+                    lfCalendarDayView(for: date)
+                }
+            }
+        }
+        .padding(.vertical, 12)
+        .background(Color(.secondarySystemFill))
+        .cornerRadius(16)
+    }
+    
+    private var lfCalendarDays: [Date] {
+        let calendar = Calendar.current
+        let startOfMonth = calendar.dateInterval(of: .month, for: lfCurrentCalendarMonth)?.start ?? lfCurrentCalendarMonth
+        let startOfCalendar = calendar.dateInterval(of: .weekOfYear, for: startOfMonth)?.start ?? startOfMonth
+        
+        var days: [Date] = []
+        var currentDate = startOfCalendar
+        for _ in 0..<42 {
+            days.append(currentDate)
+            currentDate = calendar.date(byAdding: .day, value: 1, to: currentDate) ?? currentDate
+        }
+        return days
+    }
+    
+    @ViewBuilder
+    private func lfCalendarDayView(for date: Date) -> some View {
+        let calendar = Calendar.current
+        let isCurrentMonth = calendar.isDate(date, equalTo: lfCurrentCalendarMonth, toGranularity: .month)
+        let isSelected = calendar.isDate(date, inSameDayAs: lfSelectedDate)
+        let isToday = calendar.isDateInToday(date)
+        let itemsForDay = listItemsForDate(date)
+        let count = itemsForDay.count
+        
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                lfSelectedDate = date
+            }
+        }) {
+            VStack(spacing: 2) {
+                Text("\(calendar.component(.day, from: date))")
+                    .font(.system(size: 14, weight: isSelected ? .bold : .medium))
+                    .foregroundColor(lfDayTextColor(isCurrentMonth: isCurrentMonth, isSelected: isSelected, isToday: isToday))
+                HStack(spacing: 2) {
+                    ForEach(0..<min(count, 3), id: \.self) { _ in
+                        Circle()
+                            .fill(Color.white.opacity(0.8))
+                            .frame(width: 3, height: 3)
+                    }
+                    if count > 3 {
+                        Text("+")
+                            .font(.system(size: 6, weight: .bold))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+                .frame(height: 6)
+            }
+            .frame(width: 36, height: 36)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(lfDayBackgroundColor(count: count, isSelected: isSelected, isToday: isToday))
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .opacity(isCurrentMonth ? 1.0 : 0.3)
+    }
+    
+    @ViewBuilder
+    private var lfSelectedDateReleases: some View {
+        let items = listItemsForDate(lfSelectedDate).sorted { a, b in
+            (a.movieTitle) < (b.movieTitle)
+        }
+        
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Releasing on \(lfSelectedDateFormatter.string(from: lfSelectedDate))")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                Spacer()
+            }
+            
+            if items.isEmpty {
+                Text("No releases on this day")
+                    .font(.body)
+                    .foregroundColor(.gray)
+                    .padding(.vertical, 12)
+            } else {
+                LazyVStack(spacing: 8) {
+                    ForEach(items) { item in
+                        lfReleaseRow(item: item)
+                    }
+                }
+            }
+        }
+        .padding(.top, 8)
+    }
+    
+    @ViewBuilder
+    private func lfReleaseRow(item: ListItem) -> some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle().fill(Color.gray.opacity(0.3))
+            }
+            .frame(width: 40, height: 60)
+            .cornerRadius(6)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.movieTitle)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                if let year = item.movieYear {
+                    Text(String(year))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemFill))
+        .cornerRadius(12)
+    }
+    
+    @ViewBuilder
+    private var lfNoReleaseDatesSection: some View {
+        let unknownItems = listItems.filter {
+            guard let s = $0.movieReleaseDate?.trimmingCharacters(in: .whitespacesAndNewlines) else { return true }
+            return s.isEmpty
+        }
+        if !unknownItems.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("No Release Date Yet")
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    Spacer()
+                    Text("\(unknownItems.count)")
+                        .foregroundColor(.gray)
+                }
+                
+                LazyVStack(spacing: 8) {
+                    ForEach(unknownItems) { item in
+                        lfReleaseRow(item: item)
+                    }
+                }
+            }
+            .padding(.top, 12)
+        }
+    }
+    
+    // MARK: - LF Helpers
+    private var lfMonthYearFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM yyyy"
+        return f
+    }
+    
+    private var lfSelectedDateFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, MMMM d"
+        return f
+    }
+    
+    private func listItemsCountInMonth(for monthDate: Date, in source: [ListItem]) -> Int {
+        let calendar = Calendar.current
+        var total = 0
+        for item in source {
+            guard let dateString = item.movieReleaseDate,
+                  let date = DateFormatter.movieDateFormatter.date(from: dateString) else { continue }
+            if calendar.isDate(date, equalTo: monthDate, toGranularity: .month) {
+                total += 1
+            }
+        }
+        return total
+    }
+    
+    @ViewBuilder
+    private var lfMonthCountPill: some View {
+        let count = listItemsCountInMonth(for: lfCurrentCalendarMonth, in: listItems)
+        HStack(spacing: 6) {
+            Image(systemName: "film.fill").font(.system(size: 12, weight: .semibold))
+            Text("\(count) releasing")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundColor(.black)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.white)
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
+    }
+    
+    private func listItemsForDate(_ date: Date) -> [ListItem] {
+        let calendar = Calendar.current
+        return listItems.filter { item in
+            guard let s = item.movieReleaseDate,
+                  let d = DateFormatter.movieDateFormatter.date(from: s) else { return false }
+            return calendar.isDate(d, inSameDayAs: date)
+        }
+    }
+    
+    private func lfDayTextColor(isCurrentMonth: Bool, isSelected: Bool, isToday: Bool) -> Color {
+        if isSelected { return .black }
+        if isToday { return .white }
+        if isCurrentMonth { return .white }
+        return .gray
+    }
+    
+    private func lfDayBackgroundColor(count: Int, isSelected: Bool, isToday: Bool) -> Color {
+        if isSelected { return .white }
+        if isToday { return .blue.opacity(0.7) }
+        if count > 0 {
+            switch count {
+            case 1: return .yellow.opacity(0.4)
+            case 2: return .orange.opacity(0.6)
+            case 3: return .orange.opacity(0.8)
+            case 4: return .red.opacity(0.7)
+            default: return .red.opacity(0.9)
+            }
+        }
+        return .clear
     }
     
     private var listInfoSection: some View {
         VStack(spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
-                Text(list.name.uppercased())
+                Text(currentList.name.uppercased())
                     .font(.title2)
                     .fontWeight(.bold)
                     .foregroundColor(.white)
                     .tracking(1)
                 
-                if list.pinned {
+                if currentList.pinned {
                     Image(systemName: "pin.fill")
                         .foregroundColor(.yellow)
                         .font(.body)
                 }
             }
             
-            if let description = list.description, !description.isEmpty {
+            if let description = currentList.description, !description.isEmpty {
                 Text(description)
                     .font(.subheadline)
                     .foregroundColor(.white.opacity(0.8))
@@ -155,7 +564,7 @@ struct ListDetailsView: View {
                     .lineLimit(3)
             }
             
-            Text("\(list.itemCount) FILMS")
+            Text("\(currentList.itemCount) FILMS")
                 .font(.caption)
                 .fontWeight(.medium)
                 .foregroundColor(.white.opacity(0.7))
@@ -214,6 +623,79 @@ struct ListDetailsView: View {
         )
     }
     
+    private var progressSection: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("PROGRESS")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white.opacity(0.7))
+                    .textCase(.uppercase)
+                    .tracking(1.2)
+                
+                Spacer()
+                
+                if isLoadingProgress {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(0.6)
+                } else {
+                    Text("\(watchedCount) / \(listItems.count) WATCHED")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white.opacity(0.7))
+                        .textCase(.uppercase)
+                        .tracking(1.2)
+                }
+            }
+            
+            // Progress Bar
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    // Background
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.white.opacity(0.2))
+                        .frame(height: 8)
+                    
+                    // Progress Fill
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(
+                            LinearGradient(
+                                colors: watchProgress >= 1.0 ?
+                                    [Color.green, Color.green.opacity(0.8)] :
+                                    [Color.blue, Color.blue.opacity(0.8)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: geometry.size.width * watchProgress, height: 8)
+                        .animation(.easeInOut(duration: 0.5), value: watchProgress)
+                }
+            }
+            .frame(height: 8)
+            
+            // Percentage Text
+            HStack {
+                Spacer()
+                Text("\(watchProgressPercentage)% COMPLETE")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(watchProgress >= 1.0 ? .green : .blue)
+                    .tracking(1)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.8), Color.black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+    
     @ViewBuilder
     private var emptyStateView: some View {
         VStack(spacing: 16) {
@@ -245,7 +727,7 @@ struct ListDetailsView: View {
     private var moviesGridView: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
             ForEach(Array(listItems.enumerated()), id: \.element.id) { index, item in
-                MoviePosterView(item: item, list: list, rank: list.ranked ? index + 1 : nil)
+                 MoviePosterView(item: item, list: currentList, rank: currentList.ranked ? index + 1 : nil, showWatchedFaded: showWatchedFaded, hasWatchedEntries: watchedTmdbIds.contains(item.tmdbId))
             }
         }
     }
@@ -254,14 +736,14 @@ struct ListDetailsView: View {
     private var theaterTicketsView: some View {
         LazyVStack(spacing: 16) {
             ForEach(Array(listItems.enumerated()), id: \.element.id) { index, item in
-                TheaterTicketView(item: item, list: list, rank: list.ranked ? index + 1 : nil)
+                TheaterTicketView(item: item, list: currentList, rank: currentList.ranked ? index + 1 : nil, showSpecialLayout: showSpecialLayout)
             }
         }
     }
     
     private func pinList() async {
         do {
-            try await dataManager.pinList(list)
+            try await dataManager.pinList(currentList)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -269,7 +751,7 @@ struct ListDetailsView: View {
     
     private func unpinList() async {
         do {
-            try await dataManager.unpinList(list)
+            try await dataManager.unpinList(currentList)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -277,31 +759,38 @@ struct ListDetailsView: View {
     
     private func deleteList() async {
         do {
-            try await dataManager.deleteList(list)
+            try await dataManager.deleteList(currentList)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
     
-    private func loadFirstMovie() async {
-        guard let firstItem = listItems.first else { return }
+    
+    
+    private func loadWatchedCount() async {
+        await MainActor.run {
+            isLoadingProgress = true
+        }
         
         do {
-            let movies = try await dataManager.getMoviesByTmdbId(tmdbId: firstItem.tmdbId)
+            // Extract all TMDB IDs from list items
+            let tmdbIds = listItems.map { $0.tmdbId }
             
-            // Get the most recent movie entry for this TMDB ID
-            let latestMovie = movies.max { movie1, movie2 in
-                let date1 = movie1.watch_date ?? movie1.created_at ?? ""
-                let date2 = movie2.watch_date ?? movie2.created_at ?? ""
-                return date1 < date2
-            }
+            // Get watched status for all movies in a single batch query
+            let watchedIds = try await dataManager.checkWatchedStatusForTmdbIds(tmdbIds: tmdbIds)
             
             await MainActor.run {
-                firstMovie = latestMovie
+                watchedTmdbIds = watchedIds
+                watchedCount = watchedIds.count
+                isLoadingProgress = false
             }
         } catch {
-            print("Failed to load first movie: \(error)")
+            await MainActor.run {
+                watchedTmdbIds = []
+                watchedCount = 0
+                isLoadingProgress = false
+            }
         }
     }
 }
@@ -310,6 +799,8 @@ struct MoviePosterView: View {
     let item: ListItem
     let list: MovieList
     let rank: Int?
+    let showWatchedFaded: Bool
+    let hasWatchedEntries: Bool
     @StateObject private var dataManager = DataManager.shared
     @State private var showingRemoveAlert = false
     @State private var selectedMovie: Movie?
@@ -354,6 +845,19 @@ struct MoviePosterView: View {
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(0.8)
                             )
+                    } else if showWatchedFaded && hasWatchedEntries {
+                        Color.black.opacity(0.5)
+                            .cornerRadius(12)
+                            .overlay(
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 32, weight: .bold))
+                                    .foregroundColor(.blue)
+                                    .background(
+                                        Circle()
+                                            .fill(Color.white)
+                                            .frame(width: 28, height: 28)
+                                    )
+                            )
                     }
                 }
             )
@@ -367,24 +871,20 @@ struct MoviePosterView: View {
                                     .font(.title2)
                                     .fontWeight(.bold)
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
                                     .background(
-                                        LinearGradient(
-                                            colors: [Color(red: 0.0, green: 0.2, blue: 0.4).opacity(0.95), Color(red: 0.0, green: 0.1, blue: 0.3).opacity(0.95)],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
+                                        .ultraThinMaterial.opacity(0.6),
+                                        in: RoundedRectangle(cornerRadius: 6)
                                     )
-                                    .cornerRadius(8)
-                                    .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                                    .shadow(color: .black.opacity(0.4), radius: 3, x: 0, y: 1)
                                 
                                 Spacer()
                             }
                             
                             Spacer()
                         }
-                        .padding(8)
+                        .padding(6)
                     }
                 }, alignment: .topLeading
             )
@@ -416,7 +916,7 @@ struct MoviePosterView: View {
         do {
             try await dataManager.removeMovieFromList(tmdbId: item.tmdbId, listId: list.id)
         } catch {
-            print("Error removing movie: \(error)")
+            // Silently handle error
         }
     }
     
@@ -483,7 +983,6 @@ struct MoviePosterView: View {
                 }
             }
         } catch {
-            print("Error loading latest movie entry: \(error)")
             await MainActor.run {
                 isLoadingMovie = false
             }
@@ -513,7 +1012,7 @@ struct AddMoviesToListView: View {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.gray)
                     
-                    TextField("Search movies...", text: $searchText)
+                    TextField("Search movies or enter TMDB ID...", text: $searchText)
                         .textFieldStyle(PlainTextFieldStyle())
                         .foregroundColor(.white)
                         .onSubmit {
@@ -617,8 +1116,7 @@ struct AddMoviesToListView: View {
                 
                 Spacer()
             }
-            .background(Color.black)
-            .preferredColorScheme(.dark)
+            .background(Color(.systemBackground))
             .navigationTitle("Add Movies")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -660,10 +1158,46 @@ struct AddMoviesToListView: View {
         errorMessage = nil
         
         do {
-            let response = try await tmdbService.searchMovies(query: searchText)
-            // Filter out movies already in the list
-            let existingTmdbIds = Set(dataManager.getListItems(list).map { $0.tmdbId })
-            searchResults = response.results.filter { !existingTmdbIds.contains($0.id) }
+            let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Check if the input is a TMDB ID (all digits)
+            if let tmdbId = Int(trimmedQuery), tmdbId > 0 {
+                // Search by TMDB ID
+                let movieDetails = try await tmdbService.getMovieDetails(movieId: tmdbId)
+                
+                // Convert TMDBMovieDetails to TMDBMovie for consistency
+                let tmdbMovie = TMDBMovie(
+                    id: movieDetails.id,
+                    title: movieDetails.title,
+                    originalTitle: movieDetails.originalTitle,
+                    overview: movieDetails.overview,
+                    releaseDate: movieDetails.releaseDate,
+                    posterPath: movieDetails.posterPath,
+                    backdropPath: movieDetails.backdropPath,
+                    voteAverage: movieDetails.voteAverage,
+                    voteCount: movieDetails.voteCount,
+                    popularity: movieDetails.popularity,
+                    originalLanguage: movieDetails.originalLanguage,
+                    genreIds: [],
+                    adult: movieDetails.adult,
+                    video: movieDetails.video
+                )
+                
+                // Filter out if already in the list
+                let existingTmdbIds = Set(dataManager.getListItems(list).map { $0.tmdbId })
+                if !existingTmdbIds.contains(tmdbMovie.id) {
+                    searchResults = [tmdbMovie]
+                } else {
+                    searchResults = []
+                    errorMessage = "Movie is already in this list"
+                }
+            } else {
+                // Regular text search
+                let response = try await tmdbService.searchMovies(query: trimmedQuery)
+                // Filter out movies already in the list and limit to 30 results
+                let existingTmdbIds = Set(dataManager.getListItems(list).map { $0.tmdbId })
+                searchResults = Array(response.results.filter { !existingTmdbIds.contains($0.id) }.prefix(30))
+            }
         } catch {
             errorMessage = error.localizedDescription
             searchResults = []
@@ -775,6 +1309,7 @@ struct EditListView: View {
     @State private var listDescription: String
     @State private var isRanked: Bool
     @State private var isUpdating = false
+    @State private var hasOrderChanges = false
     @State private var errorMessage: String?
     @State private var listItems: [ListItem] = []
     @State private var isReordering = false
@@ -788,9 +1323,9 @@ struct EditListView: View {
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    // List Details Section
+            List {
+                // List Details Section
+                Section {
                     VStack(alignment: .leading, spacing: 16) {
                         Text("List Details")
                             .font(.title2)
@@ -804,7 +1339,7 @@ struct EditListView: View {
                             
                             TextField("Enter list name", text: $listName)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .onChange(of: listName) { _, newValue in
+                                .onChange(of: listName) { _, _ in
                                     checkAutoRanking()
                                 }
                         }
@@ -817,7 +1352,7 @@ struct EditListView: View {
                             TextField("Enter description", text: $listDescription, axis: .vertical)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .lineLimit(3, reservesSpace: true)
-                                .onChange(of: listDescription) { _, newValue in
+                                .onChange(of: listDescription) { _, _ in
                                     checkAutoRanking()
                                 }
                         }
@@ -839,55 +1374,48 @@ struct EditListView: View {
                                 .foregroundColor(.gray)
                         }
                     }
-                    
-                    // List Items Section
-                    if !listItems.isEmpty {
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack {
-                                Text("Movies")
-                                    .font(.title2)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.white)
-                                
-                                Spacer()
-                                
-                                Button(isReordering ? "Done" : "Reorder") {
-                                    withAnimation {
-                                        isReordering.toggle()
-                                    }
+                }
+                
+                // List Items Section
+                if !listItems.isEmpty {
+                    Section(header:
+                        HStack {
+                            Text("Movies")
+                                .font(.title2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                            Spacer()
+                            Button(isReordering ? "Done" : "Reorder") {
+                                withAnimation {
+                                    isReordering.toggle()
                                 }
-                                .foregroundColor(.blue)
                             }
-                            
-                            List {
-                                ForEach(listItems) { item in
-                                    EditableListItemView(
-                                        item: item,
-                                        isReordering: isReordering,
-                                        onRemove: {
-                                            await removeItem(item)
-                                        }
-                                    )
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparator(.hidden)
-                                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                                }
-                                .onMove(perform: isReordering ? moveItems : nil)
-                            }
-                            .listStyle(PlainListStyle())
-                            .scrollDisabled(true)
-                            .frame(height: CGFloat(listItems.count) * 100) // Approximate height per row
+                            .foregroundColor(.blue)
                         }
-                    }
-                    
-                    if let errorMessage = errorMessage {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.caption)
+                    ) {
+                        ForEach(listItems) { item in
+                            EditableListItemView(
+                                item: item,
+                                isReordering: isReordering,
+                                onRemove: {
+                                    await removeItem(item)
+                                }
+                            )
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                        }
+                        .onMove(perform: isReordering ? moveItems : nil)
                     }
                 }
-                .padding()
+                
+                if let errorMessage = errorMessage {
+                    Text(errorMessage)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                }
             }
+            .scrollContentBackground(.hidden)
             .background(Color.black)
             .preferredColorScheme(.dark)
             .environment(\.editMode, isReordering ? .constant(.active) : .constant(.inactive))
@@ -903,10 +1431,10 @@ struct EditListView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save", systemImage: "checkmark") {
                         Task {
-                            await updateList()
+                            await saveAllChanges()
                         }
                     }
-                    .disabled(listName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isUpdating)
+                    .disabled(isUpdating)
                 }
             }
             .onAppear {
@@ -921,17 +1449,7 @@ struct EditListView: View {
     
     private func moveItems(from source: IndexSet, to destination: Int) {
         listItems.move(fromOffsets: source, toOffset: destination)
-        
-        // Save the reordered items
-        Task {
-            do {
-                try await dataManager.reorderListItems(list.id, items: listItems)
-            } catch {
-                errorMessage = error.localizedDescription
-                // Reload items on error to revert changes
-                loadListItems()
-            }
-        }
+        hasOrderChanges = true
     }
     
     private func removeItem(_ item: ListItem) async {
@@ -943,22 +1461,42 @@ struct EditListView: View {
         }
     }
     
-    private func updateList() async {
-        guard !listName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        
+    @MainActor
+    private func saveAllChanges() async {
         isUpdating = true
         errorMessage = nil
         
         do {
+            // Compute metadata change flags
             let name = listName.trimmingCharacters(in: .whitespacesAndNewlines)
             let description = listDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            let nameChanged = name != list.name
+            let descriptionChanged = description != (list.description ?? "")
+            let rankedChanged = isRanked != list.ranked
+
+            // If nothing changed, just close
+            if !hasOrderChanges && !nameChanged && !descriptionChanged && !rankedChanged {
+                isUpdating = false
+                dismiss()
+                return
+            }
+
+            // Persist ordering if changed
+            if hasOrderChanges {
+                try await dataManager.reorderListItems(list.id, items: listItems)
+                hasOrderChanges = false
+            }
             
-            _ = try await dataManager.updateList(
-                list,
-                name: name != list.name ? name : nil,
-                description: description != (list.description ?? "") ? (description.isEmpty ? nil : description) : nil,
-                ranked: isRanked != list.ranked ? isRanked : nil
-            )
+            // Persist list metadata changes (name/description/ranked)
+            if nameChanged || descriptionChanged || rankedChanged {
+                _ = try await dataManager.updateList(
+                    list,
+                    name: nameChanged ? name : nil,
+                    description: descriptionChanged ? (description.isEmpty ? nil : description) : nil,
+                    ranked: rankedChanged ? isRanked : nil
+                )
+            }
+            
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -980,16 +1518,13 @@ struct EditableListItemView: View {
     let isReordering: Bool
     let onRemove: () async -> Void
     @State private var showingRemoveAlert = false
+    @StateObject private var dataManager = DataManager.shared
+    @State private var loadedRating: Double? = nil
+    @State private var loadedDetailedRating: Double? = nil
+    @State private var hasLoadedRatings: Bool = false
     
     var body: some View {
         HStack(spacing: 12) {
-            // Drag handle (only show when reordering)
-            if isReordering {
-                Image(systemName: "line.3.horizontal")
-                    .font(.title2)
-                    .foregroundColor(.gray)
-                    .frame(width: 20)
-            }
             
             // Movie poster
             AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
@@ -1021,6 +1556,27 @@ struct EditableListItemView: View {
                         .font(.subheadline)
                         .foregroundColor(.gray)
                 }
+
+                // Ratings row
+                if loadedRating != nil || loadedDetailedRating != nil {
+                    HStack(spacing: 8) {
+                        if let rating = loadedRating {
+                            HStack(spacing: 2) {
+                                ForEach(0..<5, id: \.self) { index in
+                                    Image(systemName: starType(for: index, rating: rating))
+                                        .foregroundColor(starColor(for: rating))
+                                        .font(.system(size: 12, weight: .regular))
+                                }
+                            }
+                        }
+                        
+                        if let detailed = loadedDetailedRating {
+                            Text(String(format: "%.0f", detailed))
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundColor(.purple)
+                        }
+                    }
+                }
             }
             
             Spacer()
@@ -1050,15 +1606,172 @@ struct EditableListItemView: View {
         } message: {
             Text("Remove '\(item.movieTitle)' from this list?")
         }
+        .onAppear {
+            if !hasLoadedRatings {
+                Task {
+                    await loadLatestMovieRatings()
+                }
+            }
+        }
+    }
+    
+    private func starType(for index: Int, rating: Double?) -> String {
+        guard let rating = rating else { return "star" }
+        if rating >= Double(index + 1) {
+            return "star.fill"
+        } else if rating >= Double(index) + 0.5 {
+            return "star.leadinghalf.filled"
+        } else {
+            return "star"
+        }
+    }
+    
+    private func starColor(for rating: Double?) -> Color {
+        guard let rating = rating else { return .blue }
+        return rating == 5.0 ? .yellow : .blue
+    }
+    
+    @MainActor
+    private func loadLatestMovieRatings() async {
+        do {
+            let movies = try await dataManager.getMoviesByTmdbId(tmdbId: item.tmdbId)
+            // Find the latest entry (most recent watch_date or created_at)
+            let latest = movies.max { movie1, movie2 in
+                let date1 = movie1.watch_date ?? movie1.created_at ?? ""
+                let date2 = movie2.watch_date ?? movie2.created_at ?? ""
+                return date1 < date2
+            }
+            loadedRating = latest?.rating
+            loadedDetailedRating = latest?.detailed_rating
+            hasLoadedRatings = true
+        } catch {
+            hasLoadedRatings = true
+        }
     }
 }
 
 #Preview {
-    ListDetailsView(list: MovieList(
-        id: UUID(),
-        userId: UUID(),
-        name: "Sample List",
-        description: "A sample movie list for preview",
-        itemCount: 3
-    ))
+    // Preview wrapper that connects to your actual database
+    PreviewWrapper()
+}
+
+struct PreviewWrapper: View {
+    @StateObject private var dataManager = DataManager.shared
+    @State private var targetList: MovieList?
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    
+    var body: some View {
+        Group {
+            if isLoading {
+                VStack {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    Text("Loading database connection...")
+                        .foregroundColor(.white)
+                        .padding(.top)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+                .preferredColorScheme(.dark)
+            } else if let errorMessage = errorMessage {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 48))
+                        .foregroundColor(.orange)
+                    
+                    Text("Preview Error")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    
+                    Text(errorMessage)
+                        .font(.body)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
+                    Button("Retry") {
+                        Task {
+                            await loadTheaterList()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+                .preferredColorScheme(.dark)
+            } else if let targetList = targetList {
+                ListDetailsView(list: targetList)
+            } else {
+                VStack(spacing: 16) {
+                    Image(systemName: "film.stack")
+                        .font(.system(size: 48))
+                        .foregroundColor(.gray)
+                    
+                    Text("Theater List Not Found")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    
+                    Text("The 'Films Watched in Theaters' list was not found in your account.")
+                        .font(.body)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
+                    Button("Retry") {
+                        Task {
+                            await loadTheaterList()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+                .preferredColorScheme(.dark)
+            }
+        }
+        .task {
+            await authenticateAndLoadList()
+        }
+    }
+    
+    private func authenticateAndLoadList() async {
+        // Note: Authentication is handled automatically by the Config.swift file
+        // which contains your Supabase URL and API key. The services are already
+        // configured to use your database credentials.
+        
+        
+        
+        // Load the theater list directly since auth is automatic
+        await loadTheaterList()
+    }
+    
+    @MainActor
+    private func loadTheaterList() async {
+        isLoading = true
+        errorMessage = nil
+        
+        // Try to find the "Films Watched in Theaters" list
+        // First, refresh lists from Supabase to ensure we have the latest data
+        await dataManager.refreshLists()
+        
+        // Look for the theater list by name (case-insensitive)
+        let theaterList = dataManager.movieLists.first { list in
+            list.name.lowercased().contains("theaters") || 
+            list.name.lowercased().contains("theatre") ||
+            list.name.lowercased() == "films watched in theaters"
+        }
+        
+        if let theaterList = theaterList {
+            targetList = theaterList
+        } else {
+            // If not found, create a fallback for preview
+            targetList = nil
+            errorMessage = "No theater list found. Make sure you have a list with 'theater' or 'theatre' in the name."
+        }
+        
+        isLoading = false
+    }
 }
