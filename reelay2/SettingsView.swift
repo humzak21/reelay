@@ -84,6 +84,8 @@ struct SettingsView: View {
                 Section("Profile Backdrop") {
                     Button(action: {
                         showingBackdropPicker = true
+                        errorMessage = nil
+                        successMessage = nil
                         Task {
                             await loadAvailableMovies()
                         }
@@ -118,6 +120,8 @@ struct SettingsView: View {
                     if selectedBackdropMovie != nil {
                         Button("Remove Backdrop") {
                             selectedBackdropMovie = nil
+                            errorMessage = nil
+                            successMessage = nil
                             Task {
                                 await saveSettings()
                             }
@@ -175,8 +179,14 @@ struct SettingsView: View {
         do {
             let profile = try await profileService.getCurrentUserProfile()
             
-            if profile?.selected_backdrop_movie_id != nil {
-                selectedBackdropMovie = try await profileService.getSelectedBackdropMovie()
+            await MainActor.run {
+                if profile?.selected_backdrop_movie_id != nil {
+                    Task {
+                        selectedBackdropMovie = try await profileService.getSelectedBackdropMovie()
+                    }
+                } else {
+                    selectedBackdropMovie = nil
+                }
             }
         } catch {
             await MainActor.run {
@@ -206,8 +216,12 @@ struct SettingsView: View {
             
             _ = try await profileService.updateUserProfile(updateRequest)
             
+            // Refresh the profile data to ensure consistency
+            _ = try await profileService.getCurrentUserProfile()
+            
             await MainActor.run {
                 successMessage = "Settings saved successfully!"
+                errorMessage = nil
             }
             
             // Dismiss after a short delay
@@ -218,6 +232,7 @@ struct SettingsView: View {
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to save settings: \(error.localizedDescription)"
+                successMessage = nil
             }
         }
     }

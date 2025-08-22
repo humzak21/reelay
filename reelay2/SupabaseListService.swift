@@ -475,6 +475,96 @@ class SupabaseListService: ObservableObject {
         }
     }
     
+    func updateListItemPoster(tmdbId: Int, newPosterUrl: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            // Update in Supabase
+            try await supabaseClient
+                .from("list_items")
+                .update(["movie_poster_url": newPosterUrl])
+                .eq("tmdb_id", value: tmdbId)
+                .execute()
+            
+            // Update in-memory data
+            for (listId, items) in listItems {
+                for (index, item) in items.enumerated() {
+                    if item.tmdbId == tmdbId {
+                        let updatedItem = ListItem(
+                            id: item.id,
+                            listId: item.listId,
+                            tmdbId: item.tmdbId,
+                            movieTitle: item.movieTitle,
+                            moviePosterUrl: newPosterUrl,
+                            movieBackdropPath: item.movieBackdropPath,
+                            movieYear: item.movieYear,
+                            movieReleaseDate: item.movieReleaseDate,
+                            addedAt: item.addedAt,
+                            sortOrder: item.sortOrder
+                        )
+                        
+                        listItems[listId]?[index] = updatedItem
+                        
+                        // Save to local storage
+                        try saveListItemLocally(updatedItem)
+                        
+                        // Touch the list's updated_at timestamp
+                        await touchListUpdatedAt(listId)
+                    }
+                }
+            }
+        } catch {
+            self.error = error
+            throw error
+        }
+    }
+    
+    func updateListItemBackdrop(tmdbId: Int, newBackdropUrl: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            // Update in Supabase
+            try await supabaseClient
+                .from("list_items")
+                .update(["movie_backdrop_path": newBackdropUrl])
+                .eq("tmdb_id", value: tmdbId)
+                .execute()
+            
+            // Update in-memory data
+            for (listId, items) in listItems {
+                for (index, item) in items.enumerated() {
+                    if item.tmdbId == tmdbId {
+                        let updatedItem = ListItem(
+                            id: item.id,
+                            listId: item.listId,
+                            tmdbId: item.tmdbId,
+                            movieTitle: item.movieTitle,
+                            moviePosterUrl: item.moviePosterUrl,
+                            movieBackdropPath: newBackdropUrl,
+                            movieYear: item.movieYear,
+                            movieReleaseDate: item.movieReleaseDate,
+                            addedAt: item.addedAt,
+                            sortOrder: item.sortOrder
+                        )
+                        
+                        listItems[listId]?[index] = updatedItem
+                        
+                        // Save to local storage
+                        try saveListItemLocally(updatedItem)
+                        
+                        // Touch the list's updated_at timestamp
+                        await touchListUpdatedAt(listId)
+                    }
+                }
+            }
+        } catch {
+            self.error = error
+            throw error
+        }
+    }
+    
     func getItemsForList(_ listId: UUID) async throws -> [ListItem] {
         // Check cache first
         if let cachedItems = listItems[listId] {

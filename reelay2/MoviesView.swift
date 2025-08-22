@@ -16,6 +16,8 @@ struct MoviesView: View {
   @State private var showingAddMovie = false
   @State private var showingFilters = false
   @State private var sortBy: MovieSortField = .watchDate
+  @State private var sortAscending = false
+  @State private var showingSortOptions = false
   @State private var searchText = ""
   @State private var selectedMovie: Movie?
   @State private var movieToEdit: Movie?
@@ -31,6 +33,8 @@ struct MoviesView: View {
   @StateObject private var listService = SupabaseListService.shared
   @StateObject private var filterViewModel = FilterViewModel()
   @State private var movieToAddToLists: Movie?
+  @State private var movieToChangePoster: Movie?
+  @State private var movieToChangeBackdrop: Movie?
   
   // MARK: - Efficient Loading States
   @State private var hasLoadedInitially = false
@@ -44,7 +48,8 @@ struct MoviesView: View {
   }
 
   private var filteredMovies: [Movie] {
-    return filterViewModel.filterMovies(movies)
+    let filtered = filterViewModel.filterMovies(movies)
+    return sortMovies(filtered)
   }
 
   private var groupedMovies: [(String, [Movie])] {
@@ -77,6 +82,44 @@ struct MoviesView: View {
       return "Calendar"
     }
   }
+  
+  // MARK: - Local Sorting Logic
+  
+  private func sortMovies(_ movies: [Movie]) -> [Movie] {
+    return movies.sorted { movie1, movie2 in
+      switch sortBy {
+      case .title:
+        let title1 = movie1.title.lowercased()
+        let title2 = movie2.title.lowercased()
+        return sortAscending ? title1 < title2 : title1 > title2
+        
+      case .watchDate:
+        let date1 = movie1.watch_date ?? ""
+        let date2 = movie2.watch_date ?? ""
+        return sortAscending ? date1 < date2 : date1 > date2
+        
+      case .releaseDate:
+        let year1 = movie1.release_year ?? 0
+        let year2 = movie2.release_year ?? 0
+        return sortAscending ? year1 < year2 : year1 > year2
+        
+      case .rating:
+        let rating1 = movie1.rating ?? 0
+        let rating2 = movie2.rating ?? 0
+        return sortAscending ? rating1 < rating2 : rating1 > rating2
+        
+      case .detailedRating:
+        let detailed1 = movie1.detailed_rating ?? 0
+        let detailed2 = movie2.detailed_rating ?? 0
+        return sortAscending ? detailed1 < detailed2 : detailed1 > detailed2
+        
+      case .dateAdded:
+        let created1 = movie1.created_at ?? ""
+        let created2 = movie2.created_at ?? ""
+        return sortAscending ? created1 < created2 : created1 > created2
+      }
+    }
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -107,6 +150,13 @@ struct MoviesView: View {
                 }
               }
             }
+            
+            Button(action: {
+              showingSortOptions = true
+            }) {
+              Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+                .font(.system(size: 16, weight: .medium))
+            }
 
             Button(action: {
               withAnimation(.easeInOut(duration: 0.3)) {
@@ -136,10 +186,21 @@ struct MoviesView: View {
       }
       .task {
         if movieService.isLoggedIn && !hasLoadedInitially {
-          // Test Railway cache performance
+          // Test Railway cache performance and health
           Task {
+            print("🔍 [MOVIESVIEW] Running comprehensive Railway cache diagnostics...")
             await DataManagerRailway.shared.enableDetailedLogging()
-            await DataManagerRailway.shared.runCachePerformanceTest()
+            
+            let healthStatus = await DataManagerRailway.shared.testCacheHealth()
+            print("🏥 [MOVIESVIEW] Cache Health: \(healthStatus.isConnected ? "✅ Connected" : "❌ Disconnected")")
+            print("🏥 [MOVIESVIEW] Response Time: \(String(format: "%.3f", healthStatus.responseTime))s")
+            
+            if let performanceReport = await DataManagerRailway.shared.runCachePerformanceTest() {
+              print("⚡ [MOVIESVIEW] Cache Performance Report:")
+              print("📊 [MOVIESVIEW] Average Response: \(String(format: "%.3f", performanceReport.averageResponseTime))s")
+              print("🎯 [MOVIESVIEW] Cache Hit Rate: \(String(format: "%.1f", performanceReport.cacheHitRate * 100))%")
+              print("📦 [MOVIESVIEW] Data Transferred: \(performanceReport.totalDataTransferred) bytes")
+            }
           }
           
           await loadMoviesIfNeeded(force: true)
@@ -188,11 +249,20 @@ struct MoviesView: View {
           }
         }
       }
+      .onChange(of: sortBy) { _, _ in
+        // Trigger UI refresh when sort field changes
+      }
+      .onChange(of: sortAscending) { _, _ in
+        // Trigger UI refresh when sort direction changes
+      }
       .sheet(isPresented: $showingFilters) {
         FilterSortView(sortBy: $sortBy, filterViewModel: filterViewModel, movies: movies)
           .onAppear {
             filterViewModel.loadCurrentFiltersToStaging()
           }
+      }
+      .sheet(isPresented: $showingSortOptions) {
+        SortOptionsView(sortBy: $sortBy, sortAscending: $sortAscending)
       }
       .sheet(item: $selectedMovie) { movie in
         MovieDetailsView(movie: movie)
@@ -209,6 +279,36 @@ struct MoviesView: View {
       }
       .sheet(item: $movieToAddToLists) { movie in
         AddToListsView(movie: movie)
+      }
+      .sheet(item: $movieToChangePoster) { movie in
+        if let tmdbId = movie.tmdb_id {
+          PosterChangeView(
+            tmdbId: tmdbId,
+            currentPosterUrl: movie.poster_url,
+            movieTitle: movie.title
+          ) { newPosterUrl in
+            // Simply refresh the movies list from backend
+            // The PosterChangeView has already updated the backend data
+            Task {
+              await loadMoviesIfNeeded(force: true)
+            }
+          }
+        }
+      }
+      .sheet(item: $movieToChangeBackdrop) { movie in
+        if let tmdbId = movie.tmdb_id {
+          BackdropChangeView(
+            tmdbId: tmdbId,
+            currentBackdropUrl: movie.backdrop_path,
+            movieTitle: movie.title
+          ) { newBackdropUrl in
+            // Simply refresh the movies list from backend
+            // The BackdropChangeView has already updated the backend data
+            Task {
+              await loadMoviesIfNeeded(force: true)
+            }
+          }
+        }
       }
       .alert("Delete Entry", isPresented: $showingDeleteMovieAlert) {
         Button("Cancel", role: .cancel) { }
@@ -479,16 +579,33 @@ struct MoviesView: View {
       MovieRowView(movie: movie, rewatchIconColor: getRewatchIconColor(for: movie), shouldHighlightMustWatchTitle: shouldHighlightMustWatchTitle(movie), shouldHighlightReleaseYearTitle: shouldHighlightReleaseYearTitle(movie), shouldHighlightReleaseYearOnYear: shouldHighlightReleaseYearOnYear(movie))
         .padding(.horizontal, 20)
         .background(
+          RoundedRectangle(cornerRadius: 24)
+            .fill(Color(.secondarySystemFill))
+            .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+        )
+        .overlay(
           Group {
             // Prioritize red (total log) over yellow (unique film) if both apply
             if isTotalLog {
-              CentennialTotalBackground()
-            } else if isUniqueFilm {
-              CentennialUniqueBackground()
-            } else {
               RoundedRectangle(cornerRadius: 24)
-                .fill(Color(.secondarySystemFill))
-                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                .stroke(
+                  LinearGradient(
+                    colors: [.red, .pink, .purple],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                  ),
+                  lineWidth: 3
+                )
+            } else if isUniqueFilm {
+              RoundedRectangle(cornerRadius: 24)
+                .stroke(
+                  LinearGradient(
+                    colors: [.yellow, .orange, .green],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                  ),
+                  lineWidth: 3
+                )
             }
           }
         )
@@ -514,6 +631,14 @@ struct MoviesView: View {
       }
       Button("Edit Entry", systemImage: "pencil") {
         movieToEdit = movie
+      }
+      if movie.tmdb_id != nil {
+        Button("Change Poster", systemImage: "photo") {
+          movieToChangePoster = movie
+        }
+        Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
+          movieToChangeBackdrop = movie
+        }
       }
         Button("Remove Entry", systemImage: "trash", role: .destructive) {
         movieToDelete = movie
@@ -826,7 +951,7 @@ struct MoviesView: View {
           .fontWeight(.semibold)
           .foregroundColor(shouldHighlightMustWatchTitle ? .purple : shouldHighlightReleaseYearTitle ? .cyan : .white)
           .shadow(color: shouldHighlightMustWatchTitle ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle ? .cyan.opacity(0.6) : .clear, radius: 2, x: 0, y: 0)
-          .lineLimit(1)
+          .lineLimit(2)
         
         Text(movie.formattedReleaseYear)
           .font(.caption)
@@ -873,33 +998,32 @@ struct MoviesView: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .background(
+      RoundedRectangle(cornerRadius: 12)
+        .fill(Color(.secondarySystemFill))
+    )
+    .overlay(
       Group {
         // Prioritize red (total log) over yellow (unique film) if both apply
         if isTotalLog {
           RoundedRectangle(cornerRadius: 12)
-            .fill(
+            .stroke(
               LinearGradient(
-                colors: [.red.opacity(0.15), .pink.opacity(0.1)],
+                colors: [.red, .pink, .purple],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
-              )
+              ),
+              lineWidth: 3
             )
-            .shadow(color: .orange.opacity(0.3), radius: 6, x: 0, y: 0)
-            .shadow(color: .red.opacity(0.2), radius: 8, x: 0, y: 0)
         } else if isUniqueFilm {
           RoundedRectangle(cornerRadius: 12)
-            .fill(
+            .stroke(
               LinearGradient(
-                colors: [.yellow.opacity(0.15), .orange.opacity(0.1)],
+                colors: [.yellow, .orange, .green],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
-              )
+              ),
+              lineWidth: 3
             )
-            .shadow(color: .orange.opacity(0.3), radius: 6, x: 0, y: 0)
-            .shadow(color: .yellow.opacity(0.2), radius: 8, x: 0, y: 0)
-        } else {
-          RoundedRectangle(cornerRadius: 12)
-            .fill(Color(.secondarySystemFill))
         }
       }
     )
@@ -1065,15 +1189,29 @@ struct MoviesView: View {
       let isTotalLog = isCentennialTotalLog(movie)
       
       MovieTileView(movie: movie, rewatchIconColor: getRewatchIconColor(for: movie))
-        .background(
+        .overlay(
           Group {
             // Prioritize red (total log) over yellow (unique film) if both apply
             if isTotalLog {
-              CentennialTileTotalBackground()
+              RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                  LinearGradient(
+                    colors: [.red, .pink, .purple],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                  ),
+                  lineWidth: 3
+                )
             } else if isUniqueFilm {
-              CentennialTileUniqueBackground()
-            } else {
-              Color.clear
+              RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                  LinearGradient(
+                    colors: [.yellow, .orange, .green],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                  ),
+                  lineWidth: 3
+                )
             }
           }
         )
@@ -1100,6 +1238,14 @@ struct MoviesView: View {
       }
       Button("Edit Entry", systemImage: "pencil") {
         movieToEdit = movie
+      }
+      if movie.tmdb_id != nil {
+        Button("Change Poster", systemImage: "photo") {
+          movieToChangePoster = movie
+        }
+        Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
+          movieToChangeBackdrop = movie
+        }
       }
         Button("Remove Entry", systemImage: "trash", role: .destructive) {
         movieToDelete = movie
@@ -1144,32 +1290,115 @@ struct MoviesView: View {
   private func loadMoviesIfNeeded(force: Bool) async {
     // If force is false and data is still fresh, skip loading
     if !force && !shouldRefreshData() && !movies.isEmpty {
+      print("🔄 [MOVIESVIEW] Skipping load - data is fresh (last refresh: \(lastRefreshTime))")
       return
     }
     
-    guard !isLoading else { return }
+    guard !isLoading else { 
+      print("⏳ [MOVIESVIEW] Already loading movies, skipping duplicate request")
+      return 
+    }
+    
+    let startTime = Date()
+    print("🚀 [MOVIESVIEW] Starting movie load - force: \(force)")
+    print("🚂 [MOVIESVIEW] Testing Railway cache first...")
     
     isLoading = true
     errorMessage = nil
+    
     do {
-      movies = try await movieService.getMovies(sortBy: sortBy, ascending: sortAscending, limit: 3000)
-      lastRefreshTime = Date()
+      // First try Railway cache
+      await DataManagerRailway.shared.loadMoviesFromCache()
+      let railwayMovies = DataManagerRailway.shared.allMovies
+      
+      if !railwayMovies.isEmpty {
+        let duration = Date().timeIntervalSince(startTime)
+        print("✅ [MOVIESVIEW] SUCCESS: Got \(railwayMovies.count) movies from Railway cache in \(String(format: "%.3f", duration))s")
+        print("🎯 [MOVIESVIEW] Railway cache HIT - No Supabase fallback needed")
+        movies = railwayMovies
+        lastRefreshTime = Date()
+      } else {
+        print("⚠️ [MOVIESVIEW] Railway cache returned empty - falling back to direct Supabase")
+        let fallbackStart = Date()
+        movies = try await movieService.getMovies(sortBy: sortBy, ascending: sortAscending, limit: 3000)
+        let fallbackDuration = Date().timeIntervalSince(fallbackStart)
+        print("🔄 [MOVIESVIEW] Supabase fallback completed in \(String(format: "%.3f", fallbackDuration))s with \(movies.count) movies")
+        lastRefreshTime = Date()
+      }
+      
+      let totalDuration = Date().timeIntervalSince(startTime)
+      print("📊 [MOVIESVIEW] Total load operation completed in \(String(format: "%.3f", totalDuration))s")
+      
     } catch {
-      errorMessage = error.localizedDescription
+      let duration = Date().timeIntervalSince(startTime)
+      print("❌ [MOVIESVIEW] FAILED after \(String(format: "%.3f", duration))s: \(error)")
+      print("🔄 [MOVIESVIEW] Attempting direct Supabase as last resort...")
+      
+      do {
+        let fallbackStart = Date()
+        movies = try await movieService.getMovies(sortBy: sortBy, ascending: sortAscending, limit: 3000)
+        let fallbackDuration = Date().timeIntervalSince(fallbackStart)
+        print("✅ [MOVIESVIEW] Supabase rescue completed in \(String(format: "%.3f", fallbackDuration))s")
+        lastRefreshTime = Date()
+      } catch {
+        errorMessage = error.localizedDescription
+        print("💥 [MOVIESVIEW] CRITICAL: Both Railway and Supabase failed: \(error)")
+      }
     }
     isLoading = false
   }
   
   private func refreshMovies() async {
-    guard !isRefreshing else { return }
+    guard !isRefreshing else { 
+      print("⏳ [MOVIESVIEW] Already refreshing, skipping duplicate refresh request")
+      return 
+    }
+    
+    let startTime = Date()
+    print("🔄 [MOVIESVIEW] Manual refresh triggered by user pull-to-refresh")
+    print("🚂 [MOVIESVIEW] Attempting Railway cache refresh...")
     
     isRefreshing = true
     errorMessage = nil
+    
     do {
-      movies = try await movieService.getMovies(sortBy: sortBy, ascending: sortAscending, limit: 3000)
-      lastRefreshTime = Date()
+      // First try Railway cache
+      await DataManagerRailway.shared.loadMoviesFromCache()
+      let railwayMovies = DataManagerRailway.shared.allMovies
+      
+      if !railwayMovies.isEmpty {
+        let duration = Date().timeIntervalSince(startTime)
+        print("✅ [MOVIESVIEW] REFRESH SUCCESS: Got \(railwayMovies.count) movies from Railway cache in \(String(format: "%.3f", duration))s")
+        print("🎯 [MOVIESVIEW] Railway cache HIT during refresh - No Supabase needed")
+        movies = railwayMovies
+        lastRefreshTime = Date()
+      } else {
+        print("⚠️ [MOVIESVIEW] Railway cache refresh returned empty - falling back to Supabase")
+        let fallbackStart = Date()
+        movies = try await movieService.getMovies(sortBy: sortBy, ascending: sortAscending, limit: 3000)
+        let fallbackDuration = Date().timeIntervalSince(fallbackStart)
+        print("🔄 [MOVIESVIEW] Supabase refresh fallback completed in \(String(format: "%.3f", fallbackDuration))s")
+        lastRefreshTime = Date()
+      }
+      
+      let totalDuration = Date().timeIntervalSince(startTime)
+      print("📊 [MOVIESVIEW] Total refresh operation completed in \(String(format: "%.3f", totalDuration))s")
+      
     } catch {
-      errorMessage = error.localizedDescription
+      let duration = Date().timeIntervalSince(startTime)
+      print("❌ [MOVIESVIEW] REFRESH FAILED after \(String(format: "%.3f", duration))s: \(error)")
+      print("🔄 [MOVIESVIEW] Attempting direct Supabase refresh as last resort...")
+      
+      do {
+        let fallbackStart = Date()
+        movies = try await movieService.getMovies(sortBy: sortBy, ascending: sortAscending, limit: 3000)
+        let fallbackDuration = Date().timeIntervalSince(fallbackStart)
+        print("✅ [MOVIESVIEW] Supabase refresh rescue completed in \(String(format: "%.3f", fallbackDuration))s")
+        lastRefreshTime = Date()
+      } catch {
+        errorMessage = error.localizedDescription
+        print("💥 [MOVIESVIEW] CRITICAL: Both Railway and Supabase refresh failed: \(error)")
+      }
     }
     isRefreshing = false
   }
@@ -1576,14 +1805,15 @@ struct MovieRowView: View {
       .frame(width: 60, height: 90)
       .cornerRadius(8)
 
-      // Movie details
+      // Movie details - give it more space
       VStack(alignment: .leading, spacing: 4) {
         Text(movie.title)
           .font(.headline)
           .fontWeight(.semibold)
           .foregroundColor(shouldHighlightMustWatchTitle ? .purple : shouldHighlightReleaseYearTitle ? .cyan : .white)
           .shadow(color: shouldHighlightMustWatchTitle ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle ? .cyan.opacity(0.6) : .clear, radius: 3, x: 0, y: 0)
-          .lineLimit(2)
+          .lineLimit(3)
+          .frame(maxWidth: .infinity, alignment: .leading)
 
         Text(movie.formattedReleaseYear)
           .font(.subheadline)
@@ -1623,19 +1853,18 @@ struct MovieRowView: View {
           }
         }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
 
-      Spacer()
-
-      // Watch date and rewatch indicator
+      // Watch date and rewatch indicator - fixed width
       VStack {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
           if movie.isRewatchMovie {
             Image(systemName: "arrow.clockwise")
               .foregroundColor(rewatchIconColor)
-              .font(.system(size: 18, weight: .bold))
+              .font(.system(size: 16, weight: .bold))
           }
           
-          VStack {
+          VStack(spacing: 2) {
             Text(getDayFromWatchDate(movie.watch_date))
               .font(.title)
               .fontWeight(.bold)
@@ -1648,6 +1877,7 @@ struct MovieRowView: View {
           }
         }
       }
+      .frame(width: 80, alignment: .trailing)
     }
     .padding(.vertical, 12)
   }
@@ -2504,4 +2734,183 @@ struct SortOptionsView: View {
       VStack(spacing: 24) {
         // Sort Field Selection
         VStack(alignment: .leading, spacing: 16) {
-          HStack {\n            Image(systemName: \"arrow.up.arrow.down\")\n              .foregroundColor(.blue)\n              .font(.system(size: 16, weight: .semibold))\n            Text(\"Sort By\")\n              .font(.headline)\n              .fontWeight(.semibold)\n              .foregroundColor(.white)\n            Spacer()\n          }\n          \n          LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 1), spacing: 8) {\n            ForEach(MovieSortField.allCases, id: \\.self) { sortField in\n              SortFieldRow(\n                sortField: sortField,\n                isSelected: sortBy == sortField,\n                sortAscending: sortAscending\n              ) {\n                sortBy = sortField\n              }\n            }\n          }"\n        }\n        .padding(16)\n        .background(\n          RoundedRectangle(cornerRadius: 12)\n            .fill(Color.gray.opacity(0.15))\n        )\n        \n        // Sort Direction Selection\n        VStack(alignment: .leading, spacing: 16) {\n          HStack {\n            Image(systemName: \"arrow.up.arrow.down\")\n              .foregroundColor(.blue)\n              .font(.system(size: 16, weight: .semibold))\n            Text(\"Sort Direction\")\n              .font(.headline)\n              .fontWeight(.semibold)\n              .foregroundColor(.white)\n            Spacer()\n          }\n          \n          VStack(spacing: 8) {\n            SortDirectionRow(\n              title: getSortDirectionTitle(ascending: false),\n              icon: \"arrow.down\",\n              isSelected: !sortAscending\n            ) {\n              sortAscending = false\n            }\n            \n            SortDirectionRow(\n              title: getSortDirectionTitle(ascending: true),\n              icon: \"arrow.up\",\n              isSelected: sortAscending\n            ) {\n              sortAscending = true\n            }\n          }\n        }\n        .padding(16)\n        .background(\n          RoundedRectangle(cornerRadius: 12)\n            .fill(Color.gray.opacity(0.15))\n        )\n        \n        Spacer()\n      }\n      .padding(.horizontal, 20)\n      .padding(.top, 16)\n      .background(Color.black)\n      .navigationTitle(\"Sort Options\")\n      .navigationBarTitleDisplayMode(.inline)\n      .toolbar {\n        ToolbarItem(placement: .navigationBarLeading) {\n          Button(\"Cancel\", systemImage: \"xmark\") {\n            dismiss()\n          }\n          .foregroundColor(.red)\n        }\n        \n        ToolbarItem(placement: .navigationBarTrailing) {\n          Button(\"Done\", systemImage: \"checkmark\") {\n            dismiss()\n          }\n          .foregroundColor(.blue)\n        }\n      }\n    }\n  }\n  \n  private func getSortDirectionTitle(ascending: Bool) -> String {\n    switch sortBy {\n    case .title:\n      return ascending ? \"A to Z\" : \"Z to A\"\n    case .watchDate:\n      return ascending ? \"Oldest First\" : \"Newest First\"\n    case .releaseDate:\n      return ascending ? \"Oldest First\" : \"Newest First\"\n    case .rating:\n      return ascending ? \"Lowest First\" : \"Highest First\"\n    case .detailedRating:\n      return ascending ? \"Lowest First\" : \"Highest First\"\n    case .dateAdded:\n      return ascending ? \"Oldest First\" : \"Newest First\"\n    }\n  }\n}\n\nstruct SortFieldRow: View {\n  let sortField: MovieSortField\n  let isSelected: Bool\n  let sortAscending: Bool\n  let action: () -> Void\n  \n  var body: some View {\n    Button(action: action) {\n      HStack {\n        Text(sortField.displayName)\n          .font(.system(size: 16, weight: .medium))\n          .foregroundColor(isSelected ? .black : .white)\n        \n        Spacer()\n        \n        if isSelected {\n          Image(systemName: \"checkmark\")\n            .foregroundColor(.black)\n            .font(.system(size: 14, weight: .bold))\n        }\n      }\n      .padding(.horizontal, 16)\n      .padding(.vertical, 12)\n      .background(\n        RoundedRectangle(cornerRadius: 8)\n          .fill(isSelected ? .white : Color.gray.opacity(0.3))\n      )\n    }\n    .buttonStyle(PlainButtonStyle())\n  }\n}\n\nstruct SortDirectionRow: View {\n  let title: String\n  let icon: String\n  let isSelected: Bool\n  let action: () -> Void\n  \n  var body: some View {\n    Button(action: action) {\n      HStack {\n        Image(systemName: icon)\n          .foregroundColor(isSelected ? .black : .white)\n          .font(.system(size: 14, weight: .medium))\n        \n        Text(title)\n          .font(.system(size: 16, weight: .medium))\n          .foregroundColor(isSelected ? .black : .white)\n        \n        Spacer()\n        \n        if isSelected {\n          Image(systemName: \"checkmark\")\n            .foregroundColor(.black)\n            .font(.system(size: 14, weight: .bold))\n        }\n      }\n      .padding(.horizontal, 16)\n      .padding(.vertical, 12)\n      .background(\n        RoundedRectangle(cornerRadius: 8)\n          .fill(isSelected ? .white : Color.gray.opacity(0.3))\n      )\n    }\n    .buttonStyle(PlainButtonStyle())\n  }\n}\n\n#Preview {\n  MoviesView()\n}
+          HStack {
+            Image(systemName: "arrow.up.arrow.down")
+              .foregroundColor(.blue)
+              .font(.system(size: 16, weight: .semibold))
+            Text("Sort By")
+              .font(.headline)
+              .fontWeight(.semibold)
+              .foregroundColor(.white)
+            Spacer()
+          }
+          
+          LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 1), spacing: 8) {
+            ForEach(MovieSortField.allCases, id: \.self) { sortField in
+              SortFieldRow(
+                sortField: sortField,
+                isSelected: sortBy == sortField,
+                sortAscending: sortAscending
+              ) {
+                sortBy = sortField
+              }
+            }
+          }
+        }
+        .padding(16)
+        .background(
+          RoundedRectangle(cornerRadius: 12)
+            .fill(Color.gray.opacity(0.15))
+        )
+        
+        // Sort Direction Selection
+        VStack(alignment: .leading, spacing: 16) {
+          HStack {
+            Image(systemName: "arrow.up.arrow.down")
+              .foregroundColor(.blue)
+              .font(.system(size: 16, weight: .semibold))
+            Text("Sort Direction")
+              .font(.headline)
+              .fontWeight(.semibold)
+              .foregroundColor(.white)
+            Spacer()
+          }
+          
+          VStack(spacing: 8) {
+            SortDirectionRow(
+              title: getSortDirectionTitle(ascending: false),
+              icon: "arrow.down",
+              isSelected: !sortAscending
+            ) {
+              sortAscending = false
+            }
+            
+            SortDirectionRow(
+              title: getSortDirectionTitle(ascending: true),
+              icon: "arrow.up",
+              isSelected: sortAscending
+            ) {
+              sortAscending = true
+            }
+          }
+        }
+        .padding(16)
+        .background(
+          RoundedRectangle(cornerRadius: 12)
+            .fill(Color.gray.opacity(0.15))
+        )
+        
+        Spacer()
+      }
+      .padding(.horizontal, 20)
+      .padding(.top, 16)
+      .background(Color.black)
+      .navigationTitle("Sort Options")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .navigationBarLeading) {
+          Button("Cancel", systemImage: "xmark") {
+            dismiss()
+          }
+          .foregroundColor(.red)
+        }
+        
+        ToolbarItem(placement: .navigationBarTrailing) {
+          Button("Done", systemImage: "checkmark") {
+            dismiss()
+          }
+          .foregroundColor(.blue)
+        }
+      }
+    }
+  }
+  
+  private func getSortDirectionTitle(ascending: Bool) -> String {
+    switch sortBy {
+    case .title:
+      return ascending ? "A to Z" : "Z to A"
+    case .watchDate:
+      return ascending ? "Oldest First" : "Newest First"
+    case .releaseDate:
+      return ascending ? "Oldest First" : "Newest First"
+    case .rating:
+      return ascending ? "Lowest First" : "Highest First"
+    case .detailedRating:
+      return ascending ? "Lowest First" : "Highest First"
+    case .dateAdded:
+      return ascending ? "Oldest First" : "Newest First"
+    }
+  }
+}
+
+struct SortFieldRow: View {
+  let sortField: MovieSortField
+  let isSelected: Bool
+  let sortAscending: Bool
+  let action: () -> Void
+  
+  var body: some View {
+    Button(action: action) {
+      HStack {
+        Text(sortField.displayName)
+          .font(.system(size: 16, weight: .medium))
+          .foregroundColor(isSelected ? .black : .white)
+        
+        Spacer()
+        
+        if isSelected {
+          Image(systemName: "checkmark")
+            .foregroundColor(.black)
+            .font(.system(size: 14, weight: .bold))
+        }
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 12)
+      .background(
+        RoundedRectangle(cornerRadius: 8)
+          .fill(isSelected ? .white : Color.gray.opacity(0.3))
+      )
+    }
+    .buttonStyle(PlainButtonStyle())
+  }
+}
+
+struct SortDirectionRow: View {
+  let title: String
+  let icon: String
+  let isSelected: Bool
+  let action: () -> Void
+  
+  var body: some View {
+    Button(action: action) {
+      HStack {
+        Image(systemName: icon)
+          .foregroundColor(isSelected ? .black : .white)
+          .font(.system(size: 14, weight: .medium))
+        
+        Text(title)
+          .font(.system(size: 16, weight: .medium))
+          .foregroundColor(isSelected ? .black : .white)
+        
+        Spacer()
+        
+        if isSelected {
+          Image(systemName: "checkmark")
+            .foregroundColor(.black)
+            .font(.system(size: 14, weight: .bold))
+        }
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 12)
+      .background(
+        RoundedRectangle(cornerRadius: 8)
+          .fill(isSelected ? .white : Color.gray.opacity(0.3))
+      )
+    }
+    .buttonStyle(PlainButtonStyle())
+  }
+}
+
+#Preview {
+  MoviesView()
+}

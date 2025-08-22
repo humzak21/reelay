@@ -184,4 +184,12 @@ class DataManager: ObservableObject {
         combined.insert(wl, at: 0)
         return combined
     }
+    
+    func updatePosterForTmdbId(tmdbId: Int, newPosterUrl: String) async throws {
+        try await listService.updateListItemPoster(tmdbId: tmdbId, newPosterUrl: newPosterUrl)
+    }
+    
+    func updateBackdropForTmdbId(tmdbId: Int, newBackdropUrl: String) async throws {
+        try await listService.updateListItemBackdrop(tmdbId: tmdbId, newBackdropUrl: newBackdropUrl)
+    }
 }

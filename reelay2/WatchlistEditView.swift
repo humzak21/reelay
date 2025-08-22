@@ -68,7 +68,7 @@ struct WatchlistEditView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                     .foregroundColor(.white)

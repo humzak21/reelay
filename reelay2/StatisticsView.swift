@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Charts
+import Auth
 
 // MARK: - Selection Info Row
 private struct SelectionInfoRow: View {
@@ -31,6 +32,7 @@ private struct SelectionInfoRow: View {
 
 struct StatisticsView: View {
     @StateObject private var statisticsService = SupabaseStatisticsService.shared
+    @StateObject private var movieService = SupabaseMovieService.shared
     
     @State private var dashboardStats: DashboardStats?
     @State private var ratingDistribution: [RatingDistribution] = []
@@ -419,7 +421,7 @@ struct StatisticsView: View {
         cachedDataByYear.removeValue(forKey: cacheKey)
         
         await loadAvailableYears()
-        await loadStatistics()
+        await loadStatisticsForRefresh()
         
         isRefreshing = false
     }
@@ -510,8 +512,27 @@ struct StatisticsView: View {
             errorMessage = nil
         }
         
+        let startTime = Date()
+        print("📊 [STATISTICSVIEW] Starting statistics load for year: \(selectedYear?.description ?? "all-time")")
+        print("🚂 [STATISTICSVIEW] Testing Railway cache for statistics data...")
+        
         do {
-            async let dashboardTask = statisticsService.getDashboardStats(year: selectedYear)
+            // First try Railway cache for dashboard stats
+            var railwayDashboard: DashboardStats?
+            if let currentUser = movieService.currentUser {
+                do {
+                    railwayDashboard = try await DataManagerRailway.shared.loadStatisticsFromCache(userId: currentUser.id.uuidString)
+                    let cacheHitTime = Date().timeIntervalSince(startTime)
+                    print("✅ [STATISTICSVIEW] Railway cache HIT for dashboard stats in \(String(format: "%.3f", cacheHitTime))s")
+                    print("🎯 [STATISTICSVIEW] Using cached dashboard data - skipping Supabase for main stats")
+                } catch {
+                    print("⚠️ [STATISTICSVIEW] Railway cache MISS for dashboard stats: \(error)")
+                    print("🔄 [STATISTICSVIEW] Falling back to direct Supabase statistics...")
+                }
+            }
+            
+            // Load remaining stats (using Railway cache for dashboard if available, otherwise all from Supabase)
+            async let dashboardTask = railwayDashboard != nil ? railwayDashboard! : try await statisticsService.getDashboardStats(year: selectedYear)
             async let ratingTask = statisticsService.getRatingDistribution(year: selectedYear)
             async let decadeTask = statisticsService.getFilmsByDecade(year: selectedYear)
             async let yearTask = statisticsService.getFilmsPerYear(year: selectedYear)
@@ -583,12 +604,107 @@ struct StatisticsView: View {
                 
                 // Cache the loaded data
                 self.cacheCurrentData()
+                
+                let totalDuration = Date().timeIntervalSince(startTime)
+                print("✅ [STATISTICSVIEW] Statistics load completed in \(String(format: "%.3f", totalDuration))s")
+                print("📊 [STATISTICSVIEW] Data sources: Railway cache for dashboard stats, Supabase for detailed charts")
+            }
+            
+        } catch {
+            let duration = Date().timeIntervalSince(startTime)
+            print("❌ [STATISTICSVIEW] Statistics load FAILED after \(String(format: "%.3f", duration))s: \(error)")
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
+        }
+    }
+    
+    private func loadStatisticsForRefresh() async {
+        // Don't set isLoading = true during refresh to keep existing data visible
+        await MainActor.run {
+            errorMessage = nil
+        }
+        
+        do {
+            async let dashboardTask = statisticsService.getDashboardStats(year: selectedYear)
+            async let ratingTask = statisticsService.getRatingDistribution(year: selectedYear)
+            async let decadeTask = statisticsService.getFilmsByDecade(year: selectedYear)
+            async let yearTask = statisticsService.getFilmsPerYear(year: selectedYear)
+            async let monthTask = statisticsService.getFilmsPerMonth(year: selectedYear)
+            async let weeklyTask = selectedYear != nil ? statisticsService.getWeeklyFilmsData(year: selectedYear!) : nil
+            async let runtimeTask = statisticsService.getRuntimeStats(year: selectedYear)
+            async let uniqueTask = statisticsService.getUniqueFilmsCount(year: selectedYear)
+            async let spanTask = statisticsService.getWatchSpan(year: selectedYear)
+            async let ratingStatsTask = statisticsService.getRatingStats(year: selectedYear)
+            async let dayOfWeekTask = statisticsService.getDayOfWeekPatterns(year: selectedYear)
+            async let rewatchTask = statisticsService.getRewatchStats(year: selectedYear)
+            // Always use all-time streak stats (no year parameter)
+            async let streakTask = statisticsService.getStreakStats(year: nil)
+            // Get year release stats only for year-filtered views
+            async let yearReleaseTask = selectedYear != nil ? statisticsService.getYearReleaseStats(year: selectedYear!) : nil
+            // Get top watched films only for all-time view
+            async let topWatchedTask = selectedYear == nil ? statisticsService.getTopWatchedFilms() : nil
+            // Get advanced journey stats only for all-time view
+            async let advancedJourneyTask = selectedYear == nil ? loadAdvancedJourneyStats() : nil
+            // Get year-filtered advanced journey stats only for year-filtered views
+            async let yearFilteredAdvancedJourneyTask = selectedYear != nil ? loadYearFilteredAdvancedJourneyStats(year: selectedYear!) : nil
+            // Get average rating per year charts only for all-time view
+            async let averageStarRatingsTask = selectedYear == nil ? statisticsService.getAverageStarRatingPerYear() : nil
+            async let averageDetailedRatingsTask = selectedYear == nil ? statisticsService.getAverageDetailedRatingPerYear() : nil
+            
+            let results = try await (
+                dashboard: dashboardTask,
+                rating: ratingTask,
+                decade: decadeTask,
+                year: yearTask,
+                month: monthTask,
+                weekly: weeklyTask,
+                runtime: runtimeTask,
+                unique: uniqueTask,
+                span: spanTask,
+                ratingStats: ratingStatsTask,
+                dayOfWeek: dayOfWeekTask,
+                rewatch: rewatchTask,
+                streak: streakTask,
+                yearRelease: yearReleaseTask,
+                topWatched: topWatchedTask,
+                advancedJourney: advancedJourneyTask,
+                yearFilteredAdvancedJourney: yearFilteredAdvancedJourneyTask,
+                averageStarRatings: averageStarRatingsTask,
+                averageDetailedRatings: averageDetailedRatingsTask
+            )
+            
+            await MainActor.run {
+                self.dashboardStats = results.dashboard
+                self.ratingDistribution = results.rating
+                self.filmsByDecade = results.decade
+                self.filmsPerYear = results.year
+                self.filmsPerMonth = results.month
+                self.weeklyFilmsData = results.weekly ?? []
+                self.dayOfWeekPatterns = results.dayOfWeek
+                self.runtimeStats = results.runtime
+                self.uniqueFilmsCount = results.unique
+                self.watchSpan = results.span
+                self.rewatchStats = results.rewatch
+                self.streakStats = results.streak
+                self.yearReleaseStats = results.yearRelease
+                self.topWatchedFilms = results.topWatched ?? []
+                self.advancedJourneyStats = results.advancedJourney
+                self.yearFilteredAdvancedStats = results.yearFilteredAdvancedJourney
+                self.averageStarRatingsPerYear = results.averageStarRatings ?? []
+                self.averageDetailedRatingsPerYear = results.averageDetailedRatings ?? []
+                self.resolvedAverageRating = results.dashboard.averageRating ?? results.ratingStats.averageRating
+                // Note: Don't set isLoading = false here during refresh
+                
+                // Cache the loaded data
+                self.cacheCurrentData()
             }
             
         } catch {
             await MainActor.run {
                 self.errorMessage = error.localizedDescription
-                self.isLoading = false
+                // Don't change isLoading state during refresh
             }
         }
     }
@@ -754,14 +870,27 @@ struct TimeSinceFirstFilmSection: View {
         }
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.purple.opacity(0.05),
+                            Color.blue.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+ 
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.white.opacity(0.1), .white.opacity(0.05)],
+                        colors: [
+                            Color.purple.opacity(0.5),
+                            Color.blue.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
@@ -869,74 +998,37 @@ struct FilmJourneySection: View {
         }
         .padding(16)
         .background(
-            ZStack {
-                // Diagonal blue glow from top left corner at 45 degrees
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(
-                        LinearGradient(
-                            colors: [.blue.opacity(0.4), .blue.opacity(0.2), .blue.opacity(0.1), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .blur(radius: 15)
-                
-                // Outer glow layers (behind the main background)
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(
-                        RadialGradient(
-                            colors: [.purple.opacity(0.08), .blue.opacity(0.05), .clear],
-                            center: .center,
-                            startRadius: 10,
-                            endRadius: 200
-                        )
-                    )
-                    .blur(radius: 12)
-                
-                // Main background
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(Color.black.opacity(0.85))
-            }
-        )
-        .overlay(
-            // Inward glow from border
             RoundedRectangle(cornerRadius: 22)
-                .stroke(
+                .fill(
                     LinearGradient(
-                        colors: [.purple.opacity(0.15), .blue.opacity(0.1)],
+                        colors: [
+                            Color.blue.opacity(0.05),
+                            Color.purple.opacity(0.05)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 8
+                    )
                 )
-                .blur(radius: 6)
-                .mask(
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(.black)
+                .shadow(
+                    color: .white.opacity(0.1),
+                    radius: 8,
+                    x: 0,
+                    y: 2
                 )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                        colors: [
+                            Color.blue.opacity(0.5),
+                            Color.purple.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
                     lineWidth: 0.5
                 )
-        )
-        .shadow(
-            color: .purple.opacity(0.15),
-            radius: 20,
-            x: 0,
-            y: 8
-        )
-        .shadow(
-            color: .blue.opacity(0.1),
-            radius: 40,
-            x: 0,
-            y: 12
         )
     }
 }
@@ -964,17 +1056,26 @@ struct StatCard: View {
             HStack {
                 Spacer()
                 Image(systemName: icon)
-                    .foregroundColor(color)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: borderGradient,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .font(.title2)
                 Spacer()
             }
             
             Text(value)
                 .font(.system(size: 36, weight: .heavy, design: .rounded))
-                .gradientForeground([
-                    color.opacity(0.95),
-                    .white.opacity(0.1)
-                ], start: .leading, end: .trailing)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: borderGradient,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
             
             Text(title)
                 .font(.caption)
@@ -982,24 +1083,8 @@ struct StatCard: View {
         }
         .padding(18)
         .background(
-            ZStack {
-                // Outer glow/halo effect
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(
-                        RadialGradient(
-                            colors: [color.opacity(0.3), color.opacity(0.1), .clear],
-                            center: .center,
-                            startRadius: 5,
-                            endRadius: 50
-                        )
-                    )
-                    .blur(radius: 10)
-                    .scaleEffect(1.1)
-                
-                // Main background
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial.opacity(0.4))
-            }
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.ultraThinMaterial.opacity(0.4))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -1011,18 +1096,6 @@ struct StatCard: View {
                     ),
                     lineWidth: 1.2
                 )
-        )
-        .shadow(
-            color: color.opacity(0.3),
-            radius: 12,
-            x: 0,
-            y: 6
-        )
-        .shadow(
-            color: color.opacity(0.2),
-            radius: 25,
-            x: 0,
-            y: 10
         )
     }
 }
@@ -1388,44 +1461,31 @@ struct StreakSection: View {
         }
         .padding(16)
         .background(
-            ZStack {
-                // Outer glow layers (behind the main background)
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(
-                        RadialGradient(
-                            colors: [.red.opacity(0.08), .orange.opacity(0.05), .clear],
-                            center: .center,
-                            startRadius: 10,
-                            endRadius: 200
-                        )
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.orange.opacity(0.05),
+                            Color.red.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
-                    .blur(radius: 12)
-                
-                // Main background
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(Color.black.opacity(0.85))
-            }
+                )
+ 
         )
         .overlay(
-            // Inward glow from border
             RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.red.opacity(0.15), .orange.opacity(0.1)],
+                        colors: [
+                            Color.orange.opacity(0.5),
+                            Color.red.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
-                    lineWidth: 8
-                )
-                .blur(radius: 6)
-                .mask(
-                    RoundedRectangle(cornerRadius: 22)
-                        .stroke(lineWidth: 8)
-                        .fill(LinearGradient(
-                            colors: [.clear, .white, .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ))
+                    lineWidth: 0.5
                 )
         )
     }
@@ -1491,7 +1551,35 @@ struct TotalRuntimeSection: View {
                 .frame(height: 8)
                 .shadow(color: .purple.opacity(0.4), radius: 4, x: 0, y: 2)
         }
-        .padding(.top, 12)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.purple.opacity(0.05),
+                            Color.blue.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+ 
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.purple.opacity(0.5),
+                            Color.blue.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
+        )
     }
 }
 
@@ -1576,14 +1664,26 @@ struct RewatchPieChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.orange.opacity(0.05),
+                            Color.blue.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.white.opacity(0.1), .white.opacity(0.05)],
+                        colors: [
+                            Color.orange.opacity(0.5),
+                            Color.blue.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
@@ -1995,8 +2095,31 @@ struct RatingDistributionChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.cyan.opacity(0.05),
+                            Color.blue.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.cyan.opacity(0.5),
+                            Color.blue.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
         )
     }
     
@@ -2109,8 +2232,31 @@ struct FilmsByDecadeChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.red.opacity(0.05),
+                            Color.orange.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.red.opacity(0.5),
+                            Color.orange.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
         )
     }
     
@@ -2236,8 +2382,31 @@ struct DayOfWeekChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.orange.opacity(0.05),
+                            Color.yellow.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.orange.opacity(0.5),
+                            Color.yellow.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
         )
     }
     
@@ -2386,8 +2555,31 @@ struct FilmsPerYearChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.mint.opacity(0.05),
+                            Color.green.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.mint.opacity(0.5),
+                            Color.green.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
         )
     }
     
@@ -2496,8 +2688,31 @@ struct FilmsPerMonthChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.cyan.opacity(0.05),
+                            Color.blue.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.cyan.opacity(0.5),
+                            Color.blue.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
         )
     }
     
@@ -2549,8 +2764,33 @@ struct WeeklyFilmsChart: View {
             weeklySelectionInfo
         }
         .padding(12)
-        .background(weeklyChartBackground)
-        .overlay(weeklyChartOverlay)
+        .background(
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.pink.opacity(0.05),
+                            Color.purple.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.pink.opacity(0.5),
+                            Color.purple.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
+        )
     }
     
     // MARK: - Weekly Chart Subviews
@@ -2800,14 +3040,26 @@ struct YearReleasePieChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.green.opacity(0.05),
+                            Color.cyan.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.white.opacity(0.1), .white.opacity(0.05)],
+                        colors: [
+                            Color.green.opacity(0.5),
+                            Color.cyan.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
@@ -3152,63 +3404,37 @@ struct TopWatchedFilmsSection: View {
         }
         .padding(16)
         .background(
-            ZStack {
-                // Outer glow layers (behind the main background)
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(
-                        RadialGradient(
-                            colors: [.yellow.opacity(0.08), .orange.opacity(0.05), .clear],
-                            center: .center,
-                            startRadius: 10,
-                            endRadius: 200
-                        )
-                    )
-                    .blur(radius: 12)
-                
-                // Main background
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(Color.black.opacity(0.85))
-            }
-        )
-        .overlay(
-            // Inward glow from border
             RoundedRectangle(cornerRadius: 22)
-                .stroke(
+                .fill(
                     LinearGradient(
-                        colors: [.yellow.opacity(0.15), .orange.opacity(0.1)],
+                        colors: [
+                            Color.orange.opacity(0.05),
+                            Color.red.opacity(0.05)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 8
+                    )
                 )
-                .blur(radius: 6)
-                .mask(
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(.black)
+                .shadow(
+                    color: .white.opacity(0.1),
+                    radius: 8,
+                    x: 0,
+                    y: 2
                 )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                        colors: [
+                            Color.orange.opacity(0.5),
+                            Color.red.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
                     lineWidth: 0.5
                 )
-        )
-        .shadow(
-            color: .yellow.opacity(0.15),
-            radius: 20,
-            x: 0,
-            y: 8
-        )
-        .shadow(
-            color: .orange.opacity(0.1),
-            radius: 40,
-            x: 0,
-            y: 12
         )
     }
 }
@@ -3386,63 +3612,37 @@ struct AdvancedFilmJourneySection: View {
         }
         .padding(16)
         .background(
-            ZStack {
-                // Outer glow layers (behind the main background)
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(
-                        RadialGradient(
-                            colors: [.indigo.opacity(0.08), .cyan.opacity(0.05), .clear],
-                            center: .center,
-                            startRadius: 10,
-                            endRadius: 200
-                        )
-                    )
-                    .blur(radius: 12)
-                
-                // Main background
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(Color.black.opacity(0.85))
-            }
-        )
-        .overlay(
-            // Inward glow from border
             RoundedRectangle(cornerRadius: 22)
-                .stroke(
+                .fill(
                     LinearGradient(
-                        colors: [.indigo.opacity(0.15), .cyan.opacity(0.1)],
+                        colors: [
+                            Color.blue.opacity(0.05),
+                            Color.purple.opacity(0.05)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 8
+                    )
                 )
-                .blur(radius: 6)
-                .mask(
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(.black)
+                .shadow(
+                    color: .white.opacity(0.1),
+                    radius: 8,
+                    x: 0,
+                    y: 2
                 )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                        colors: [
+                            Color.blue.opacity(0.5),
+                            Color.purple.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
                     lineWidth: 0.5
                 )
-        )
-        .shadow(
-            color: .indigo.opacity(0.15),
-            radius: 20,
-            x: 0,
-            y: 8
-        )
-        .shadow(
-            color: .cyan.opacity(0.1),
-            radius: 40,
-            x: 0,
-            y: 12
         )
     }
 }
@@ -3538,63 +3738,37 @@ struct YearFilteredAdvancedJourneySection: View {
         }
         .padding(16)
         .background(
-            ZStack {
-                // Outer glow layers (behind the main background)
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(
-                        RadialGradient(
-                            colors: [.teal.opacity(0.08), .cyan.opacity(0.05), .clear],
-                            center: .center,
-                            startRadius: 10,
-                            endRadius: 200
-                        )
-                    )
-                    .blur(radius: 12)
-                
-                // Main background
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(Color.black.opacity(0.85))
-            }
-        )
-        .overlay(
-            // Inward glow from border
             RoundedRectangle(cornerRadius: 22)
-                .stroke(
+                .fill(
                     LinearGradient(
-                        colors: [.teal.opacity(0.15), .cyan.opacity(0.1)],
+                        colors: [
+                            Color.blue.opacity(0.05),
+                            Color.purple.opacity(0.05)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 8
+                    )
                 )
-                .blur(radius: 6)
-                .mask(
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(.black)
+                .shadow(
+                    color: .white.opacity(0.1),
+                    radius: 8,
+                    x: 0,
+                    y: 2
                 )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22)
                 .stroke(
                     LinearGradient(
-                        colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                        colors: [
+                            Color.blue.opacity(0.5),
+                            Color.purple.opacity(0.5)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
                     lineWidth: 0.5
                 )
-        )
-        .shadow(
-            color: .teal.opacity(0.15),
-            radius: 20,
-            x: 0,
-            y: 8
-        )
-        .shadow(
-            color: .cyan.opacity(0.1),
-            radius: 40,
-            x: 0,
-            y: 12
         )
     }
 }
@@ -3623,17 +3797,26 @@ struct UniformStatCard: View {
             HStack {
                 Spacer()
                 Image(systemName: icon)
-                    .foregroundColor(color)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: borderGradient,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .font(.title2)
                 Spacer()
             }
             
             Text(value)
                 .font(.system(size: 36, weight: .heavy, design: .rounded))
-                .gradientForeground([
-                    color.opacity(0.95),
-                    .white.opacity(0.1)
-                ], start: .leading, end: .trailing)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: borderGradient,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .minimumScaleFactor(0.7)
                 .lineLimit(1)
             
@@ -3665,18 +3848,12 @@ struct UniformStatCard: View {
             RoundedRectangle(cornerRadius: 16)
                 .stroke(
                     LinearGradient(
-                        colors: borderGradient.map { $0.opacity(0.3) },
+                        colors: borderGradient.map { $0.opacity(0.4) },
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
-                    lineWidth: 0.8
+                    lineWidth: 1.2
                 )
-        )
-        .shadow(
-            color: color.opacity(0.1),
-            radius: 8,
-            x: 0,
-            y: 4
         )
         .aspectRatio(1.0, contentMode: .fit) // Force square aspect ratio
     }
@@ -3722,7 +3899,7 @@ struct AverageStarRatingPerYearChart: View {
                 )
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [.yellow, .orange],
+                        colors: [.orange, .blue],
                         startPoint: .bottom,
                         endPoint: .top
                     )
@@ -3778,8 +3955,31 @@ struct AverageStarRatingPerYearChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.blue.opacity(0.05),
+                            Color.orange.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.blue.opacity(0.5),
+                            Color.orange.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
         )
     }
     
@@ -3838,7 +4038,7 @@ struct AverageDetailedRatingPerYearChart: View {
                 )
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [.cyan, .blue],
+                        colors: [.purple, .cyan],
                         startPoint: .bottom,
                         endPoint: .top
                     )
@@ -3894,8 +4094,31 @@ struct AverageDetailedRatingPerYearChart: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.85))
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.cyan.opacity(0.05),
+                            Color.purple.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.cyan.opacity(0.5),
+                            Color.purple.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
         )
     }
     

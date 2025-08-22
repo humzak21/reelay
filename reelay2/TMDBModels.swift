@@ -127,6 +127,50 @@ struct TMDBCrewMember: Codable {
     }
 }
 
+// MARK: - TMDB Images Response
+struct TMDBImagesResponse: Codable {
+    let id: Int
+    let posters: [TMDBImage]?
+    let backdrops: [TMDBImage]?
+}
+
+struct TMDBImage: Codable, Identifiable {
+    let aspectRatio: Double
+    let height: Int
+    let width: Int
+    let filePath: String
+    let voteAverage: Double
+    let voteCount: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case height, width
+        case aspectRatio = "aspect_ratio"
+        case filePath = "file_path"
+        case voteAverage = "vote_average"
+        case voteCount = "vote_count"
+    }
+    
+    var id: String {
+        return filePath
+    }
+    
+    var fullURL: String {
+        return "https://image.tmdb.org/t/p/w500\(filePath)"
+    }
+    
+    var fullImageURL: URL? {
+        return URL(string: fullURL)
+    }
+    
+    var fullBackdropURL: String {
+        return "https://image.tmdb.org/t/p/w1280\(filePath)"
+    }
+    
+    var fullBackdropImageURL: URL? {
+        return URL(string: fullBackdropURL)
+    }
+}
+
 // MARK: - Extensions
 extension TMDBMovie {
     var posterURL: URL? {

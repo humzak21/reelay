@@ -36,6 +36,21 @@ class SupabaseProfileService: ObservableObject {
         let session = try await supabase.auth.session
         let userEmail = session.user.email ?? ""
         
+        print("Fetching profile for email: \(userEmail)")
+        print("User ID from auth: \(session.user.id)")
+        print("Auth user role: \(session.user.role ?? "nil")")
+        print("Auth user aud: \(session.user.aud)")
+        print("Full auth user: \(session.user)")
+        
+        // Test basic query to see if RLS allows anything
+        let testResponse = try await supabase
+            .from("users")
+            .select("*")
+            .execute()
+        
+        print("Basic users query: \(String(data: testResponse.data, encoding: .utf8) ?? "nil")")
+        
+        // First try querying by email
         let response = try await supabase
             .from("users")
             .select()
@@ -43,8 +58,28 @@ class SupabaseProfileService: ObservableObject {
             .limit(1)
             .execute()
         
-        let profiles: [UserProfile] = try JSONDecoder().decode([UserProfile].self, from: response.data)
-        let profile = profiles.first
+        print("Raw response data (by email): \(String(data: response.data, encoding: .utf8) ?? "nil")")
+        
+        var profiles: [UserProfile] = try JSONDecoder().decode([UserProfile].self, from: response.data)
+        var profile = profiles.first
+        
+        // If not found by email, try by auth user ID
+        if profile == nil {
+            print("No profile found by email, trying by auth user ID: \(session.user.id)")
+            let idResponse = try await supabase
+                .from("users")
+                .select()
+                .eq("id", value: session.user.id.uuidString)
+                .limit(1)
+                .execute()
+            
+            print("Raw response data (by ID): \(String(data: idResponse.data, encoding: .utf8) ?? "nil")")
+            
+            let idProfiles: [UserProfile] = try JSONDecoder().decode([UserProfile].self, from: idResponse.data)
+            profile = idProfiles.first
+        }
+        
+        print("Decoded profile: \(profile?.name ?? "nil")")
         
         currentUserProfile = profile
         return profile

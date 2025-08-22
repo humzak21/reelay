@@ -204,6 +204,24 @@ class SupabaseMovieService: ObservableObject {
         return movies
     }
     
+    /// Update poster URL for all movies with the given TMDB ID
+    nonisolated func updatePosterForTmdbId(tmdbId: Int, newPosterUrl: String) async throws {
+        try await supabase
+            .from("diary")
+            .update(["poster_url": newPosterUrl])
+            .eq("tmdb_id", value: tmdbId)
+            .execute()
+    }
+    
+    /// Update backdrop URL for all movies with the given TMDB ID
+    nonisolated func updateBackdropForTmdbId(tmdbId: Int, newBackdropUrl: String) async throws {
+        try await supabase
+            .from("diary")
+            .update(["backdrop_path": newBackdropUrl])
+            .eq("tmdb_id", value: tmdbId)
+            .execute()
+    }
+    
     /// Get movies with detailed ratings in the specified range
     nonisolated func getMoviesInRatingRange(minRating: Double, maxRating: Double, limit: Int = 3000) async throws -> [Movie] {
         let response = try await supabase

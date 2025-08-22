@@ -112,6 +112,32 @@ class TMDBService: ObservableObject {
         
         return (details, director)
     }
+    
+    // MARK: - Get Movie Images
+    func getMovieImages(movieId: Int) async throws -> TMDBImagesResponse {
+        let urlString = "\(baseURL)/movie/\(movieId)/images?api_key=\(apiKey)"
+        
+        guard let url = URL(string: urlString) else {
+            throw TMDBError.invalidURL
+        }
+        
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TMDBError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw TMDBError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let images = try JSONDecoder().decode(TMDBImagesResponse.self, from: data)
+            return images
+        } catch {
+            throw TMDBError.decodingError(error)
+        }
+    }
 }
 
 // MARK: - TMDB Errors

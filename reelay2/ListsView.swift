@@ -56,10 +56,21 @@ struct ListsView: View {
             }
             .task {
                 if movieService.isLoggedIn && !hasLoadedInitially {
-                    // Test Railway cache performance
+                    // Test Railway cache performance and health for lists
                     Task {
+                        print("🔍 [LISTSVIEW] Running Railway cache diagnostics for lists...")
                         await DataManagerRailway.shared.enableDetailedLogging()
-                        await DataManagerRailway.shared.runCachePerformanceTest()
+                        
+                        let healthStatus = await DataManagerRailway.shared.testCacheHealth()
+                        print("🏥 [LISTSVIEW] Cache Health: \(healthStatus.isConnected ? "✅ Connected" : "❌ Disconnected")")
+                        print("🏥 [LISTSVIEW] Response Time: \(String(format: "%.3f", healthStatus.responseTime))s")
+                        
+                        if let performanceReport = await DataManagerRailway.shared.runCachePerformanceTest() {
+                            print("⚡ [LISTSVIEW] Cache Performance Report:")
+                            print("📊 [LISTSVIEW] Average Response: \(String(format: "%.3f", performanceReport.averageResponseTime))s")
+                            print("🎯 [LISTSVIEW] Cache Hit Rate: \(String(format: "%.1f", performanceReport.cacheHitRate * 100))%")
+                            print("📦 [LISTSVIEW] Data Transferred: \(performanceReport.totalDataTransferred) bytes")
+                        }
                     }
                     
                     await loadListsIfNeeded(force: true)
@@ -288,28 +299,73 @@ struct ListsView: View {
     private func loadListsIfNeeded(force: Bool) async {
         // If force is false and data is still fresh, skip loading
         if !force && !shouldRefreshData() && !dataManager.movieLists.isEmpty {
+            print("🔄 [LISTSVIEW] Skipping load - lists data is fresh (last refresh: \(lastRefreshTime))")
             return
         }
         
-        guard !isLoading else { return }
+        guard !isLoading else { 
+            print("⏳ [LISTSVIEW] Already loading lists, skipping duplicate request")
+            return 
+        }
+        
+        let startTime = Date()
+        print("📋 [LISTSVIEW] Starting lists load - force: \(force)")
+        print("🚂 [LISTSVIEW] Testing Railway cache for lists...")
         
         isLoading = true
         errorMessage = nil
         
-        await dataManager.refreshLists()
+        // First try Railway cache
+        await DataManagerRailway.shared.loadListsFromCache()
+        let duration = Date().timeIntervalSince(startTime)
+        
+        if !dataManager.movieLists.isEmpty {
+            print("✅ [LISTSVIEW] SUCCESS: Got \(dataManager.movieLists.count) lists from Railway cache in \(String(format: "%.3f", duration))s")
+            print("🎯 [LISTSVIEW] Railway cache HIT - No Supabase fallback needed for lists")
+        } else {
+            print("⚠️ [LISTSVIEW] Railway cache returned empty - using DataManager fallback")
+            await dataManager.refreshLists()
+            let fallbackDuration = Date().timeIntervalSince(startTime)
+            print("🔄 [LISTSVIEW] DataManager fallback completed in \(String(format: "%.3f", fallbackDuration))s with \(dataManager.movieLists.count) lists")
+        }
+        
         lastRefreshTime = Date()
+        let totalDuration = Date().timeIntervalSince(startTime)
+        print("📊 [LISTSVIEW] Total lists load operation completed in \(String(format: "%.3f", totalDuration))s")
         
         isLoading = false
     }
     
     private func refreshLists() async {
-        guard !isRefreshing else { return }
+        guard !isRefreshing else { 
+            print("⏳ [LISTSVIEW] Already refreshing lists, skipping duplicate refresh request")
+            return 
+        }
+        
+        let startTime = Date()
+        print("🔄 [LISTSVIEW] Manual lists refresh triggered by user pull-to-refresh")
+        print("🚂 [LISTSVIEW] Attempting Railway cache refresh for lists...")
         
         isRefreshing = true
         errorMessage = nil
         
-        await dataManager.refreshLists()
+        // Try Railway cache refresh first
+        await DataManagerRailway.shared.loadListsFromCache()
+        let duration = Date().timeIntervalSince(startTime)
+        
+        if !dataManager.movieLists.isEmpty {
+            print("✅ [LISTSVIEW] REFRESH SUCCESS: Got \(dataManager.movieLists.count) lists from Railway cache in \(String(format: "%.3f", duration))s")
+            print("🎯 [LISTSVIEW] Railway cache HIT during refresh - No Supabase needed")
+        } else {
+            print("⚠️ [LISTSVIEW] Railway cache refresh returned empty - using DataManager fallback")
+            await dataManager.refreshLists()
+            let fallbackDuration = Date().timeIntervalSince(startTime)
+            print("🔄 [LISTSVIEW] DataManager refresh fallback completed in \(String(format: "%.3f", fallbackDuration))s")
+        }
+        
         lastRefreshTime = Date()
+        let totalDuration = Date().timeIntervalSince(startTime)
+        print("📊 [LISTSVIEW] Total lists refresh operation completed in \(String(format: "%.3f", totalDuration))s")
         
         isRefreshing = false
     }

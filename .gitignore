@@ -44,12 +44,14 @@ reelay2/Config.swift
 **/.env*
 secrets.json
 **/secrets.json
+reelay2/railway_config.swift
 
 # Resources folder
 Resources/
 **/Resources/
 Assets.xcassets
 **/Assets.xcassets
+migration/
 
 # Project/Build folders
 build/
@@ -65,6 +67,9 @@ CLAUDE.md
 **/.claude/
 
 reelay2concepts/
+reelay2/FilmJourneySectionTest.swift
+reelay2/server.js
+reelay2/package.json
 
 # CocoaPods
 #

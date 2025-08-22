@@ -48,6 +48,7 @@ struct SearchView: View {
                     noResultsView
                 } else if !viewModel.filteredAndSortedResults.isEmpty {
                     VStack(spacing: 0) {
+                        searchTypeIndicator
                         // Quick stats
                         if !viewModel.searchResults.isEmpty {
                             searchStatsBar
@@ -197,37 +198,25 @@ struct SearchView: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.primary)
             
-            Text("Find any movie you've watched by searching for titles, directors, tags, or even text in your reviews.")
-                .font(.body)
+            Text("Search by:")
+                .font(.headline)
+                .foregroundColor(.primary)
+                .padding(.top, 20)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                searchTypeHint(icon: "film", title: "Movie Names", example: "\"Inception\"")
+                searchTypeHint(icon: "calendar", title: "Release Year", example: "\"2010\"")
+                searchTypeHint(icon: "tag", title: "Tags", example: "\"IMAX\", \"Theater\", \"Family\"")
+                searchTypeHint(icon: "star.fill", title: "Star Ratings", example: "\"4 stars\", \"5 star\"")
+            }
+            .padding(.horizontal, 20)
+            
+            Text("You can also combine searches like \"2010 IMAX\" or \"Inception 5 stars\"")
+                .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
-            
-            // Suggested searches
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Try searching for:")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 8) {
-                    ForEach(["IMAX", "theater", "2024", "5 stars", "family"], id: \.self) { suggestion in
-                        Button(action: {
-                            viewModel.searchText = suggestion
-                        }) {
-                            Text(suggestion)
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(
-                                    Capsule()
-                                        .stroke(Color.blue.opacity(0.5), lineWidth: 1)
-                                )
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 40)
+                .padding(.top, 16)
             
             Spacer()
         }
@@ -314,6 +303,76 @@ struct SearchView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
             }
+        }
+    }
+    
+    // MARK: - Helper Views
+    
+    private func searchTypeHint(icon: String, title: String, example: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.blue)
+                .frame(width: 20)
+            
+            Text(title)
+                .font(.body)
+                .foregroundColor(.primary)
+                .fontWeight(.medium)
+            
+            Spacer()
+            
+            Text(example)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .italic()
+        }
+    }
+    
+    @ViewBuilder
+    private var searchTypeIndicator: some View {
+        if let searchType = viewModel.parsedSearchType {
+            HStack {
+                searchTypeLabel(for: searchType)
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+        }
+    }
+    
+    private func searchTypeLabel(for searchType: SearchViewModel.SearchType) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: iconForSearchType(searchType))
+                .font(.caption)
+                .foregroundColor(.blue)
+            
+            Text(labelForSearchType(searchType))
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+    }
+    
+    private func iconForSearchType(_ searchType: SearchViewModel.SearchType) -> String {
+        switch searchType {
+        case .general(_): return "magnifyingglass"
+        case .year(_): return "calendar"
+        case .tag(_): return "tag"
+        case .starRating(_): return "star.fill"
+        case .combined(_): return "magnifyingglass.circle"
+        }
+    }
+    
+    private func labelForSearchType(_ searchType: SearchViewModel.SearchType) -> String {
+        switch searchType {
+        case .general(_): return "General Search"
+        case .year(let year): return "Year: \(year)"
+        case .tag(let tag): return "Tag: \(tag)"
+        case .starRating(let stars): return "\(stars) Star\(stars == 1 ? "" : "s")"
+        case .combined(let types): return "Combined (\(types.count) criteria)"
         }
     }
     
@@ -577,7 +636,7 @@ struct SearchFiltersView: View {
             
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Clear All") {
+                    Button("Clear All", systemImage: "xmark") {
                         viewModel.clearFilters()
                     }
                     .foregroundColor(.red)
@@ -585,7 +644,7 @@ struct SearchFiltersView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
+                    Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                     .foregroundColor(.blue)

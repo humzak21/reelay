@@ -191,29 +191,51 @@ class DataManagerRailway: ObservableObject {
     
     func loadMoviesFromCache() async {
         let startTime = Date()
+        print("🚂 [MOVIES] Starting Railway cache fetch at \(startTime)")
+        print("🚂 [MOVIES] Attempting to fetch movies from Railway PostgreSQL + Redis cache")
+        
         do {
             let cachedMovies = try await railwayService.fetchMovies()
+            let duration = Date().timeIntervalSince(startTime)
+            
             await MainActor.run {
                 self.allMovies = cachedMovies
             }
+            
             railwayService.logCacheOperation("FETCH", endpoint: "movies", startTime: startTime, success: true, cacheHit: nil)
-            print("✅ Loaded \(cachedMovies.count) movies from Railway cache")
+            print("✅ [MOVIES] SUCCESS: Loaded \(cachedMovies.count) movies from Railway cache")
+            print("⚡ [MOVIES] Cache fetch completed in \(String(format: "%.3f", duration))s")
+            print("🎯 [MOVIES] Data source: Railway (PostgreSQL + Redis)")
+            print("📊 [MOVIES] Cache performance: OPTIMAL - No Supabase fallback needed")
+            
         } catch let railwayError as RailwayCacheError {
+            let duration = Date().timeIntervalSince(startTime)
             railwayService.logCacheOperation("FETCH", endpoint: "movies", startTime: startTime, success: false)
+            
+            print("❌ [MOVIES] CACHE FAILURE after \(String(format: "%.3f", duration))s")
             switch railwayError {
-            case .serverError(let code, _):
-                print("⚠️ Railway server error (\(code)) - falling back to Supabase")
-            case .htmlError(_):
-                print("⚠️ Railway returned HTML error page - falling back to Supabase")
+            case .serverError(let code, let message):
+                print("🔥 [MOVIES] Railway server error (HTTP \(code)): \(message)")
+                print("🔥 [MOVIES] This indicates Railway PostgreSQL connection issues")
+            case .htmlError(let html):
+                print("🔥 [MOVIES] Railway returned HTML error page (likely 500/503)")
+                print("🔥 [MOVIES] HTML snippet: \(String(html.prefix(200)))...")
             case .decodingError(let message):
-                print("⚠️ Railway JSON decoding failed: \(message) - falling back to Supabase")
+                print("🔥 [MOVIES] Railway JSON decoding failed: \(message)")
+                print("🔥 [MOVIES] This suggests data corruption or API changes")
             case .invalidData(let message):
-                print("⚠️ Railway invalid data: \(message) - falling back to Supabase")
+                print("🔥 [MOVIES] Railway invalid data: \(message)")
             }
+            print("⚠️ [MOVIES] FALLBACK: Switching to direct Supabase due to Railway failure")
             await loadMoviesFromSupabase()
+            
         } catch {
+            let duration = Date().timeIntervalSince(startTime)
             railwayService.logCacheOperation("FETCH", endpoint: "movies", startTime: startTime, success: false)
-            print("⚠️ Failed to load movies from Railway cache, falling back to direct Supabase: \(error)")
+            print("❌ [MOVIES] UNEXPECTED ERROR after \(String(format: "%.3f", duration))s: \(error)")
+            print("❌ [MOVIES] Error type: \(type(of: error))")
+            print("❌ [MOVIES] Error details: \(error.localizedDescription)")
+            print("⚠️ [MOVIES] FALLBACK: Switching to direct Supabase due to unexpected error")
             await loadMoviesFromSupabase()
         }
     }
@@ -426,7 +448,7 @@ class DataManagerRailway: ObservableObject {
         await loadMoviesFromCache()
         await loadMoviesFromCache() // Second call should be faster if cached
         
-        if let user = movieService.currentUser {
+        if movieService.currentUser != nil {
             await loadListsFromCache()
             await loadListsFromCache() // Second call should be faster if cached
         }
@@ -438,7 +460,7 @@ class DataManagerRailway: ObservableObject {
     }
     
     func getCacheStats() async -> String {
-        guard let user = movieService.currentUser else {
+        guard movieService.currentUser != nil else {
             return "No user logged in for cache stats"
         }
         
@@ -464,5 +486,13 @@ class DataManagerRailway: ObservableObject {
         }
         
         return stats
+    }
+
+    func updatePosterForTmdbId(tmdbId: Int, newPosterUrl: String) async throws {
+        try await listService.updateListItemPoster(tmdbId: tmdbId, newPosterUrl: newPosterUrl)
+    }
+    
+    func updateBackdropForTmdbId(tmdbId: Int, newBackdropUrl: String) async throws {
+        try await listService.updateListItemBackdrop(tmdbId: tmdbId, newBackdropUrl: newBackdropUrl)
     }
 }

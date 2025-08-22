@@ -33,6 +33,8 @@ struct MovieDetailsView: View {
     @State private var movieLists: [MovieList] = []
     @State private var selectedList: MovieList?
     @State private var showingListDetails = false
+    @State private var showingPosterChange = false
+    @State private var showingBackdropChange = false
     
     init(movie: Movie) {
         self.movie = movie
@@ -212,6 +214,54 @@ struct MovieDetailsView: View {
                 ListDetailsView(list: selectedList)
             }
         }
+        .sheet(isPresented: $showingPosterChange) {
+            if let tmdbId = currentMovie.tmdb_id {
+                PosterChangeView(
+                    tmdbId: tmdbId,
+                    currentPosterUrl: currentMovie.poster_url,
+                    movieTitle: currentMovie.title
+                ) { newPosterUrl in
+                    // Refresh the movie data from backend to get the updated poster
+                    Task {
+                        if let tmdbId = currentMovie.tmdb_id {
+                            do {
+                                let updatedMovies = try await movieService.getMoviesByTmdbId(tmdbId: tmdbId)
+                                if let latestMovie = updatedMovies.first(where: { $0.id == currentMovie.id }) {
+                                    currentMovie = latestMovie
+                                }
+                            } catch {
+                                // If refresh fails, just update the poster URL for immediate UI feedback
+                                // The backend has already been updated by PosterChangeView
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingBackdropChange) {
+            if let tmdbId = currentMovie.tmdb_id {
+                BackdropChangeView(
+                    tmdbId: tmdbId,
+                    currentBackdropUrl: currentMovie.backdrop_path,
+                    movieTitle: currentMovie.title
+                ) { newBackdropUrl in
+                    // Refresh the movie data from backend to get the updated backdrop
+                    Task {
+                        if let tmdbId = currentMovie.tmdb_id {
+                            do {
+                                let updatedMovies = try await movieService.getMoviesByTmdbId(tmdbId: tmdbId)
+                                if let latestMovie = updatedMovies.first(where: { $0.id == currentMovie.id }) {
+                                    currentMovie = latestMovie
+                                }
+                            } catch {
+                                // If refresh fails, backdrop has already been updated in backend
+                                // The backend has already been updated by BackdropChangeView
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     
     private var unloggedMovieView: some View {
@@ -230,6 +280,16 @@ struct MovieDetailsView: View {
                 .frame(width: 100, height: 150)
                 .cornerRadius(12)
                 .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                .contextMenu {
+                    if currentMovie.tmdb_id != nil {
+                        Button("Change Poster", systemImage: "photo") {
+                            showingPosterChange = true
+                        }
+                        Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
+                            showingBackdropChange = true
+                        }
+                    }
+                }
                 
                 // Movie Details
                 VStack(alignment: .leading, spacing: 6) {
@@ -378,6 +438,16 @@ struct MovieDetailsView: View {
                 .frame(width: 100, height: 150)
                 .cornerRadius(12)
                 .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+                .contextMenu {
+                    if currentMovie.tmdb_id != nil {
+                        Button("Change Poster", systemImage: "photo") {
+                            showingPosterChange = true
+                        }
+                        Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
+                            showingBackdropChange = true
+                        }
+                    }
+                }
                 
                 // Movie Details
                 VStack(alignment: .leading, spacing: 6) {
@@ -669,6 +739,24 @@ struct MovieDetailsView: View {
                 Text(formattedReleaseDate)
                     .font(.body)
                     .foregroundColor(.white)
+            }
+            
+            if let overview = currentMovie.overview, !overview.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Overview")
+                            .font(.body)
+                            .foregroundColor(.gray)
+                        
+                        Spacer()
+                    }
+                    
+                    Text(overview)
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             
             HStack {

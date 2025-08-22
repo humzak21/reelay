@@ -133,145 +133,115 @@ struct LoggedInProfileView: View {
     @State private var showingSignOutAlert = false
     @State private var showingSettings = false
     @State private var backdropMovie: Movie?
+    @State private var showingAddMovie = false
+    @Environment(\.colorScheme) private var colorScheme
+    
+    private var appBackground: Color {
+        colorScheme == .dark ? .black : Color(.systemBackground)
+    }
     
     var body: some View {
-        ZStack {
-            // Background with movie backdrop
-            if let backdropMovie = backdropMovie,
-               let backdropURL = backdropMovie.backdropURL {
-                AsyncImage(url: backdropURL) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .ignoresSafeArea()
-                 } placeholder: {
-                    Color(.systemBackground)
-                        .ignoresSafeArea()
-                }
-                .overlay(
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color.black.opacity(0.7),
-                            Color.black.opacity(0.3),
-                            Color.black.opacity(0.7)
-                        ]),
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .ignoresSafeArea()
-                )
-            } else {
-                Color(.systemBackground)
-                    .ignoresSafeArea()
-            }
-            
+        NavigationView {
             ScrollView {
-                VStack(spacing: 24) {
-                    // User Info with Profile Picture
+                LazyVStack(spacing: 0) {
+                    // Backdrop Section with overlaid profile info
+                    ZStack(alignment: .bottom) {
+                        backdropSection
+                        profileInfoSection
+                    }
+                    
+                    // Content Section
                     VStack(spacing: 16) {
-                        // Profile Picture (from Google, non-interactive)
-                        Group {
-                            if let profilePictureUrl = profileService.currentUserProfile?.picture,
-                               let url = URL(string: profilePictureUrl) {
-                                AsyncImage(url: url) { image in
-                                    image
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                } placeholder: {
-                                    Image(systemName: "person.circle.fill")
-                                        .font(.system(size: 100))
-                                        .foregroundColor(.blue)
-                                }
-                                .frame(width: 100, height: 100)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.white, lineWidth: 3)
+                        // Navigation Options
+                        VStack(spacing: 0) {
+                            NavigationLink(destination: MoviesView()) {
+                                ProfileOptionRow(
+                                    icon: "film",
+                                    title: "Diary",
+                                    subtitle: "View your movie diary",
+                                    action: {}
                                 )
-                                .shadow(radius: 10)
-                            } else {
-                                Image(systemName: "person.circle.fill")
-                                    .font(.system(size: 100))
-                                    .foregroundColor(.blue)
-                                    .overlay(
-                                        Circle()
-                                            .stroke(Color.white, lineWidth: 3)
-                                    )
-                                    .shadow(radius: 10)
                             }
+                            .buttonStyle(PlainButtonStyle())
+                            
+                            NavigationLink(destination: ListsView()) {
+                                ProfileOptionRow(
+                                    icon: "list.bullet",
+                                    title: "Lists",
+                                    subtitle: "Manage your movie lists",
+                                    action: {}
+                                )
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            
+                            NavigationLink(destination: StatisticsView()) {
+                                ProfileOptionRow(
+                                    icon: "chart.bar",
+                                    title: "Statistics",
+                                    subtitle: "Your viewing stats",
+                                    action: {}
+                                )
+                            }
+                            .buttonStyle(PlainButtonStyle())
                         }
+                        .background(Color(.secondarySystemBackground).opacity(0.8))
+                        .cornerRadius(12)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
                         
-                        Text(profileService.currentUserProfile?.name ?? "Unknown User")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
-                            .shadow(radius: 2)
-                        
-                        Text("Movie enthusiast")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .shadow(radius: 2)
+                        // Sign Out Button
+                        Button(action: {
+                            showingSignOutAlert = true
+                        }) {
+                            Text("Sign Out")
+                                .fontWeight(.semibold)
+                                .foregroundColor(.red)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(Color(.secondarySystemBackground).opacity(0.8))
+                        .cornerRadius(10)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 40)
                     }
-                    .padding(.top, 40)
-                    
-                    // Profile Options
-                    VStack(spacing: 0) {
-                        ProfileOptionRow(
-                            icon: "film",
-                            title: "Movies Watched",
-                            subtitle: "View your diary",
-                            action: {}
-                        )
-                        
-                        ProfileOptionRow(
-                            icon: "star",
-                            title: "Ratings & Reviews",
-                            subtitle: "Manage your reviews",
-                            action: {}
-                        )
-                        
-                        ProfileOptionRow(
-                            icon: "chart.bar",
-                            title: "Statistics",
-                            subtitle: "Your viewing stats",
-                            action: {}
-                        )
-                    }
-                    .background(Color(.secondarySystemBackground).opacity(0.6))
-                    .cornerRadius(12)
                     .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                    .background(appBackground)
                     
-                    // Sign Out Button
-                    Button(action: {
-                        showingSignOutAlert = true
-                    }) {
-                        Text("Sign Out")
-                            .fontWeight(.semibold)
-                            .foregroundColor(.red)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(Color(.secondarySystemBackground).opacity(0.6))
-                    .cornerRadius(10)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 40)
+                    Spacer(minLength: 100)
                 }
             }
+            .background(appBackground.ignoresSafeArea())
+            .ignoresSafeArea(edges: .top)
         }
         .navigationTitle("Profile")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .navigationBarLeading) {
                 Button(action: {
                     showingSettings = true
                 }) {
-                        Image(systemName: "gear")
-                            .foregroundColor(.primary)
+                    Image(systemName: "gear")
+                        .foregroundColor(.white)
+                        .fontWeight(.medium)
+                }
+            }
+            
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showingAddMovie = true
+                }) {
+                    Image(systemName: "plus")
+                        .foregroundColor(.white)
+                        .fontWeight(.medium)
                 }
             }
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showingAddMovie) {
+            AddMoviesView()
         }
         .alert("Sign Out", isPresented: $showingSignOutAlert) {
             Button("Cancel", role: .cancel) {}
@@ -288,12 +258,196 @@ struct LoggedInProfileView: View {
         }
     }
     
+    private var backdropSection: some View {
+        Group {
+            // Backdrop image
+            if let backdropMovie = backdropMovie,
+               let backdropURL = backdropMovie.backdropURL {
+                AsyncImage(url: backdropURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    case .failure(_):
+                        // Fallback to default gradient when backdrop fails
+                        LinearGradient(
+                            colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.8)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    case .empty:
+                        // Loading state
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                    @unknown default:
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.3))
+                    }
+                }
+                .frame(height: 400)
+                .clipped()
+                .overlay(
+                    // Enhanced gradient overlay for readability
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.1), 
+                            Color.black.opacity(0.3),
+                            Color.black.opacity(0.6),
+                            Color.black.opacity(0.8)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            } else {
+                // Fallback gradient when no backdrop
+                LinearGradient(
+                    colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.8)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .frame(height: 400)
+                .overlay(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.1), 
+                            Color.black.opacity(0.3),
+                            Color.black.opacity(0.6),
+                            Color.black.opacity(0.8)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+        }
+    }
+    
+    private var profileInfoSection: some View {
+        VStack(spacing: 12) {
+            // Profile Picture (tappable to open Letterboxd)
+            Group {
+                if let profilePictureUrl = profileService.currentUserProfile?.picture,
+                   let url = URL(string: profilePictureUrl) {
+                    AsyncImage(url: url) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Image(systemName: "person.circle.fill")
+                            .font(.system(size: 120))
+                            .foregroundColor(.blue)
+                    }
+                    .frame(width: 120, height: 120)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white, lineWidth: 4)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 8)
+                } else {
+                    Image(systemName: "person.circle.fill")
+                        .font(.system(size: 120))
+                        .foregroundColor(.blue)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white, lineWidth: 4)
+                        )
+                        .shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 8)
+                }
+            }
+            .onTapGesture {
+                openLetterboxd()
+            }
+            
+            VStack(spacing: 6) {
+                Text(profileService.currentUserProfile?.name ?? "Loading...")
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .shadow(color: .black, radius: 4, x: 0, y: 2)
+                
+                Text("I have no idea what I'm talking about.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .shadow(color: .black, radius: 2, x: 0, y: 1)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .padding(.horizontal, 20)
+            }
+        }
+        .padding(.bottom, 30)
+        .frame(maxWidth: .infinity)
+    }
+    
     private func loadProfileData() async {
+        let startTime = Date()
+        print("👤 [PROFILEVIEW] Starting profile data load")
+        print("🚂 [PROFILEVIEW] Testing Railway cache for user profile...")
+        
         do {
-            _ = try await profileService.getCurrentUserProfile()
-            backdropMovie = try await profileService.getSelectedBackdropMovie()
+            // First try Railway cache for profile
+            var railwayProfile: UserProfile?
+            if let currentUser = authService.currentUser {
+                do {
+                    railwayProfile = try await DataManagerRailway.shared.loadUserProfileFromCache(userId: currentUser.id.uuidString)
+                    let cacheHitTime = Date().timeIntervalSince(startTime)
+                    print("✅ [PROFILEVIEW] Railway cache HIT for user profile in \(String(format: "%.3f", cacheHitTime))s")
+                    print("🎯 [PROFILEVIEW] Using cached profile data - skipping Supabase for profile")
+                } catch {
+                    print("⚠️ [PROFILEVIEW] Railway cache MISS for profile: \(error)")
+                    print("🔄 [PROFILEVIEW] Falling back to direct Supabase profile service...")
+                }
+            }
+            
+            // Use Railway cache if available, otherwise fallback to Supabase
+            let profile: UserProfile?
+            let profileDuration: TimeInterval
+            
+            if let railwayProfile = railwayProfile {
+                profile = railwayProfile
+                profileDuration = Date().timeIntervalSince(startTime)
+                print("✅ [PROFILEVIEW] Profile loaded from Railway cache in \(String(format: "%.3f", profileDuration))s")
+            } else {
+                let fallbackStart = Date()
+                profile = try await profileService.getCurrentUserProfile()
+                profileDuration = Date().timeIntervalSince(fallbackStart)
+                print("🔄 [PROFILEVIEW] Profile loaded from Supabase fallback in \(String(format: "%.3f", profileDuration))s")
+            }
+            
+            await MainActor.run {
+                Task {
+                    let backdropStart = Date()
+                    do {
+                        backdropMovie = try await profileService.getSelectedBackdropMovie()
+                        let backdropDuration = Date().timeIntervalSince(backdropStart)
+                        print("🎬 [PROFILEVIEW] Backdrop movie loaded in \(String(format: "%.3f", backdropDuration))s")
+                    } catch {
+                        backdropMovie = nil
+                        print("⚠️ [PROFILEVIEW] Failed to load backdrop movie: \(error)")
+                    }
+                    
+                    let totalDuration = Date().timeIntervalSince(startTime)
+                    print("📊 [PROFILEVIEW] Total profile load completed in \(String(format: "%.3f", totalDuration))s")
+                }
+            }
         } catch {
-            // Silently handle error
+            let duration = Date().timeIntervalSince(startTime)
+            print("❌ [PROFILEVIEW] Profile load FAILED after \(String(format: "%.3f", duration))s: \(error)")
+        }
+    }
+    
+    private func openLetterboxd() {
+        if let url = URL(string: "letterboxd://") {
+            if UIApplication.shared.canOpenURL(url) {
+                UIApplication.shared.open(url)
+            } else {
+                // Fallback to App Store if Letterboxd isn't installed
+                if let appStoreURL = URL(string: "https://apps.apple.com/app/letterboxd/id1054271011") {
+                    UIApplication.shared.open(appStoreURL)
+                }
+            }
         }
     }
     

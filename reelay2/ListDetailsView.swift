@@ -806,6 +806,8 @@ struct MoviePosterView: View {
     @State private var selectedMovie: Movie?
     @State private var showingMovieDetails = false
     @State private var isLoadingMovie = false
+    @State private var showingPosterChange = false
+    @State private var showingBackdropChange = false
     
     var body: some View {
         Button(action: {
@@ -889,7 +891,13 @@ struct MoviePosterView: View {
                 }, alignment: .topLeading
             )
             .contextMenu {
-                Button("Remove from List", role: .destructive) {
+                Button("Change Poster", systemImage: "photo") {
+                    showingPosterChange = true
+                }
+                Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
+                    showingBackdropChange = true
+                }
+                Button("Remove from List", systemImage: "trash", role: .destructive) {
                     showingRemoveAlert = true
                 }
             }
@@ -910,6 +918,24 @@ struct MoviePosterView: View {
                 MovieDetailsView(movie: selectedMovie)
             }
         }
+        .sheet(isPresented: $showingPosterChange) {
+            PosterChangeView(
+                tmdbId: item.tmdbId,
+                currentPosterUrl: item.moviePosterUrl,
+                movieTitle: item.movieTitle
+            ) { newPosterUrl in
+                // The poster will be updated automatically through the data manager
+            }
+        }
+        .sheet(isPresented: $showingBackdropChange) {
+            BackdropChangeView(
+                tmdbId: item.tmdbId,
+                currentBackdropUrl: item.movieBackdropPath,
+                movieTitle: item.movieTitle
+            ) { newBackdropUrl in
+                // The backdrop will be updated automatically through the data manager
+            }
+        }
     }
     
     private func removeMovie() async {
@@ -927,12 +953,15 @@ struct MoviePosterView: View {
             let movies = try await dataManager.getMoviesByTmdbId(tmdbId: item.tmdbId)
             
             if movies.isEmpty {
-                // No entries exist, create a placeholder movie for the unlogged state
+                // No entries exist, fetch movie details from TMDB and create a placeholder movie
+                let tmdbService = TMDBService.shared
+                let movieDetails = try await tmdbService.getMovieDetails(movieId: item.tmdbId)
+                
                 let placeholderMovie = Movie(
                     id: -1, // Use -1 to indicate this is a placeholder
                     title: item.movieTitle,
                     release_year: item.movieYear,
-                    release_date: nil,
+                    release_date: movieDetails.releaseDate,
                     rating: nil,
                     detailed_rating: nil,
                     review: nil,
@@ -940,23 +969,23 @@ struct MoviePosterView: View {
                     watch_date: nil,
                     is_rewatch: nil,
                     tmdb_id: item.tmdbId,
-                    overview: nil,
+                    overview: movieDetails.overview,
                     poster_url: item.moviePosterUrl,
                     backdrop_path: item.movieBackdropPath,
                     director: nil,
-                    runtime: nil,
-                    vote_average: nil,
-                    vote_count: nil,
-                    popularity: nil,
-                    original_language: nil,
-                    original_title: nil,
-                    tagline: nil,
-                    status: nil,
-                    budget: nil,
-                    revenue: nil,
-                    imdb_id: nil,
-                    homepage: nil,
-                    genres: nil,
+                    runtime: movieDetails.runtime,
+                    vote_average: movieDetails.voteAverage,
+                    vote_count: movieDetails.voteCount,
+                    popularity: movieDetails.popularity,
+                    original_language: movieDetails.originalLanguage,
+                    original_title: movieDetails.originalTitle,
+                    tagline: movieDetails.tagline,
+                    status: movieDetails.status,
+                    budget: movieDetails.budget,
+                    revenue: movieDetails.revenue,
+                    imdb_id: movieDetails.imdbId,
+                    homepage: movieDetails.homepage,
+                    genres: movieDetails.genreNames,
                     created_at: nil,
                     updated_at: nil
                 )
