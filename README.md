@@ -99,6 +99,6 @@ A personal media hub for tracking movies, music, and TV shows with rich metadata
 
 ### Profile & Tools
 <p align="center">
-  <img src="reelay2/screenshots/ProfileView.PNG" width="200" />
+  <img src="reelay2/screenshots/ProfileView.png" width="200" />
   <img src="reelay2/screenshots/RandomizerView.PNG" width="200" />
 </p>
