@@ -43,7 +43,7 @@ class SupabaseListService: ObservableObject {
     
     // MARK: - List Operations
     
-    func createList(name: String, description: String? = nil, ranked: Bool = false) async throws -> MovieList {
+    func createList(name: String, description: String? = nil, ranked: Bool = false, tags: [String] = [], themedMonthDate: Date? = nil) async throws -> MovieList {
         isLoading = true
         error = nil
         
@@ -54,11 +54,14 @@ class SupabaseListService: ObservableObject {
                 throw ListServiceError.authenticationRequired
             }
             
+            let tagsString = tags.isEmpty ? nil : tags.joined(separator: ", ")
             let requestBody = CreateListRequest(
                 name: name,
                 description: description,
                 userId: currentUserId.uuidString,
-                ranked: ranked
+                ranked: ranked,
+                tags: tagsString,
+                themedMonthDate: themedMonthDate
             )
             
             let response = try await supabaseClient
@@ -85,14 +88,25 @@ class SupabaseListService: ObservableObject {
         }
     }
     
-    func updateList(_ list: MovieList, name: String? = nil, description: String? = nil, ranked: Bool? = nil) async throws -> MovieList {
+    func updateList(_ list: MovieList, name: String? = nil, description: String? = nil, ranked: Bool? = nil, tags: [String]? = nil, themedMonthDate: Date? = nil, updateThemedMonthDate: Bool = false) async throws -> MovieList {
         isLoading = true
         error = nil
         
         defer { isLoading = false }
         
         do {
-            let requestBody = UpdateListRequest(name: name, description: description, ranked: ranked)
+            let tagsString = tags?.isEmpty == false ? tags?.joined(separator: ", ") : nil
+            
+            // For themed month date, we need to handle the special case where we want to explicitly set to null
+            // Only set alwaysUpdateThemedMonthDate to true if we're explicitly updating the themed month date
+            let requestBody = UpdateListRequest(
+                name: name,
+                description: description,
+                ranked: ranked,
+                tags: tagsString,
+                themedMonthDate: themedMonthDate,
+                alwaysUpdateThemedMonthDate: updateThemedMonthDate
+            )
             
             let response = try await supabaseClient
                 .from("lists")
@@ -161,7 +175,9 @@ class SupabaseListService: ObservableObject {
             updatedAt: list.updatedAt,
             itemCount: list.itemCount,
             pinned: true,
-            ranked: list.ranked
+            ranked: list.ranked,
+            tags: list.tags,
+            themedMonthDate: list.themedMonthDate
         )
         
         _ = try await updateListPinnedStatus(updatedList, pinned: true)
@@ -177,7 +193,9 @@ class SupabaseListService: ObservableObject {
             updatedAt: list.updatedAt,
             itemCount: list.itemCount,
             pinned: false,
-            ranked: list.ranked
+            ranked: list.ranked,
+            tags: list.tags,
+            themedMonthDate: list.themedMonthDate
         )
         
         _ = try await updateListPinnedStatus(updatedList, pinned: false)
@@ -211,7 +229,9 @@ class SupabaseListService: ObservableObject {
                 updatedAt: now,
                 itemCount: list.itemCount,
                 pinned: pinned,
-                ranked: list.ranked
+                ranked: list.ranked,
+                tags: list.tags,
+                themedMonthDate: list.themedMonthDate
             )
             
             // Update local data
@@ -656,7 +676,9 @@ class SupabaseListService: ObservableObject {
                         updatedAt: list.updatedAt,
                         itemCount: items.count,
                         pinned: list.pinned,
-                        ranked: list.ranked
+                        ranked: list.ranked,
+                        tags: list.tags,
+                        themedMonthDate: list.themedMonthDate
                     )
                     listsWithCounts.append(listWithCount)
                     listItems[list.id] = items
@@ -812,7 +834,9 @@ class SupabaseListService: ObservableObject {
                 updatedAt: movieLists[listIndex].updatedAt,
                 itemCount: itemCount,
                 pinned: movieLists[listIndex].pinned,
-                ranked: movieLists[listIndex].ranked
+                ranked: movieLists[listIndex].ranked,
+                tags: movieLists[listIndex].tags,
+                themedMonthDate: movieLists[listIndex].themedMonthDate
             )
             movieLists[listIndex] = updatedList
             try? saveListLocally(updatedList)
@@ -857,7 +881,9 @@ class SupabaseListService: ObservableObject {
                 updatedAt: now,
                 itemCount: list.itemCount,
                 pinned: list.pinned,
-                ranked: list.ranked
+                ranked: list.ranked,
+                tags: list.tags,
+                themedMonthDate: list.themedMonthDate
             )
             try? saveListLocally(bumped)
             movieLists[index] = bumped

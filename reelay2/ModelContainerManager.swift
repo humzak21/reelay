@@ -34,16 +34,41 @@ class ModelContainerManager {
         do {
             self.modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            // Try to delete the existing database and recreate
+            print("SwiftData migration failed: \(error)")
+            
+            // Check if this is specifically the tags attribute migration error
+            let errorDescription = error.localizedDescription
+            if errorDescription.contains("tags") && errorDescription.contains("PersistentMovieList") {
+                print("Detected missing tags attribute on PersistentMovieList - removing database for clean migration")
+            } else {
+                print("General SwiftData migration error - removing database for clean migration")
+            }
+            
+            // Try to delete the existing database and related files
             do {
-                if FileManager.default.fileExists(atPath: storeURL.path) {
-                    try FileManager.default.removeItem(at: storeURL)
+                let fileManager = FileManager.default
+                let parentURL = storeURL.deletingLastPathComponent()
+                let fileName = storeURL.deletingPathExtension().lastPathComponent
+                
+                // Remove all database-related files
+                let filesToRemove = [
+                    storeURL.path,
+                    storeURL.path + "-shm",
+                    storeURL.path + "-wal"
+                ]
+                
+                for filePath in filesToRemove {
+                    if fileManager.fileExists(atPath: filePath) {
+                        try fileManager.removeItem(atPath: filePath)
+                        print("Removed: \(filePath)")
+                    }
                 }
                 
-                // Try creating the container again
+                // Try creating the container again with fresh database
                 self.modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
+                print("Successfully created fresh ModelContainer after database reset")
             } catch {
-                fatalError("Could not create ModelContainer even after reset: \(error)")
+                fatalError("Could not create ModelContainer even after complete database reset: \(error)")
             }
         }
     }

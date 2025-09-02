@@ -2,7 +2,7 @@
 //  PosterChangeView.swift
 //  reelay2
 //
-//  Created by Claude on [Current Date].
+//  Created by Humza Khalil
 //
 
 import SwiftUI

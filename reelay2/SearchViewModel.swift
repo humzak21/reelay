@@ -2,7 +2,7 @@
 //  SearchViewModel.swift
 //  reelay2
 //
-//  Created by Assistant on 8/10/25.
+//  Created by Humza Khalil on 8/10/25.
 //
 
 import Foundation
@@ -22,8 +22,10 @@ class SearchViewModel: ObservableObject {
     private var searchCancellable: AnyCancellable?
     private var searchTask: Task<Void, Never>?
     
-    // Available tags from CLAUDE.md
-    private let availableTags = ["IMAX", "Theater", "Family", "Theboys", "Airplane", "Train", "Short"]
+    // Available tags from centralized configuration
+    private var availableTags: [String] {
+        return TagConfiguration.allTagNames
+    }
     
     enum SearchType {
         case general(String)

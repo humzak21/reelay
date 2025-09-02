@@ -223,12 +223,6 @@ struct StatisticsView: View {
         }
         .task {
             if !hasLoadedInitially {
-                // Test Railway cache performance
-                Task {
-                    await DataManagerRailway.shared.enableDetailedLogging()
-                    await DataManagerRailway.shared.runCachePerformanceTest()
-                }
-                
                 await loadAvailableYears()
                 await loadStatisticsIfNeeded(force: true)
                 hasLoadedInitially = true
@@ -513,26 +507,10 @@ struct StatisticsView: View {
         }
         
         let startTime = Date()
-        print("📊 [STATISTICSVIEW] Starting statistics load for year: \(selectedYear?.description ?? "all-time")")
-        print("🚂 [STATISTICSVIEW] Testing Railway cache for statistics data...")
         
         do {
-            // First try Railway cache for dashboard stats
-            var railwayDashboard: DashboardStats?
-            if let currentUser = movieService.currentUser {
-                do {
-                    railwayDashboard = try await DataManagerRailway.shared.loadStatisticsFromCache(userId: currentUser.id.uuidString)
-                    let cacheHitTime = Date().timeIntervalSince(startTime)
-                    print("✅ [STATISTICSVIEW] Railway cache HIT for dashboard stats in \(String(format: "%.3f", cacheHitTime))s")
-                    print("🎯 [STATISTICSVIEW] Using cached dashboard data - skipping Supabase for main stats")
-                } catch {
-                    print("⚠️ [STATISTICSVIEW] Railway cache MISS for dashboard stats: \(error)")
-                    print("🔄 [STATISTICSVIEW] Falling back to direct Supabase statistics...")
-                }
-            }
-            
-            // Load remaining stats (using Railway cache for dashboard if available, otherwise all from Supabase)
-            async let dashboardTask = railwayDashboard != nil ? railwayDashboard! : try await statisticsService.getDashboardStats(year: selectedYear)
+            // Load all stats from Supabase
+            async let dashboardTask = statisticsService.getDashboardStats(year: selectedYear)
             async let ratingTask = statisticsService.getRatingDistribution(year: selectedYear)
             async let decadeTask = statisticsService.getFilmsByDecade(year: selectedYear)
             async let yearTask = statisticsService.getFilmsPerYear(year: selectedYear)
@@ -605,9 +583,7 @@ struct StatisticsView: View {
                 // Cache the loaded data
                 self.cacheCurrentData()
                 
-                let totalDuration = Date().timeIntervalSince(startTime)
-                print("✅ [STATISTICSVIEW] Statistics load completed in \(String(format: "%.3f", totalDuration))s")
-                print("📊 [STATISTICSVIEW] Data sources: Railway cache for dashboard stats, Supabase for detailed charts")
+                _ = Date().timeIntervalSince(startTime)
             }
             
         } catch {
@@ -2088,6 +2064,31 @@ struct RatingDistributionChart: View {
             .chartLongPress(data: completeDistribution, color: .blue, chartProxy: chartProxy)
             .padding(.horizontal, 12)
             
+            // Highest rating indicator
+            if let highestRating = completeDistribution.max(by: { $0.count < $1.count }) {
+                HStack {
+                    Spacer()
+                    Text("\(String(format: "%.1f", highestRating.ratingValue))★ - \(highestRating.count) films")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.blue.opacity(0.8), .cyan.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
+            
             if let selectedBar = selectedBar {
                 let labelText = "\(String(format: "%.1f", selectedBar.ratingValue))★: \(selectedBar.count) films"
                 SelectionInfoRow(text: labelText, color: .blue)
@@ -2224,6 +2225,31 @@ struct FilmsByDecadeChart: View {
             }
             .chartLongPress(data: completeDecadeRange, color: .orange, chartProxy: chartProxy)
             .padding(.horizontal, 12)
+            
+            // Highest decade indicator
+            if let highestDecade = completeDecadeRange.max(by: { $0.count < $1.count }) {
+                HStack {
+                    Spacer()
+                    Text("\(highestDecade.decade)s - \(highestDecade.count) films")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.orange.opacity(0.8), .red.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
             
             if let selectedBar = selectedBar {
                 let labelText = "\(selectedBar.decade)s: \(selectedBar.count) films"
@@ -2374,6 +2400,31 @@ struct DayOfWeekChart: View {
             }
             .chartLongPress(data: completeDayRange, color: .yellow, chartProxy: chartProxy)
             .padding(.horizontal, 12)
+            
+            // Highest day indicator
+            if let highestDay = completeDayRange.max(by: { $0.count < $1.count }) {
+                HStack {
+                    Spacer()
+                    Text("\(highestDay.dayOfWeek) - \(highestDay.count) films")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.yellow.opacity(0.8), .orange.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
             
             if let selectedBar = selectedBar {
                 let labelText = "\(selectedBar.dayOfWeek): \(selectedBar.count) films"
@@ -2548,6 +2599,31 @@ struct FilmsPerYearChart: View {
             .chartLongPress(data: filmsPerYear, color: .green, chartProxy: chartProxy)
             .padding(.horizontal, 12)
             
+            // Highest year indicator
+            if let highestYear = filmsPerYear.max(by: { $0.count < $1.count }) {
+                HStack {
+                    Spacer()
+                    Text("\(String(highestYear.year)) - \(highestYear.count) films")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.green.opacity(0.8), .mint.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
+            
             if let selectedBar = selectedBar {
                 let labelText = "\(selectedBar.year): \(selectedBar.count) films"
                 SelectionInfoRow(text: labelText, color: .green)
@@ -2681,6 +2757,31 @@ struct FilmsPerMonthChart: View {
             .chartLongPress(data: filmsPerMonth, color: .blue, chartProxy: chartProxy)
             .padding(.horizontal, 12)
             
+            // Highest month indicator
+            if let highestMonth = filmsPerMonth.max(by: { $0.count < $1.count }) {
+                HStack {
+                    Spacer()
+                    Text("\(monthName(for: highestMonth.month)) - \(highestMonth.count) films")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.blue.opacity(0.8), .cyan.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
+            
             if let selectedBar = selectedBar {
                 let labelText = "\(monthName(for: selectedBar.month)): \(selectedBar.count) films"
                 SelectionInfoRow(text: labelText, color: .blue)
@@ -2812,22 +2913,49 @@ struct WeeklyFilmsChart: View {
     }
     
     private var weeklyChart: some View {
-        Chart(weeklyData, id: \.weekNumber) { item in
-            weeklyBarMark(for: item)
+        VStack(spacing: 8) {
+            Chart(weeklyData, id: \.weekNumber) { item in
+                weeklyBarMark(for: item)
+            }
+            .chartXScale(domain: chartXDomain)
+            .frame(height: 200)
+            .chartXAxis {
+                weeklyXAxis
+            }
+            .chartYAxis {
+                weeklyYAxis
+            }
+            .chartBackground { proxy in
+                weeklyChartBackground(proxy: proxy)
+            }
+            .chartLongPress(data: weeklyData, color: .purple, chartProxy: chartProxy)
+            .padding(.horizontal, 12)
+            
+            // Highest week indicator
+            if let highestWeek = weeklyData.max(by: { $0.count < $1.count }) {
+                HStack {
+                    Spacer()
+                    Text("\(highestWeek.weekLabel) - \(highestWeek.count) films")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.purple.opacity(0.8), .pink.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
         }
-        .chartXScale(domain: chartXDomain)
-        .frame(height: 200)
-        .chartXAxis {
-            weeklyXAxis
-        }
-        .chartYAxis {
-            weeklyYAxis
-        }
-        .chartBackground { proxy in
-            weeklyChartBackground(proxy: proxy)
-        }
-        .chartLongPress(data: weeklyData, color: .purple, chartProxy: chartProxy)
-        .padding(.horizontal, 12)
     }
     
     private func weeklyBarMark(for item: WeeklyFilmsData) -> some ChartContent {
@@ -3948,6 +4076,31 @@ struct AverageStarRatingPerYearChart: View {
             .chartLongPress(data: averageStarRatings, color: .yellow, chartProxy: chartProxy)
             .padding(.horizontal, 12)
             
+            // Highest average rating year indicator
+            if let highestAvgYear = averageStarRatings.max(by: { $0.averageRating < $1.averageRating }) {
+                HStack {
+                    Spacer()
+                    Text("\(String(highestAvgYear.year)) - \(String(format: "%.2f", highestAvgYear.averageRating))★")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.yellow.opacity(0.8), .orange.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
+            
             if let selectedBar = selectedBar {
                 let labelText = "\(selectedBar.year): \(String(format: "%.2f", selectedBar.averageRating))★ (\(selectedBar.count) films)"
                 SelectionInfoRow(text: labelText, color: .yellow)
@@ -4086,6 +4239,31 @@ struct AverageDetailedRatingPerYearChart: View {
             }
             .chartLongPress(data: averageDetailedRatings, color: .cyan, chartProxy: chartProxy)
             .padding(.horizontal, 12)
+            
+            // Highest average detailed rating year indicator
+            if let highestAvgDetailedYear = averageDetailedRatings.max(by: { $0.averageRating < $1.averageRating }) {
+                HStack {
+                    Spacer()
+                    Text("\(String(highestAvgDetailedYear.year)) - \(String(format: "%.1f", highestAvgDetailedYear.averageRating))/100")
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.cyan.opacity(0.8), .purple.opacity(0.8)],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
             
             if let selectedBar = selectedBar {
                 let labelText = "\(selectedBar.year): \(String(format: "%.1f", selectedBar.averageRating))/100 (\(selectedBar.count) films)"

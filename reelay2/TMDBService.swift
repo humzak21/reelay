@@ -138,6 +138,169 @@ class TMDBService: ObservableObject {
             throw TMDBError.decodingError(error)
         }
     }
+    
+    // MARK: - Television API Methods
+    
+    // MARK: - Search TV Shows
+    func searchTVShows(query: String, page: Int = 1) async throws -> TMDBTVSearchResponse {
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
+            throw TMDBError.invalidQuery
+        }
+        
+        let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let urlString = "\(baseURL)/search/tv?api_key=\(apiKey)&query=\(encodedQuery)&page=\(page)"
+        
+        guard let url = URL(string: urlString) else {
+            throw TMDBError.invalidURL
+        }
+        
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TMDBError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw TMDBError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let searchResponse = try JSONDecoder().decode(TMDBTVSearchResponse.self, from: data)
+            return searchResponse
+        } catch {
+            throw TMDBError.decodingError(error)
+        }
+    }
+    
+    // MARK: - Get TV Series Details
+    func getTVSeriesDetails(seriesId: Int) async throws -> TMDBTVSeriesDetails {
+        let urlString = "\(baseURL)/tv/\(seriesId)?api_key=\(apiKey)"
+        
+        guard let url = URL(string: urlString) else {
+            throw TMDBError.invalidURL
+        }
+        
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TMDBError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw TMDBError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let seriesDetails = try JSONDecoder().decode(TMDBTVSeriesDetails.self, from: data)
+            return seriesDetails
+        } catch {
+            throw TMDBError.decodingError(error)
+        }
+    }
+    
+    // MARK: - Get TV Season Details
+    func getTVSeasonDetails(seriesId: Int, seasonNumber: Int) async throws -> TMDBTVSeasonDetails {
+        let urlString = "\(baseURL)/tv/\(seriesId)/season/\(seasonNumber)?api_key=\(apiKey)"
+        
+        guard let url = URL(string: urlString) else {
+            throw TMDBError.invalidURL
+        }
+        
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TMDBError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw TMDBError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let seasonDetails = try JSONDecoder().decode(TMDBTVSeasonDetails.self, from: data)
+            return seasonDetails
+        } catch {
+            throw TMDBError.decodingError(error)
+        }
+    }
+    
+    // MARK: - Get TV Episode Details
+    func getTVEpisodeDetails(seriesId: Int, seasonNumber: Int, episodeNumber: Int) async throws -> TMDBTVEpisodeDetails {
+        let urlString = "\(baseURL)/tv/\(seriesId)/season/\(seasonNumber)/episode/\(episodeNumber)?api_key=\(apiKey)"
+        
+        guard let url = URL(string: urlString) else {
+            throw TMDBError.invalidURL
+        }
+        
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TMDBError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw TMDBError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let episodeDetails = try JSONDecoder().decode(TMDBTVEpisodeDetails.self, from: data)
+            return episodeDetails
+        } catch {
+            throw TMDBError.decodingError(error)
+        }
+    }
+    
+    // MARK: - Get TV Series Credits
+    func getTVSeriesCredits(seriesId: Int) async throws -> TMDBCreditsResponse {
+        let urlString = "\(baseURL)/tv/\(seriesId)/credits?api_key=\(apiKey)"
+        
+        guard let url = URL(string: urlString) else {
+            throw TMDBError.invalidURL
+        }
+        
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TMDBError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw TMDBError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let credits = try JSONDecoder().decode(TMDBCreditsResponse.self, from: data)
+            return credits
+        } catch {
+            throw TMDBError.decodingError(error)
+        }
+    }
+    
+    // MARK: - Get TV Series Images
+    func getTVSeriesImages(seriesId: Int) async throws -> TMDBImagesResponse {
+        let urlString = "\(baseURL)/tv/\(seriesId)/images?api_key=\(apiKey)"
+        
+        guard let url = URL(string: urlString) else {
+            throw TMDBError.invalidURL
+        }
+        
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TMDBError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            throw TMDBError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let images = try JSONDecoder().decode(TMDBImagesResponse.self, from: data)
+            return images
+        } catch {
+            throw TMDBError.decodingError(error)
+        }
+    }
 }
 
 // MARK: - TMDB Errors

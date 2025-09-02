@@ -2,7 +2,7 @@
 //  FilterViewModel.swift
 //  reelay2
 //
-//  Created by AI Assistant on 1/1/25.
+//  Created by Humza Khalil
 //
 
 import Foundation
@@ -209,7 +209,7 @@ class FilterViewModel: ObservableObject {
                 if !hasSelectedTag { return false }
             }
             
-            // Star rating filter
+            // Star rating filter (inclusive)
             if let minRating = minStarRating {
                 guard let movieRating = movie.rating, movieRating >= minRating else { return false }
             }
@@ -217,7 +217,7 @@ class FilterViewModel: ObservableObject {
                 guard let movieRating = movie.rating, movieRating <= maxRating else { return false }
             }
             
-            // Detailed rating filter
+            // Detailed rating filter (inclusive)
             if let minDetailed = minDetailedRating {
                 guard let movieDetailed = movie.detailed_rating, movieDetailed >= minDetailed else { return false }
             }

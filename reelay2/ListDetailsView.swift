@@ -25,6 +25,8 @@ struct ListDetailsView: View {
     @State private var showSpecialLayout = true
     @State private var currentSortOption: ListSortOption = .sortOrder
     @State private var showingSortMenu = false
+    @State private var selectedMovie: Movie?
+    @State private var showingMovieDetails = false
     
     private var currentList: MovieList {
         dataManager.movieLists.first(where: { $0.id == list.id }) ?? list
@@ -73,6 +75,11 @@ struct ListDetailsView: View {
                     
                     // Progress Section
                     progressSection
+                    
+                    // Tags Section
+                    if !currentList.tagsArray.isEmpty {
+                        tagsSection
+                    }
                     
                     // Content Section
                     VStack(spacing: 16) {
@@ -193,6 +200,11 @@ struct ListDetailsView: View {
             .sheet(isPresented: $showingEditWatchlist) {
                 WatchlistEditView()
             }
+            .sheet(isPresented: $showingMovieDetails) {
+                if let selectedMovie = selectedMovie {
+                    MovieDetailsView(movie: selectedMovie)
+                }
+            }
             .alert("Delete List", isPresented: $showingDeleteAlert) {
                 Button("Cancel", role: .cancel) { }
                 Button("Delete", role: .destructive) {
@@ -240,11 +252,8 @@ struct ListDetailsView: View {
                         }
                 )
             
-            // Selected date releases
-            lfSelectedDateReleases
-            
-            // Items without release dates
-            lfNoReleaseDatesSection
+            // Monthly releases section
+            lfMonthlyReleasesSection
         }
         .padding(.horizontal, 20)
     }
@@ -376,29 +385,61 @@ struct ListDetailsView: View {
     }
     
     @ViewBuilder
-    private var lfSelectedDateReleases: some View {
-        let items = listItemsForDate(lfSelectedDate).sorted { a, b in
-            (a.movieTitle) < (b.movieTitle)
+    private var lfMonthlyReleasesSection: some View {
+        let monthlyItems = listItemsForMonth(lfCurrentCalendarMonth).sorted { a, b in
+            // Sort by release date first, then by title
+            if let dateA = a.movieReleaseDate, let dateB = b.movieReleaseDate,
+               let parsedDateA = DateFormatter.movieDateFormatter.date(from: dateA),
+               let parsedDateB = DateFormatter.movieDateFormatter.date(from: dateB) {
+                return parsedDateA < parsedDateB
+            }
+            return a.movieTitle < b.movieTitle
         }
         
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Releasing on \(lfSelectedDateFormatter.string(from: lfSelectedDate))")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                Spacer()
+        let unknownItems = listItems.filter {
+            guard let s = $0.movieReleaseDate?.trimmingCharacters(in: .whitespacesAndNewlines) else { return true }
+            return s.isEmpty
+        }
+        
+        VStack(alignment: .leading, spacing: 16) {
+            // Monthly releases
+            if !monthlyItems.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Releasing in \(lfMonthYearFormatter.string(from: lfCurrentCalendarMonth))")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Text("\(monthlyItems.count)")
+                            .foregroundColor(.gray)
+                    }
+                    
+                    LazyVStack(spacing: 8) {
+                        ForEach(monthlyItems) { item in
+                            lfTappableReleaseRow(item: item)
+                        }
+                    }
+                }
             }
             
-            if items.isEmpty {
-                Text("No releases on this day")
-                    .font(.body)
-                    .foregroundColor(.gray)
-                    .padding(.vertical, 12)
-            } else {
-                LazyVStack(spacing: 8) {
-                    ForEach(items) { item in
-                        lfReleaseRow(item: item)
+            // Items without release dates
+            if !unknownItems.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("No Release Date Yet")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Text("\(unknownItems.count)")
+                            .foregroundColor(.gray)
+                    }
+                    
+                    LazyVStack(spacing: 8) {
+                        ForEach(unknownItems) { item in
+                            lfTappableReleaseRow(item: item)
+                        }
                     }
                 }
             }
@@ -407,65 +448,55 @@ struct ListDetailsView: View {
     }
     
     @ViewBuilder
-    private func lfReleaseRow(item: ListItem) -> some View {
-        HStack(spacing: 12) {
-            AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Rectangle().fill(Color.gray.opacity(0.3))
+    private func lfTappableReleaseRow(item: ListItem) -> some View {
+        Button(action: {
+            Task {
+                await loadMovieDetailsForItem(item)
             }
-            .frame(width: 40, height: 60)
-            .cornerRadius(6)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.movieTitle)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                if let year = item.movieYear {
-                    Text(String(year))
-                        .font(.caption)
-                        .foregroundColor(.gray)
+        }) {
+            HStack(spacing: 12) {
+                AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Rectangle().fill(Color.gray.opacity(0.3))
                 }
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(.secondarySystemFill))
-        .cornerRadius(12)
-    }
-    
-    @ViewBuilder
-    private var lfNoReleaseDatesSection: some View {
-        let unknownItems = listItems.filter {
-            guard let s = $0.movieReleaseDate?.trimmingCharacters(in: .whitespacesAndNewlines) else { return true }
-            return s.isEmpty
-        }
-        if !unknownItems.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("No Release Date Yet")
-                        .font(.headline)
+                .frame(width: 40, height: 60)
+                .cornerRadius(6)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.movieTitle)
+                        .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
-                    Spacer()
-                    Text("\(unknownItems.count)")
-                        .foregroundColor(.gray)
-                }
-                
-                LazyVStack(spacing: 8) {
-                    ForEach(unknownItems) { item in
-                        lfReleaseRow(item: item)
+                        .lineLimit(1)
+                    if let year = item.movieYear {
+                        Text(String(year))
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    if let releaseDate = item.movieReleaseDate,
+                       let date = DateFormatter.movieDateFormatter.date(from: releaseDate) {
+                        Text(DateFormatter.shortDateFormatter.string(from: date))
+                            .font(.caption2)
+                            .foregroundColor(.blue)
                     }
                 }
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.gray)
             }
-            .padding(.top, 12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemFill))
+            .cornerRadius(12)
         }
+        .buttonStyle(PlainButtonStyle())
     }
+    
     
     // MARK: - LF Helpers
     private var lfMonthYearFormatter: DateFormatter {
@@ -515,6 +546,15 @@ struct ListDetailsView: View {
             guard let s = item.movieReleaseDate,
                   let d = DateFormatter.movieDateFormatter.date(from: s) else { return false }
             return calendar.isDate(d, inSameDayAs: date)
+        }
+    }
+    
+    private func listItemsForMonth(_ monthDate: Date) -> [ListItem] {
+        let calendar = Calendar.current
+        return listItems.filter { item in
+            guard let dateString = item.movieReleaseDate,
+                  let date = DateFormatter.movieDateFormatter.date(from: dateString) else { return false }
+            return calendar.isDate(date, equalTo: monthDate, toGranularity: .month)
         }
     }
     
@@ -697,6 +737,107 @@ struct ListDetailsView: View {
     }
     
     @ViewBuilder
+    private var tagsSection: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("TAGS")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white.opacity(0.7))
+                    .textCase(.uppercase)
+                    .tracking(1.2)
+                
+                Spacer()
+            }
+            
+            // Tags Flow Layout
+            HStack(alignment: .top) {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    let rows = createTagRows(tags: currentList.tagsArray)
+                    ForEach(0..<rows.count, id: \.self) { rowIndex in
+                        HStack(spacing: 6) {
+                            ForEach(rows[rowIndex], id: \.self) { tag in
+                                tagView(for: tag)
+                            }
+                            Spacer()
+                        }
+                    }
+                }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(
+            LinearGradient(
+                colors: [Color.black.opacity(0.6), Color.black.opacity(0.4)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+    
+    @ViewBuilder
+    private func tagView(for tag: String) -> some View {
+        Text(tag)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(tagColor(for: tag))
+                    .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
+            )
+            .lineLimit(1)
+    }
+    
+    private func tagColor(for tag: String) -> Color {
+        // Generate consistent colors based on tag name
+        let tagHash = tag.lowercased().hash
+        let colors: [Color] = [
+            .blue.opacity(0.8),
+            .green.opacity(0.8),
+            .orange.opacity(0.8),
+            .purple.opacity(0.8),
+            .red.opacity(0.8),
+            .yellow.opacity(0.8),
+            .pink.opacity(0.8),
+            .cyan.opacity(0.8),
+            .indigo.opacity(0.8),
+            .mint.opacity(0.8)
+        ]
+        return colors[abs(tagHash) % colors.count]
+    }
+    
+    private func createTagRows(tags: [String]) -> [[String]] {
+        var rows: [[String]] = []
+        var currentRow: [String] = []
+        var currentRowWidth: CGFloat = 0
+        let maxRowWidth: CGFloat = 300 // Approximate max width
+        
+        for tag in tags {
+            // Estimate tag width (rough calculation)
+            let tagWidth = CGFloat(tag.count) * 8 + 24 // Character width + padding
+            
+            if currentRowWidth + tagWidth > maxRowWidth && !currentRow.isEmpty {
+                rows.append(currentRow)
+                currentRow = [tag]
+                currentRowWidth = tagWidth
+            } else {
+                currentRow.append(tag)
+                currentRowWidth += tagWidth + 6 // Add spacing
+            }
+        }
+        
+        if !currentRow.isEmpty {
+            rows.append(currentRow)
+        }
+        
+        return rows
+    }
+    
+    @ViewBuilder
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "film.stack")
@@ -791,6 +932,72 @@ struct ListDetailsView: View {
                 watchedCount = 0
                 isLoadingProgress = false
             }
+        }
+    }
+    
+    private func loadMovieDetailsForItem(_ item: ListItem) async {
+        do {
+            let movies = try await dataManager.getMoviesByTmdbId(tmdbId: item.tmdbId)
+            
+            if movies.isEmpty {
+                // No entries exist, fetch movie details from TMDB and create a placeholder movie
+                let tmdbService = TMDBService.shared
+                let movieDetails = try await tmdbService.getMovieDetails(movieId: item.tmdbId)
+                
+                let placeholderMovie = Movie(
+                    id: -1, // Use -1 to indicate this is a placeholder
+                    title: item.movieTitle,
+                    release_year: item.movieYear,
+                    release_date: movieDetails.releaseDate,
+                    rating: nil,
+                    detailed_rating: nil,
+                    review: nil,
+                    tags: nil,
+                    watch_date: nil,
+                    is_rewatch: nil,
+                    tmdb_id: item.tmdbId,
+                    overview: movieDetails.overview,
+                    poster_url: item.moviePosterUrl,
+                    backdrop_path: item.movieBackdropPath,
+                    director: nil,
+                    runtime: movieDetails.runtime,
+                    vote_average: movieDetails.voteAverage,
+                    vote_count: movieDetails.voteCount,
+                    popularity: movieDetails.popularity,
+                    original_language: movieDetails.originalLanguage,
+                    original_title: movieDetails.originalTitle,
+                    tagline: movieDetails.tagline,
+                    status: movieDetails.status,
+                    budget: movieDetails.budget,
+                    revenue: movieDetails.revenue,
+                    imdb_id: movieDetails.imdbId,
+                    homepage: movieDetails.homepage,
+                    genres: movieDetails.genreNames,
+                    created_at: nil,
+                    updated_at: nil
+                )
+                
+                await MainActor.run {
+                    selectedMovie = placeholderMovie
+                    showingMovieDetails = true
+                }
+            } else {
+                // Find the latest entry (most recent watch_date or created_at)
+                let latestMovie = movies.max { movie1, movie2 in
+                    let date1 = movie1.watch_date ?? movie1.created_at ?? ""
+                    let date2 = movie2.watch_date ?? movie2.created_at ?? ""
+                    return date1 < date2
+                }
+                
+                await MainActor.run {
+                    selectedMovie = latestMovie
+                    if latestMovie != nil {
+                        showingMovieDetails = true
+                    }
+                }
+            }
+        } catch {
+            // Silently handle error
         }
     }
 }
@@ -1337,17 +1544,39 @@ struct EditListView: View {
     @State private var listName: String
     @State private var listDescription: String
     @State private var isRanked: Bool
+    @State private var selectedTags: [String]
     @State private var isUpdating = false
     @State private var hasOrderChanges = false
     @State private var errorMessage: String?
     @State private var listItems: [ListItem] = []
     @State private var isReordering = false
+    @State private var showingTagSelector = false
+    @State private var newTagName = ""
+    @State private var isThemedMonth: Bool
+    @State private var themedMonthDate: Date
+    
+    // Predefined tags for selection
+    private let predefinedTags = [
+        "Action", "Comedy", "Drama", "Horror", "Thriller", "Romance", "Sci-Fi", "Fantasy",
+        "Animation", "Documentary", "Biography", "Crime", "Mystery", "Adventure", "Family",
+        "History", "War", "Western", "Musical", "Sport", "Favorites", "Watchlist", "Classics",
+        "Recent", "Rewatches", "Theater", "Awards", "Foreign", "Indie", "Blockbuster"
+    ]
     
     init(list: MovieList) {
         self.list = list
         self._listName = State(initialValue: list.name)
         self._listDescription = State(initialValue: list.description ?? "")
         self._isRanked = State(initialValue: list.ranked)
+        self._selectedTags = State(initialValue: list.tagsArray)
+        self._isThemedMonth = State(initialValue: list.themedMonthDate != nil)
+        self._themedMonthDate = State(initialValue: list.themedMonthDate ?? {
+            // Default to first day of current month if no themed month date exists
+            let calendar = Calendar.current
+            let now = Date()
+            let components = calendar.dateComponents([.year, .month], from: now)
+            return calendar.date(from: DateComponents(year: components.year, month: components.month, day: 1)) ?? now
+        }())
     }
     
     var body: some View {
@@ -1401,6 +1630,106 @@ struct EditListView: View {
                             Text("Show numbers 1, 2, 3... next to movies to indicate ranking order")
                                 .font(.caption)
                                 .foregroundColor(.gray)
+                        }
+                        
+                        // Tags Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Tags")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                Spacer()
+                                
+                                Button("Add Tag", systemImage: "plus.circle") {
+                                    showingTagSelector = true
+                                }
+                                .foregroundColor(.blue)
+                                .font(.subheadline)
+                            }
+                            
+                            Text("Categorize your list with tags for better organization")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                            
+                            // Selected Tags Display
+                            if !selectedTags.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(selectedTags, id: \.self) { tag in
+                                            HStack(spacing: 4) {
+                                                Text(tag)
+                                                    .font(.caption)
+                                                    .foregroundColor(.white)
+                                                
+                                                Button(action: {
+                                                    selectedTags.removeAll { $0 == tag }
+                                                }) {
+                                                    Image(systemName: "xmark.circle.fill")
+                                                        .font(.caption)
+                                                        .foregroundColor(.white.opacity(0.7))
+                                                }
+                                            }
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(
+                                                Capsule()
+                                                    .fill(tagColor(for: tag))
+                                            )
+                                        }
+                                    }
+                                    .padding(.horizontal, 4)
+                                }
+                            } else {
+                                Text("No tags selected")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                    .italic()
+                            }
+                        }
+                        
+                        // Themed Movie Months Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Themed Movie Months")
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                
+                                Spacer()
+                                
+                                Toggle("", isOn: $isThemedMonth)
+                                    .toggleStyle(SwitchToggleStyle(tint: .blue))
+                            }
+                            
+                            Text("Create a monthly movie challenge with a specific theme or goal")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                            
+                            if isThemedMonth {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Select Month")
+                                        .font(.subheadline)
+                                        .foregroundColor(.white)
+                                    
+                                    DatePicker(
+                                        "Themed Month",
+                                        selection: $themedMonthDate,
+                                        displayedComponents: [.date]
+                                    )
+                                    .datePickerStyle(.compact)
+                                    .colorScheme(.dark)
+                                    .accentColor(.blue)
+                                    
+                                    Text("This list will appear in your goals during the selected month")
+                                        .font(.caption2)
+                                        .foregroundColor(.gray.opacity(0.8))
+                                }
+                                .padding()
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.white.opacity(0.1))
+                                )
+                            }
                         }
                     }
                 }
@@ -1469,6 +1798,13 @@ struct EditListView: View {
             .onAppear {
                 loadListItems()
             }
+            .sheet(isPresented: $showingTagSelector) {
+                TagSelectorView(
+                    selectedTags: $selectedTags,
+                    predefinedTags: predefinedTags,
+                    newTagName: $newTagName
+                )
+            }
         }
     }
     
@@ -1502,9 +1838,18 @@ struct EditListView: View {
             let nameChanged = name != list.name
             let descriptionChanged = description != (list.description ?? "")
             let rankedChanged = isRanked != list.ranked
+            let tagsChanged = selectedTags != list.tagsArray
+            
+            // Check themed month changes
+            let currentThemedDate = isThemedMonth ? {
+                let calendar = Calendar.current
+                let components = calendar.dateComponents([.year, .month], from: themedMonthDate)
+                return calendar.date(from: DateComponents(year: components.year, month: components.month, day: 1))
+            }() : nil
+            let themedMonthChanged = currentThemedDate != list.themedMonthDate
 
             // If nothing changed, just close
-            if !hasOrderChanges && !nameChanged && !descriptionChanged && !rankedChanged {
+            if !hasOrderChanges && !nameChanged && !descriptionChanged && !rankedChanged && !tagsChanged && !themedMonthChanged {
                 isUpdating = false
                 dismiss()
                 return
@@ -1516,13 +1861,17 @@ struct EditListView: View {
                 hasOrderChanges = false
             }
             
-            // Persist list metadata changes (name/description/ranked)
-            if nameChanged || descriptionChanged || rankedChanged {
+            // Persist list metadata changes (name/description/ranked/tags/themedMonthDate)
+            if nameChanged || descriptionChanged || rankedChanged || tagsChanged || themedMonthChanged {
+                // Pass updateThemedMonthDate as true when themed month has changed to ensure it gets updated
                 _ = try await dataManager.updateList(
                     list,
                     name: nameChanged ? name : nil,
                     description: descriptionChanged ? (description.isEmpty ? nil : description) : nil,
-                    ranked: rankedChanged ? isRanked : nil
+                    ranked: rankedChanged ? isRanked : nil,
+                    tags: tagsChanged ? selectedTags : nil,
+                    themedMonthDate: currentThemedDate,
+                    updateThemedMonthDate: themedMonthChanged
                 )
             }
             
@@ -1539,6 +1888,162 @@ struct EditListView: View {
         if !isRanked && MovieList.shouldAutoEnableRanking(name: listName, description: listDescription) {
             isRanked = true
         }
+    }
+    
+    private func tagColor(for tag: String) -> Color {
+        // Generate consistent colors based on tag name (same as in ListDetailsView)
+        let tagHash = tag.lowercased().hash
+        let colors: [Color] = [
+            .blue.opacity(0.8),
+            .green.opacity(0.8),
+            .orange.opacity(0.8),
+            .purple.opacity(0.8),
+            .red.opacity(0.8),
+            .yellow.opacity(0.8),
+            .pink.opacity(0.8),
+            .cyan.opacity(0.8),
+            .indigo.opacity(0.8),
+            .mint.opacity(0.8)
+        ]
+        return colors[abs(tagHash) % colors.count]
+    }
+}
+
+struct TagSelectorView: View {
+    @Binding var selectedTags: [String]
+    let predefinedTags: [String]
+    @Binding var newTagName: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+    
+    private var filteredTags: [String] {
+        if searchText.isEmpty {
+            return predefinedTags.filter { !selectedTags.contains($0) }
+        } else {
+            return predefinedTags.filter { tag in
+                !selectedTags.contains(tag) && tag.lowercased().contains(searchText.lowercased())
+            }
+        }
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // Search bar
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                    
+                    TextField("Search tags or create new...", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .foregroundColor(.white)
+                    
+                    if !searchText.isEmpty {
+                        Button(action: {
+                            searchText = ""
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.secondarySystemFill))
+                .cornerRadius(12)
+                .padding(.horizontal)
+                .padding(.top)
+                
+                // Create custom tag button
+                if !searchText.isEmpty && !predefinedTags.contains(searchText) && !selectedTags.contains(searchText) {
+                    Button(action: {
+                        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty && !selectedTags.contains(trimmed) {
+                            selectedTags.append(trimmed)
+                            searchText = ""
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Create \"\(searchText)\"")
+                                .foregroundColor(.white)
+                            Spacer()
+                        }
+                        .padding()
+                        .background(Color(.tertiarySystemFill))
+                        .cornerRadius(12)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                }
+                
+                // Tag list
+                List {
+                    if !selectedTags.isEmpty {
+                        Section("Selected Tags") {
+                            ForEach(selectedTags, id: \.self) { tag in
+                                HStack {
+                                    Text(tag)
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Button(action: {
+                                        selectedTags.removeAll { $0 == tag }
+                                    }) {
+                                        Image(systemName: "minus.circle.fill")
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                                .listRowBackground(Color(.secondarySystemFill))
+                            }
+                        }
+                    }
+                    
+                    Section("Available Tags") {
+                        ForEach(filteredTags, id: \.self) { tag in
+                            Button(action: {
+                                if !selectedTags.contains(tag) {
+                                    selectedTags.append(tag)
+                                }
+                            }) {
+                                HStack {
+                                    Text(tag)
+                                        .foregroundColor(.white)
+                                    Spacer()
+                                    Image(systemName: "plus.circle")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                            .listRowBackground(Color(.secondarySystemFill))
+                        }
+                        
+                        if filteredTags.isEmpty && searchText.isEmpty {
+                            Text("All tags are already selected")
+                                .foregroundColor(.gray)
+                                .italic()
+                                .listRowBackground(Color(.secondarySystemFill))
+                        } else if filteredTags.isEmpty && !searchText.isEmpty {
+                            Text("No matching tags found")
+                                .foregroundColor(.gray)
+                                .italic()
+                                .listRowBackground(Color(.secondarySystemFill))
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(Color.black)
+            }
+            .background(Color.black)
+            .navigationTitle("Select Tags")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done", systemImage: "checkmark") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -1682,6 +2187,15 @@ struct EditableListItemView: View {
 #Preview {
     // Preview wrapper that connects to your actual database
     PreviewWrapper()
+}
+
+// MARK: - DateFormatter Extension
+extension DateFormatter {
+    static let shortDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        return formatter
+    }()
 }
 
 struct PreviewWrapper: View {

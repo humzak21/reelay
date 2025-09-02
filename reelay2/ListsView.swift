@@ -11,6 +11,7 @@ struct ListsView: View {
     @StateObject private var dataManager = DataManager.shared
     @StateObject private var movieService = SupabaseMovieService.shared
     @State private var showingCreateList = false
+    @State private var showingAddTelevision = false
     @State private var showingEditWatchlist = false
     @State private var selectedList: MovieList?
     @State private var listToEdit: MovieList?
@@ -19,6 +20,7 @@ struct ListsView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showingCSVImport = false
+    @State private var showingRandomizer = false
     
     // MARK: - Efficient Loading States
     @State private var hasLoadedInitially = false
@@ -34,10 +36,18 @@ struct ListsView: View {
             .background(Color(.systemBackground))
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        showingCSVImport = true
-                    }) {
-                        Image(systemName: "square.and.arrow.down")
+                    HStack {
+                        Button(action: {
+                            showingCSVImport = true
+                        }) {
+                            Image(systemName: "square.and.arrow.down")
+                        }
+                        
+                        Button(action: {
+                            showingRandomizer = true
+                        }) {
+                            Image(systemName: "dice")
+                        }
                     }
                 }
                 
@@ -45,6 +55,9 @@ struct ListsView: View {
                     Menu {
                         Button("Create New List", systemImage: "list.bullet") {
                             showingCreateList = true
+                        }
+                        Button("Add TV Show", systemImage: "tv") {
+                            showingAddTelevision = true
                         }
                         Button("Add to Watchlist", systemImage: "bookmark") {
                             showingEditWatchlist = true
@@ -56,23 +69,6 @@ struct ListsView: View {
             }
             .task {
                 if movieService.isLoggedIn && !hasLoadedInitially {
-                    // Test Railway cache performance and health for lists
-                    Task {
-                        print("🔍 [LISTSVIEW] Running Railway cache diagnostics for lists...")
-                        await DataManagerRailway.shared.enableDetailedLogging()
-                        
-                        let healthStatus = await DataManagerRailway.shared.testCacheHealth()
-                        print("🏥 [LISTSVIEW] Cache Health: \(healthStatus.isConnected ? "✅ Connected" : "❌ Disconnected")")
-                        print("🏥 [LISTSVIEW] Response Time: \(String(format: "%.3f", healthStatus.responseTime))s")
-                        
-                        if let performanceReport = await DataManagerRailway.shared.runCachePerformanceTest() {
-                            print("⚡ [LISTSVIEW] Cache Performance Report:")
-                            print("📊 [LISTSVIEW] Average Response: \(String(format: "%.3f", performanceReport.averageResponseTime))s")
-                            print("🎯 [LISTSVIEW] Cache Hit Rate: \(String(format: "%.1f", performanceReport.cacheHitRate * 100))%")
-                            print("📦 [LISTSVIEW] Data Transferred: \(performanceReport.totalDataTransferred) bytes")
-                        }
-                    }
-                    
                     await loadListsIfNeeded(force: true)
                     hasLoadedInitially = true
                 }
@@ -99,8 +95,14 @@ struct ListsView: View {
             .sheet(isPresented: $showingCreateList) {
                 CreateListView()
             }
+            .sheet(isPresented: $showingAddTelevision) {
+                AddTelevisionView()
+            }
             .sheet(isPresented: $showingCSVImport) {
                 CSVImportTabbedView()
+            }
+            .sheet(isPresented: $showingRandomizer) {
+                WatchlistRandomizerView()
             }
             .sheet(isPresented: $showingEditWatchlist) {
                 WatchlistEditView()
@@ -299,74 +301,33 @@ struct ListsView: View {
     private func loadListsIfNeeded(force: Bool) async {
         // If force is false and data is still fresh, skip loading
         if !force && !shouldRefreshData() && !dataManager.movieLists.isEmpty {
-            print("🔄 [LISTSVIEW] Skipping load - lists data is fresh (last refresh: \(lastRefreshTime))")
             return
         }
         
         guard !isLoading else { 
-            print("⏳ [LISTSVIEW] Already loading lists, skipping duplicate request")
             return 
         }
-        
-        let startTime = Date()
-        print("📋 [LISTSVIEW] Starting lists load - force: \(force)")
-        print("🚂 [LISTSVIEW] Testing Railway cache for lists...")
         
         isLoading = true
         errorMessage = nil
         
-        // First try Railway cache
-        await DataManagerRailway.shared.loadListsFromCache()
-        let duration = Date().timeIntervalSince(startTime)
-        
-        if !dataManager.movieLists.isEmpty {
-            print("✅ [LISTSVIEW] SUCCESS: Got \(dataManager.movieLists.count) lists from Railway cache in \(String(format: "%.3f", duration))s")
-            print("🎯 [LISTSVIEW] Railway cache HIT - No Supabase fallback needed for lists")
-        } else {
-            print("⚠️ [LISTSVIEW] Railway cache returned empty - using DataManager fallback")
-            await dataManager.refreshLists()
-            let fallbackDuration = Date().timeIntervalSince(startTime)
-            print("🔄 [LISTSVIEW] DataManager fallback completed in \(String(format: "%.3f", fallbackDuration))s with \(dataManager.movieLists.count) lists")
-        }
+        await dataManager.refreshLists()
         
         lastRefreshTime = Date()
-        let totalDuration = Date().timeIntervalSince(startTime)
-        print("📊 [LISTSVIEW] Total lists load operation completed in \(String(format: "%.3f", totalDuration))s")
-        
         isLoading = false
     }
     
     private func refreshLists() async {
         guard !isRefreshing else { 
-            print("⏳ [LISTSVIEW] Already refreshing lists, skipping duplicate refresh request")
             return 
         }
-        
-        let startTime = Date()
-        print("🔄 [LISTSVIEW] Manual lists refresh triggered by user pull-to-refresh")
-        print("🚂 [LISTSVIEW] Attempting Railway cache refresh for lists...")
         
         isRefreshing = true
         errorMessage = nil
         
-        // Try Railway cache refresh first
-        await DataManagerRailway.shared.loadListsFromCache()
-        let duration = Date().timeIntervalSince(startTime)
-        
-        if !dataManager.movieLists.isEmpty {
-            print("✅ [LISTSVIEW] REFRESH SUCCESS: Got \(dataManager.movieLists.count) lists from Railway cache in \(String(format: "%.3f", duration))s")
-            print("🎯 [LISTSVIEW] Railway cache HIT during refresh - No Supabase needed")
-        } else {
-            print("⚠️ [LISTSVIEW] Railway cache refresh returned empty - using DataManager fallback")
-            await dataManager.refreshLists()
-            let fallbackDuration = Date().timeIntervalSince(startTime)
-            print("🔄 [LISTSVIEW] DataManager refresh fallback completed in \(String(format: "%.3f", fallbackDuration))s")
-        }
+        await dataManager.refreshLists()
         
         lastRefreshTime = Date()
-        let totalDuration = Date().timeIntervalSince(startTime)
-        print("📊 [LISTSVIEW] Total lists refresh operation completed in \(String(format: "%.3f", totalDuration))s")
-        
         isRefreshing = false
     }
     
@@ -434,11 +395,13 @@ struct ListCardView: View {
                     
                     Spacer()
                     
-                    VStack {
-                        Text("\(list.itemCount)")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        HStack {
+                            Text("\(list.itemCount)")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
                         
                         Text("films")
                             .font(.caption)
@@ -499,8 +462,27 @@ struct CreateListView: View {
     @State private var listName = ""
     @State private var listDescription = ""
     @State private var isRanked = false
+    @State private var selectedTags: [String] = []
     @State private var isCreating = false
     @State private var errorMessage: String?
+    @State private var showingTagSelector = false
+    @State private var newTagName = ""
+    @State private var isThemedMonth = false
+    @State private var themedMonthDate: Date = {
+        // Default to first day of current month
+        let calendar = Calendar.current
+        let now = Date()
+        let components = calendar.dateComponents([.year, .month], from: now)
+        return calendar.date(from: DateComponents(year: components.year, month: components.month, day: 1)) ?? now
+    }()
+    
+    // Predefined tags for selection (same as EditListView)
+    private let predefinedTags = [
+        "Action", "Comedy", "Drama", "Horror", "Thriller", "Romance", "Sci-Fi", "Fantasy",
+        "Animation", "Documentary", "Biography", "Crime", "Mystery", "Adventure", "Family",
+        "History", "War", "Western", "Musical", "Sport", "Favorites", "Watchlist", "Classics",
+        "Recent", "Rewatches", "Theater", "Awards", "Foreign", "Indie", "Blockbuster"
+    ]
     
     var body: some View {
         NavigationView {
@@ -547,6 +529,106 @@ struct CreateListView: View {
                         .foregroundColor(.gray)
                 }
                 
+                // Tags Section
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Tags")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        
+                        Spacer()
+                        
+                        Button("Add Tags", systemImage: "plus.circle") {
+                            showingTagSelector = true
+                        }
+                        .foregroundColor(.blue)
+                        .font(.subheadline)
+                    }
+                    
+                    Text("Categorize your list with tags for better organization")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    
+                    // Selected Tags Display
+                    if !selectedTags.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(selectedTags, id: \.self) { tag in
+                                    HStack(spacing: 4) {
+                                        Text(tag)
+                                            .font(.caption)
+                                            .foregroundColor(.white)
+                                        
+                                        Button(action: {
+                                            selectedTags.removeAll { $0 == tag }
+                                        }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.7))
+                                        }
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        Capsule()
+                                            .fill(tagColor(for: tag))
+                                    )
+                                }
+                            }
+                            .padding(.horizontal, 4)
+                        }
+                    } else {
+                        Text("No tags selected")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .italic()
+                    }
+                }
+                
+                // Themed Movie Months Section
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Themed Movie Months")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        
+                        Spacer()
+                        
+                        Toggle("", isOn: $isThemedMonth)
+                            .toggleStyle(SwitchToggleStyle(tint: .blue))
+                    }
+                    
+                    Text("Create a monthly movie challenge with a specific theme or goal")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    
+                    if isThemedMonth {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Select Month")
+                                .font(.subheadline)
+                                .foregroundColor(.white)
+                            
+                            DatePicker(
+                                "Themed Month",
+                                selection: $themedMonthDate,
+                                displayedComponents: [.date]
+                            )
+                            .datePickerStyle(.compact)
+                            .colorScheme(.dark)
+                            .accentColor(.blue)
+                            
+                            Text("This list will appear in your goals during the selected month")
+                                .font(.caption2)
+                                .foregroundColor(.gray.opacity(0.8))
+                        }
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white.opacity(0.1))
+                        )
+                    }
+                }
+                
                 if let errorMessage = errorMessage {
                     Text(errorMessage)
                         .foregroundColor(.red)
@@ -575,6 +657,13 @@ struct CreateListView: View {
                     .disabled(listName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCreating)
                 }
             }
+            .sheet(isPresented: $showingTagSelector) {
+                TagSelectorView(
+                    selectedTags: $selectedTags,
+                    predefinedTags: predefinedTags,
+                    newTagName: $newTagName
+                )
+            }
         }
     }
     
@@ -586,10 +675,20 @@ struct CreateListView: View {
         
         do {
             let description = listDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Create date for first day of selected month if themed month is enabled
+            let finalThemedMonthDate: Date? = isThemedMonth ? {
+                let calendar = Calendar.current
+                let components = calendar.dateComponents([.year, .month], from: themedMonthDate)
+                return calendar.date(from: DateComponents(year: components.year, month: components.month, day: 1))
+            }() : nil
+            
             _ = try await dataManager.createList(
                 name: listName.trimmingCharacters(in: .whitespacesAndNewlines),
                 description: description.isEmpty ? nil : description,
-                ranked: isRanked
+                ranked: isRanked,
+                tags: selectedTags,
+                themedMonthDate: finalThemedMonthDate
             )
             dismiss()
         } catch {
@@ -605,7 +704,28 @@ struct CreateListView: View {
             isRanked = true
         }
     }
+    
+    private func tagColor(for tag: String) -> Color {
+        // Generate consistent colors based on tag name (same as other views)
+        let tagHash = tag.lowercased().hash
+        let colors: [Color] = [
+            .blue.opacity(0.8),
+            .green.opacity(0.8),
+            .orange.opacity(0.8),
+            .purple.opacity(0.8),
+            .red.opacity(0.8),
+            .yellow.opacity(0.8),
+            .pink.opacity(0.8),
+            .cyan.opacity(0.8),
+            .indigo.opacity(0.8),
+            .mint.opacity(0.8)
+        ]
+        return colors[abs(tagHash) % colors.count]
+    }
 }
+
+// We can reuse the TagSelectorView from ListDetailsView.swift
+// Note: In a real app, you'd want to extract this to a shared component file
 
 #Preview {
     ListsView()

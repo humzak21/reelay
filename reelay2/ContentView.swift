@@ -14,6 +14,12 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
+            Tab("Home", systemImage: "house") {
+                NavigationView {
+                    HomeView()
+                }
+            }
+            
             Tab("Movies", systemImage: "film") {
                 NavigationView {
                     MoviesView()
@@ -23,12 +29,6 @@ struct ContentView: View {
             Tab("Lists", systemImage: "list.bullet") {
                 NavigationView {
                     ListsView()
-                }
-            }
-            
-            Tab("Statistics", systemImage: "chart.bar") {
-                NavigationView {
-                    StatisticsView()
                 }
             }
             

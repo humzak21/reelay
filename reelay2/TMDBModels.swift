@@ -225,6 +225,326 @@ extension Date {
     }
 }
 
+// MARK: - TV Models
+
+// MARK: - TMDB TV Search Response
+struct TMDBTVSearchResponse: Codable {
+    let page: Int
+    let results: [TMDBTVShow]
+    let totalPages: Int
+    let totalResults: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case page, results
+        case totalPages = "total_pages"
+        case totalResults = "total_results"
+    }
+}
+
+// MARK: - TMDB TV Show
+struct TMDBTVShow: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let originalName: String?
+    let overview: String?
+    let firstAirDate: String?
+    let lastAirDate: String?
+    let posterPath: String?
+    let backdropPath: String?
+    let voteAverage: Double?
+    let voteCount: Int?
+    let popularity: Double?
+    let originalLanguage: String?
+    let genreIds: [Int]?
+    let adult: Bool?
+    let originCountry: [String]?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, overview, popularity, adult
+        case originalName = "original_name"
+        case firstAirDate = "first_air_date"
+        case lastAirDate = "last_air_date"
+        case posterPath = "poster_path"
+        case backdropPath = "backdrop_path"
+        case voteAverage = "vote_average"
+        case voteCount = "vote_count"
+        case originalLanguage = "original_language"
+        case genreIds = "genre_ids"
+        case originCountry = "origin_country"
+    }
+}
+
+// MARK: - TMDB TV Series Details
+struct TMDBTVSeriesDetails: Codable {
+    let id: Int
+    let name: String
+    let originalName: String?
+    let overview: String?
+    let firstAirDate: String?
+    let lastAirDate: String?
+    let posterPath: String?
+    let backdropPath: String?
+    let voteAverage: Double?
+    let voteCount: Int?
+    let popularity: Double?
+    let originalLanguage: String?
+    let adult: Bool?
+    let genres: [TMDBGenre]?
+    let homepage: String?
+    let inProduction: Bool?
+    let languages: [String]?
+    let numberOfEpisodes: Int?
+    let numberOfSeasons: Int?
+    let originCountry: [String]?
+    let status: String?
+    let tagline: String?
+    let type: String?
+    let seasons: [TMDBSeason]?
+    let networks: [TMDBNetwork]?
+    let productionCompanies: [TMDBProductionCompany]?
+    let createdBy: [TMDBCreatedBy]?
+    let episodeRunTime: [Int]?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, overview, popularity, adult, genres, homepage, languages, status, tagline, type, seasons, networks
+        case originalName = "original_name"
+        case firstAirDate = "first_air_date"
+        case lastAirDate = "last_air_date"
+        case posterPath = "poster_path"
+        case backdropPath = "backdrop_path"
+        case voteAverage = "vote_average"
+        case voteCount = "vote_count"
+        case originalLanguage = "original_language"
+        case inProduction = "in_production"
+        case numberOfEpisodes = "number_of_episodes"
+        case numberOfSeasons = "number_of_seasons"
+        case originCountry = "origin_country"
+        case productionCompanies = "production_companies"
+        case createdBy = "created_by"
+        case episodeRunTime = "episode_run_time"
+    }
+}
+
+// MARK: - TMDB Season
+struct TMDBSeason: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let overview: String?
+    let posterPath: String?
+    let seasonNumber: Int
+    let episodeCount: Int
+    let airDate: String?
+    let voteAverage: Double?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, overview
+        case posterPath = "poster_path"
+        case seasonNumber = "season_number"
+        case episodeCount = "episode_count"
+        case airDate = "air_date"
+        case voteAverage = "vote_average"
+    }
+}
+
+// MARK: - TMDB Season Details
+struct TMDBTVSeasonDetails: Codable {
+    let id: Int
+    let name: String
+    let overview: String?
+    let posterPath: String?
+    let seasonNumber: Int
+    let airDate: String?
+    let episodes: [TMDBEpisode]?
+    let voteAverage: Double?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, overview, episodes
+        case posterPath = "poster_path"
+        case seasonNumber = "season_number"
+        case airDate = "air_date"
+        case voteAverage = "vote_average"
+    }
+}
+
+// MARK: - TMDB Episode
+struct TMDBEpisode: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let overview: String?
+    let airDate: String?
+    let episodeNumber: Int
+    let seasonNumber: Int
+    let stillPath: String?
+    let voteAverage: Double?
+    let voteCount: Int?
+    let runtime: Int?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, overview, runtime
+        case airDate = "air_date"
+        case episodeNumber = "episode_number"
+        case seasonNumber = "season_number"
+        case stillPath = "still_path"
+        case voteAverage = "vote_average"
+        case voteCount = "vote_count"
+    }
+}
+
+// MARK: - TMDB Episode Details
+struct TMDBTVEpisodeDetails: Codable {
+    let id: Int
+    let name: String
+    let overview: String?
+    let airDate: String?
+    let episodeNumber: Int
+    let seasonNumber: Int
+    let stillPath: String?
+    let voteAverage: Double?
+    let voteCount: Int?
+    let runtime: Int?
+    let crew: [TMDBCrewMember]?
+    let guestStars: [TMDBCastMember]?
+    let productionCode: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, overview, runtime, crew
+        case airDate = "air_date"
+        case episodeNumber = "episode_number"
+        case seasonNumber = "season_number"
+        case stillPath = "still_path"
+        case voteAverage = "vote_average"
+        case voteCount = "vote_count"
+        case guestStars = "guest_stars"
+        case productionCode = "production_code"
+    }
+}
+
+// MARK: - Supporting TV Models
+struct TMDBNetwork: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let logoPath: String?
+    let originCountry: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case logoPath = "logo_path"
+        case originCountry = "origin_country"
+    }
+}
+
+struct TMDBProductionCompany: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let logoPath: String?
+    let originCountry: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case logoPath = "logo_path"
+        case originCountry = "origin_country"
+    }
+}
+
+struct TMDBCreatedBy: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let profilePath: String?
+    let gender: Int?
+    let creditId: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, name, gender
+        case profilePath = "profile_path"
+        case creditId = "credit_id"
+    }
+}
+
+// MARK: - TV Extensions
+extension TMDBTVShow {
+    var posterURL: URL? {
+        guard let posterPath = posterPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w500\(posterPath)")
+    }
+    
+    var backdropURL: URL? {
+        guard let backdropPath = backdropPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w1280\(backdropPath)")
+    }
+    
+    var firstAirYear: Int? {
+        guard let dateString = firstAirDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: dateString)?.year
+    }
+}
+
+extension TMDBTVSeriesDetails {
+    var posterURL: URL? {
+        guard let posterPath = posterPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w500\(posterPath)")
+    }
+    
+    var backdropURL: URL? {
+        guard let backdropPath = backdropPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w1280\(backdropPath)")
+    }
+    
+    var firstAirYear: Int? {
+        guard let dateString = firstAirDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: dateString)?.year
+    }
+    
+    var genreNames: [String] {
+        return genres?.map { $0.name } ?? []
+    }
+}
+
+extension TMDBSeason {
+    var posterURL: URL? {
+        guard let posterPath = posterPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w500\(posterPath)")
+    }
+    
+    var airYear: Int? {
+        guard let dateString = airDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: dateString)?.year
+    }
+}
+
+extension TMDBEpisode {
+    var stillURL: URL? {
+        guard let stillPath = stillPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w500\(stillPath)")
+    }
+    
+    var airYear: Int? {
+        guard let dateString = airDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: dateString)?.year
+    }
+}
+
+extension TMDBTVEpisodeDetails {
+    var stillURL: URL? {
+        guard let stillPath = stillPath else { return nil }
+        return URL(string: "https://image.tmdb.org/t/p/w500\(stillPath)")
+    }
+    
+    var airYear: Int? {
+        guard let dateString = airDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: dateString)?.year
+    }
+}
+
 // MARK: - Movie to TMDBMovie Conversion
 extension TMDBMovie {
     /// Create a TMDBMovie from a Movie diary entry for "Log Again" functionality

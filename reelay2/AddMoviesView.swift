@@ -61,6 +61,10 @@ struct AddMoviesView: View {
     @State private var watchlistSuccessMessage = ""
     @State private var showingWatchlistSuccess = false
     
+    // Movie lists state
+    @State private var movieLists: [MovieList] = []
+    @State private var showingMovieLists = false
+    
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -113,6 +117,7 @@ struct AddMoviesView: View {
                     loadMovieDetails(movieId: preSelected.id)
                     Task {
                         await checkForExistingMovie(tmdbId: preSelected.id)
+                        await checkForMovieLists(tmdbId: preSelected.id)
                     }
                 }
             }
@@ -251,6 +256,11 @@ struct AddMoviesView: View {
                 // Previous entries section
                 if !previousWatches.isEmpty {
                     previousEntriesSection
+                }
+                
+                // Movie lists section
+                if !movieLists.isEmpty {
+                    movieListsSection
                 }
                 
                 detailedRatingSection
@@ -512,6 +522,56 @@ struct AddMoviesView: View {
         }
     }
     
+    // MARK: - Movie Lists Section
+    private var movieListsSection: some View {
+        VStack(spacing: 0) {
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showingMovieLists.toggle()
+                }
+            }) {
+                HStack {
+                    HStack(spacing: 8) {
+                        Image(systemName: "list.bullet")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.blue)
+                        
+                        Text("Already in Lists")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                        
+                        Text("\(movieLists.count) \(movieLists.count == 1 ? "list" : "lists")")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: showingMovieLists ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.gray)
+                }
+                .padding(16)
+                .background(Color.blue.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                )
+                .cornerRadius(24)
+            }
+            
+            if showingMovieLists {
+                VStack(spacing: 12) {
+                    ForEach(movieLists) { list in
+                        MovieListRow(list: list)
+                    }
+                }
+                .padding(.top, 12)
+            }
+        }
+    }
+    
     // MARK: - Review Section
     private var reviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -604,9 +664,10 @@ struct AddMoviesView: View {
         selectedMovie = movie
         resetForm()
         
-        // Check if this movie has been watched before
+        // Check if this movie has been watched before and is in any lists
         Task {
             await checkForExistingMovie(tmdbId: movie.id)
+            await checkForMovieLists(tmdbId: movie.id)
         }
     }
     
@@ -640,6 +701,13 @@ struct AddMoviesView: View {
             await MainActor.run {
                 previousWatches = []
             }
+        }
+    }
+    
+    private func checkForMovieLists(tmdbId: Int) async {
+        await MainActor.run {
+            let listsContainingMovie = dataManager.getListsContainingMovie(tmdbId: tmdbId)
+            movieLists = listsContainingMovie
         }
     }
     
@@ -884,6 +952,8 @@ struct AddMoviesView: View {
         previousWatches = []
         showingPreviousWatches = false
         ratingSearchText = ""
+        movieLists = []
+        showingMovieLists = false
     }
     
     // MARK: - Watchlist Operations
@@ -1179,6 +1249,69 @@ struct PreviousEntryRow: View {
     private func starColor(for rating: Double?) -> Color {
         guard let rating = rating else { return .blue }
         return rating == 5.0 ? .yellow : .blue
+    }
+}
+
+// MARK: - Movie List Row
+struct MovieListRow: View {
+    let list: MovieList
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // List indicator
+            Image(systemName: listIcon)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(listColor)
+                .frame(width: 24, height: 24)
+                .background(listColor.opacity(0.2))
+                .cornerRadius(6)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(list.name)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                
+                if let description = list.description, !description.isEmpty {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .lineLimit(2)
+                }
+            }
+            
+            Spacer()
+            
+            if list.itemCount > 0 {
+                Text("\(list.itemCount) \(list.itemCount == 1 ? "item" : "items")")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding(12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(12)
+    }
+    
+    private var listIcon: String {
+        if list.name == "Watchlist" {
+            return "bookmark.fill"
+        } else if list.ranked {
+            return "list.number"
+        } else {
+            return "list.bullet"
+        }
+    }
+    
+    private var listColor: Color {
+        if list.name == "Watchlist" {
+            return .orange
+        } else if list.ranked {
+            return .purple
+        } else {
+            return .blue
+        }
     }
 }
 

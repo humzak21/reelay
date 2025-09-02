@@ -134,6 +134,9 @@ struct LoggedInProfileView: View {
     @State private var showingSettings = false
     @State private var backdropMovie: Movie?
     @State private var showingAddMovie = false
+    @State private var showingAddTelevision = false
+    @State private var showingAddAlbum = false
+    @State private var showingRandomizer = false
     @Environment(\.colorScheme) private var colorScheme
     
     private var appBackground: Color {
@@ -141,7 +144,7 @@ struct LoggedInProfileView: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     // Backdrop Section with overlaid profile info
@@ -155,32 +158,114 @@ struct LoggedInProfileView: View {
                         // Navigation Options
                         VStack(spacing: 0) {
                             NavigationLink(destination: MoviesView()) {
-                                ProfileOptionRow(
-                                    icon: "film",
-                                    title: "Diary",
-                                    subtitle: "View your movie diary",
-                                    action: {}
-                                )
+                                HStack(spacing: 16) {
+                                    Image(systemName: "film")
+                                        .font(.title2)
+                                        .foregroundColor(.blue)
+                                        .frame(width: 30)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Diary")
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        
+                                        Text("View your movie diary")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 16)
                             }
                             .buttonStyle(PlainButtonStyle())
                             
                             NavigationLink(destination: ListsView()) {
-                                ProfileOptionRow(
-                                    icon: "list.bullet",
-                                    title: "Lists",
-                                    subtitle: "Manage your movie lists",
-                                    action: {}
-                                )
+                                HStack(spacing: 16) {
+                                    Image(systemName: "list.bullet")
+                                        .font(.title2)
+                                        .foregroundColor(.blue)
+                                        .frame(width: 30)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Lists")
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        
+                                        Text("Manage your movie lists")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 16)
                             }
                             .buttonStyle(PlainButtonStyle())
                             
                             NavigationLink(destination: StatisticsView()) {
-                                ProfileOptionRow(
-                                    icon: "chart.bar",
-                                    title: "Statistics",
-                                    subtitle: "Your viewing stats",
-                                    action: {}
-                                )
+                                HStack(spacing: 16) {
+                                    Image(systemName: "chart.bar")
+                                        .font(.title2)
+                                        .foregroundColor(.blue)
+                                        .frame(width: 30)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Statistics")
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        
+                                        Text("Your viewing stats")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 16)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            
+                            NavigationLink(destination: AlbumsView()) {
+                                HStack(spacing: 16) {
+                                    Image(systemName: "music.note")
+                                        .font(.title2)
+                                        .foregroundColor(.blue)
+                                        .frame(width: 30)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Albums")
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        
+                                        Text("Manage your music collection")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 16)
                             }
                             .buttonStyle(PlainButtonStyle())
                         }
@@ -218,19 +303,45 @@ struct LoggedInProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button(action: {
-                    showingSettings = true
-                }) {
-                    Image(systemName: "gear")
-                        .foregroundColor(.white)
-                        .fontWeight(.medium)
+                HStack {
+                    Button(action: {
+                        showingSettings = true
+                    }) {
+                        Image(systemName: "gear")
+                            .foregroundColor(.white)
+                            .fontWeight(.medium)
+                    }
+                    
+                    Button(action: {
+                        showingRandomizer = true
+                    }) {
+                        Image(systemName: "dice")
+                            .foregroundColor(.white)
+                            .fontWeight(.medium)
+                    }
                 }
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    showingAddMovie = true
-                }) {
+                Menu {
+                    Button(action: {
+                        showingAddMovie = true
+                    }) {
+                        Label("Add Movie", systemImage: "film")
+                    }
+                    
+                    Button(action: {
+                        showingAddTelevision = true
+                    }) {
+                        Label("Add TV Show", systemImage: "tv")
+                    }
+                    
+                    Button(action: {
+                        showingAddAlbum = true
+                    }) {
+                        Label("Add Album", systemImage: "music.note.list")
+                    }
+                } label: {
                     Image(systemName: "plus")
                         .foregroundColor(.white)
                         .fontWeight(.medium)
@@ -242,6 +353,15 @@ struct LoggedInProfileView: View {
         }
         .sheet(isPresented: $showingAddMovie) {
             AddMoviesView()
+        }
+        .sheet(isPresented: $showingAddTelevision) {
+            AddTelevisionView()
+        }
+        .sheet(isPresented: $showingAddAlbum) {
+            AddAlbumsView()
+        }
+        .sheet(isPresented: $showingRandomizer) {
+            WatchlistRandomizerView()
         }
         .alert("Sign Out", isPresented: $showingSignOutAlert) {
             Button("Cancel", role: .cancel) {}
@@ -382,39 +502,8 @@ struct LoggedInProfileView: View {
     }
     
     private func loadProfileData() async {
-        let startTime = Date()
-        print("👤 [PROFILEVIEW] Starting profile data load")
-        print("🚂 [PROFILEVIEW] Testing Railway cache for user profile...")
-        
         do {
-            // First try Railway cache for profile
-            var railwayProfile: UserProfile?
-            if let currentUser = authService.currentUser {
-                do {
-                    railwayProfile = try await DataManagerRailway.shared.loadUserProfileFromCache(userId: currentUser.id.uuidString)
-                    let cacheHitTime = Date().timeIntervalSince(startTime)
-                    print("✅ [PROFILEVIEW] Railway cache HIT for user profile in \(String(format: "%.3f", cacheHitTime))s")
-                    print("🎯 [PROFILEVIEW] Using cached profile data - skipping Supabase for profile")
-                } catch {
-                    print("⚠️ [PROFILEVIEW] Railway cache MISS for profile: \(error)")
-                    print("🔄 [PROFILEVIEW] Falling back to direct Supabase profile service...")
-                }
-            }
-            
-            // Use Railway cache if available, otherwise fallback to Supabase
-            let profile: UserProfile?
-            let profileDuration: TimeInterval
-            
-            if let railwayProfile = railwayProfile {
-                profile = railwayProfile
-                profileDuration = Date().timeIntervalSince(startTime)
-                print("✅ [PROFILEVIEW] Profile loaded from Railway cache in \(String(format: "%.3f", profileDuration))s")
-            } else {
-                let fallbackStart = Date()
-                profile = try await profileService.getCurrentUserProfile()
-                profileDuration = Date().timeIntervalSince(fallbackStart)
-                print("🔄 [PROFILEVIEW] Profile loaded from Supabase fallback in \(String(format: "%.3f", profileDuration))s")
-            }
+            _ = try await profileService.getCurrentUserProfile()
             
             await MainActor.run {
                 Task {
@@ -428,13 +517,10 @@ struct LoggedInProfileView: View {
                         print("⚠️ [PROFILEVIEW] Failed to load backdrop movie: \(error)")
                     }
                     
-                    let totalDuration = Date().timeIntervalSince(startTime)
-                    print("📊 [PROFILEVIEW] Total profile load completed in \(String(format: "%.3f", totalDuration))s")
                 }
             }
         } catch {
-            let duration = Date().timeIntervalSince(startTime)
-            print("❌ [PROFILEVIEW] Profile load FAILED after \(String(format: "%.3f", duration))s: \(error)")
+            print("❌ [PROFILEVIEW] Profile load failed: \(error)")
         }
     }
     

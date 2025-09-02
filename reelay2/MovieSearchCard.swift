@@ -2,7 +2,7 @@
 //  MovieSearchCard.swift
 //  reelay2
 //
-//  Created by Assistant on 8/10/25.
+//  Created by Humza Khalil on 8/10/25.
 //
 
 import SwiftUI
@@ -262,29 +262,11 @@ struct TagChip: View {
     }
     
     private func iconForTag(_ tag: String) -> String {
-        switch tag.lowercased() {
-        case "imax": return "film"
-        case "theater": return "popcorn"
-        case "family": return "person.3.fill"
-        case "theboys": return "person.2.fill"
-        case "airplane": return "airplane"
-        case "train": return "train.side.front.car"
-        case "short": return "movieclapper.fill"
-        default: return "tag.fill"
-        }
+        return TagConfiguration.getIcon(for: tag)
     }
     
     private func colorForTag(_ tag: String) -> Color {
-        switch tag.lowercased() {
-        case "imax": return .red
-        case "theater": return .purple
-        case "family": return .yellow
-        case "theboys": return .green
-        case "airplane": return .orange
-        case "train": return .cyan
-        case "short": return .pink
-        default: return .blue
-        }
+        return TagConfiguration.getColor(for: tag)
     }
 }
 

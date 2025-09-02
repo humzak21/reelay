@@ -18,8 +18,10 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
     let itemCount: Int
     let pinned: Bool
     let ranked: Bool
+    let tags: String?
+    let themedMonthDate: Date?
     
-    init(id: UUID = UUID(), userId: UUID, name: String, description: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false, ranked: Bool = false) {
+    init(id: UUID = UUID(), userId: UUID, name: String, description: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false, ranked: Bool = false, tags: String? = nil, themedMonthDate: Date? = nil) {
         self.id = id
         self.userId = userId
         self.name = name
@@ -29,6 +31,8 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         self.itemCount = itemCount
         self.pinned = pinned
         self.ranked = ranked
+        self.tags = tags
+        self.themedMonthDate = themedMonthDate
     }
     
     enum CodingKeys: String, CodingKey {
@@ -41,6 +45,8 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         case itemCount = "item_count"
         case pinned
         case ranked
+        case tags
+        case themedMonthDate = "themed_month_date"
     }
     
     init(from decoder: Decoder) throws {
@@ -79,6 +85,22 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         itemCount = try container.decodeIfPresent(Int.self, forKey: .itemCount) ?? 0
         pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         ranked = try container.decodeIfPresent(Bool.self, forKey: .ranked) ?? false
+        // Handle both old [String] format and new String format during transition
+        if let tagsString = try? container.decodeIfPresent(String.self, forKey: .tags) {
+            tags = tagsString
+        } else if let tagsArray = try? container.decodeIfPresent([String].self, forKey: .tags) {
+            // Convert old array format to new string format
+            tags = tagsArray.isEmpty ? nil : tagsArray.joined(separator: ", ")
+        } else {
+            tags = nil
+        }
+        
+        // Handle themed month date decoding
+        if let themedMonthDateString = try? container.decodeIfPresent(String.self, forKey: .themedMonthDate) {
+            themedMonthDate = Self.parseDate(themedMonthDateString)
+        } else {
+            themedMonthDate = nil
+        }
     }
     
     func encode(to encoder: Encoder) throws {
@@ -93,11 +115,25 @@ struct MovieList: Codable, Identifiable, @unchecked Sendable {
         try container.encode(itemCount, forKey: .itemCount)
         try container.encode(pinned, forKey: .pinned)
         try container.encode(ranked, forKey: .ranked)
+        try container.encodeIfPresent(tags, forKey: .tags)
+        if let themedMonthDate = themedMonthDate {
+            // Encode themed month date as simple date string (yyyy-MM-dd) to match database format
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            try container.encode(dateFormatter.string(from: themedMonthDate), forKey: .themedMonthDate)
+        }
     }
     
     // Helper method to parse dates from various formats
     static func parseDate(_ dateString: String) -> Date? {
-        // Try ISO8601 with fractional seconds first
+        // Try simple date format first (for themed month dates): 2025-08-01
+        let simpleDateFormatter = DateFormatter()
+        simpleDateFormatter.dateFormat = "yyyy-MM-dd"
+        if let date = simpleDateFormatter.date(from: dateString) {
+            return date
+        }
+        
+        // Try ISO8601 with fractional seconds
         let iso8601Formatter = ISO8601DateFormatter()
         iso8601Formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = iso8601Formatter.date(from: dateString) {
@@ -146,7 +182,9 @@ extension MovieList {
             updatedAt: Date(),
             itemCount: 0,
             pinned: false,
-            ranked: false
+            ranked: false,
+            tags: nil,
+            themedMonthDate: nil
         )
     }
 }
@@ -271,8 +309,10 @@ class PersistentMovieList {
     var itemCount: Int
     var pinned: Bool
     var ranked: Bool
+    var tags: String?
+    var themedMonthDate: Date?
     
-    init(id: String, userId: String, name: String, listDescription: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false, ranked: Bool = false) {
+    init(id: String, userId: String, name: String, listDescription: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false, ranked: Bool = false, tags: String? = nil, themedMonthDate: Date? = nil) {
         self.id = id
         self.userId = userId
         self.name = name
@@ -282,6 +322,8 @@ class PersistentMovieList {
         self.itemCount = itemCount
         self.pinned = pinned
         self.ranked = ranked
+        self.tags = tags
+        self.themedMonthDate = themedMonthDate
     }
     
     convenience init(from movieList: MovieList) {
@@ -294,7 +336,9 @@ class PersistentMovieList {
             updatedAt: movieList.updatedAt,
             itemCount: movieList.itemCount,
             pinned: movieList.pinned,
-            ranked: movieList.ranked
+            ranked: movieList.ranked,
+            tags: movieList.tags,
+            themedMonthDate: movieList.themedMonthDate
         )
     }
     
@@ -308,7 +352,9 @@ class PersistentMovieList {
             updatedAt: updatedAt,
             itemCount: itemCount,
             pinned: pinned,
-            ranked: ranked
+            ranked: ranked,
+            tags: tags,
+            themedMonthDate: themedMonthDate
         )
     }
     
@@ -322,6 +368,8 @@ class PersistentMovieList {
         self.itemCount = movieList.itemCount
         self.pinned = movieList.pinned
         self.ranked = movieList.ranked
+        self.tags = movieList.tags
+        self.themedMonthDate = movieList.themedMonthDate
     }
 }
 
@@ -409,12 +457,35 @@ struct CreateListRequest: Codable {
     let description: String?
     let userId: String
     let ranked: Bool
+    let tags: String?
+    let themedMonthDate: Date?
     
     enum CodingKeys: String, CodingKey {
         case name
         case description
         case userId = "user_id"
         case ranked
+        case tags
+        case themedMonthDate = "themed_month_date"
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encode(userId, forKey: .userId)
+        try container.encode(ranked, forKey: .ranked)
+        try container.encodeIfPresent(tags, forKey: .tags)
+        
+        // Encode themed month date as simple date string if present
+        if let themedMonthDate = themedMonthDate {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            try container.encode(dateFormatter.string(from: themedMonthDate), forKey: .themedMonthDate)
+        } else {
+            try container.encodeNil(forKey: .themedMonthDate)
+        }
     }
 }
 
@@ -422,11 +493,66 @@ struct UpdateListRequest: Codable {
     let name: String?
     let description: String?
     let ranked: Bool?
+    let tags: String?
+    let themedMonthDate: Date?
+    private let alwaysUpdateThemedMonthDate: Bool
     
-    init(name: String? = nil, description: String? = nil, ranked: Bool? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case ranked
+        case tags
+        case themedMonthDate = "themed_month_date"
+    }
+    
+    init(name: String? = nil, description: String? = nil, ranked: Bool? = nil, tags: String? = nil, themedMonthDate: Date? = nil, alwaysUpdateThemedMonthDate: Bool = false) {
         self.name = name
         self.description = description
         self.ranked = ranked
+        self.tags = tags
+        self.themedMonthDate = themedMonthDate
+        self.alwaysUpdateThemedMonthDate = alwaysUpdateThemedMonthDate
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        ranked = try container.decodeIfPresent(Bool.self, forKey: .ranked)
+        tags = try container.decodeIfPresent(String.self, forKey: .tags)
+        
+        if let themedMonthDateString = try container.decodeIfPresent(String.self, forKey: .themedMonthDate) {
+            themedMonthDate = MovieList.parseDate(themedMonthDateString)
+        } else {
+            themedMonthDate = nil
+        }
+        
+        alwaysUpdateThemedMonthDate = false // Default for decoded instances
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encodeIfPresent(description, forKey: .description)
+        try container.encodeIfPresent(ranked, forKey: .ranked)
+        try container.encodeIfPresent(tags, forKey: .tags)
+        
+        // Encode themedMonthDate if we should always update it or if it has a value
+        if alwaysUpdateThemedMonthDate {
+            if let themedMonthDate = themedMonthDate {
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "yyyy-MM-dd"
+                try container.encode(dateFormatter.string(from: themedMonthDate), forKey: .themedMonthDate)
+            } else {
+                try container.encodeNil(forKey: .themedMonthDate)
+            }
+        } else if let themedMonthDate = themedMonthDate {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            try container.encode(dateFormatter.string(from: themedMonthDate), forKey: .themedMonthDate)
+        }
     }
 }
 
@@ -448,5 +574,35 @@ extension MovieList {
                 word.contains(keyword) || keyword.contains(word)
             }
         }
+    }
+}
+
+// MARK: - Tag Helper Extensions
+
+extension MovieList {
+    /// Convert comma-delimited tag string to array
+    var tagsArray: [String] {
+        guard let tags = tags, !tags.isEmpty else { return [] }
+        return tags.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+    
+    /// Create MovieList with tags from array
+    static func withTagsArray(_ tagsArray: [String], id: UUID = UUID(), userId: UUID, name: String, description: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(), itemCount: Int = 0, pinned: Bool = false, ranked: Bool = false, themedMonthDate: Date? = nil) -> MovieList {
+        let tagsString = tagsArray.isEmpty ? nil : tagsArray.joined(separator: ", ")
+        return MovieList(
+            id: id,
+            userId: userId,
+            name: name,
+            description: description,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            itemCount: itemCount,
+            pinned: pinned,
+            ranked: ranked,
+            tags: tagsString,
+            themedMonthDate: themedMonthDate
+        )
     }
 }

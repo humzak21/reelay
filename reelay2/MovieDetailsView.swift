@@ -14,6 +14,7 @@ struct MovieDetailsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var movieService = SupabaseMovieService.shared
     @StateObject private var listService = SupabaseListService.shared
+    @StateObject private var streamingService = StreamingService.shared
     @State private var previousWatches: [Movie] = []
     @State private var showingPreviousWatches = false
     @State private var isEditingReview = false
@@ -35,6 +36,8 @@ struct MovieDetailsView: View {
     @State private var showingListDetails = false
     @State private var showingPosterChange = false
     @State private var showingBackdropChange = false
+    @State private var streamingData: StreamingAvailabilityResponse?
+    @State private var isLoadingStreaming = false
     
     init(movie: Movie) {
         self.movie = movie
@@ -95,6 +98,9 @@ struct MovieDetailsView: View {
                                 listsSection
                             }
                             
+                            // Streaming Availability Section
+                            streamingSection
+                            
                             // Movie Metadata
                             metadataSection
                         }
@@ -148,6 +154,7 @@ struct MovieDetailsView: View {
             await loadAllMoviesForColorCalculation()
             await listService.syncListsFromSupabase()
             await loadMovieLists()
+            await loadStreamingData()
         }
         .sheet(isPresented: $isEditingReview) {
             EditReviewSheet(
@@ -782,6 +789,74 @@ struct MovieDetailsView: View {
         .glassEffect(in: .rect(cornerRadius: 24.0))
     }
     
+    private var streamingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "tv.fill")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.blue)
+                
+                Text("STREAMING AVAILABILITY")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.gray)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                
+                Spacer()
+                
+                if isLoadingStreaming {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                }
+            }
+            
+            if let streaming = streamingData {
+                if streaming.error != nil {
+                    Text("Streaming information not available")
+                        .font(.body)
+                        .foregroundColor(.gray)
+                        .padding(.vertical, 8)
+                } else {
+                    let usStreamingOptions = streaming.streamingOptions["us"] ?? []
+                    
+                    if usStreamingOptions.isEmpty {
+                        Text("Not currently available on major streaming platforms")
+                            .font(.body)
+                            .foregroundColor(.gray)
+                            .padding(.vertical, 8)
+                    } else {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 12) {
+                            ForEach(Array(usStreamingOptions.prefix(6)), id: \.link) { option in
+                                StreamingServiceCard(streamingOption: option)
+                            }
+                        }
+                        
+                        if usStreamingOptions.count > 6 {
+                            Text("+ \(usStreamingOptions.count - 6) more services")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                                .padding(.top, 8)
+                        }
+                    }
+                }
+            } else if !isLoadingStreaming {
+                Text("Tap to load streaming availability")
+                    .font(.body)
+                    .foregroundColor(.blue)
+                    .padding(.vertical, 8)
+                    .onTapGesture {
+                        Task {
+                            await loadStreamingData()
+                        }
+                    }
+            }
+        }
+        .padding(.vertical, 20)
+        .padding(.horizontal, 16)
+        .glassEffect(in: .rect(cornerRadius: 24.0))
+    }
+    
     private var centennialMilestoneSection: some View {
         let isUniqueFilm = isCentennialUniqueFilm(currentMovie)
         let isTotalLog = isCentennialTotalLog(currentMovie)
@@ -1271,6 +1346,30 @@ struct MovieDetailsView: View {
         let listItems = listService.getListItems(mustWatchesList)
         return listItems.contains(where: { $0.tmdbId == tmdbId })
     }
+    
+    // MARK: - Streaming Availability Functions
+    
+    private func loadStreamingData() async {
+        guard let tmdbId = currentMovie.tmdb_id else { return }
+        
+        await MainActor.run {
+            isLoadingStreaming = true
+        }
+        
+        do {
+            let streaming = try await streamingService.getMovieStreamingAvailability(tmdbId: tmdbId, country: "us")
+            await MainActor.run {
+                streamingData = streaming
+                isLoadingStreaming = false
+            }
+        } catch {
+            await MainActor.run {
+                streamingData = nil
+                isLoadingStreaming = false
+                print("Failed to load streaming data: \(error.localizedDescription)")
+            }
+        }
+    }
 }
 
 // MARK: - DateFormatter Extension for MovieDetailsView
@@ -1484,45 +1583,11 @@ struct TagView: View {
     }
     
     private func iconForTag(_ tag: String) -> String {
-        switch tag.lowercased() {
-        case "imax":
-            return "film"
-        case "theater":
-            return "popcorn"
-        case "family":
-            return "person.3.fill"
-        case "theboys":
-            return "person.2.fill"
-        case "airplane":
-            return "airplane"
-        case "train":
-            return "train.side.front.car"
-        case "short":
-            return "movieclapper.fill"
-        default:
-            return "tag.fill"
-        }
+        return TagConfiguration.getIcon(for: tag)
     }
     
     private func colorForTag(_ tag: String) -> Color {
-        switch tag.lowercased() {
-        case "imax":
-            return .red
-        case "theater":
-            return .purple
-        case "family":
-            return .yellow
-        case "theboys":
-            return .green
-        case "airplane":
-            return .orange
-        case "train":
-            return .cyan
-        case "short":
-            return .pink
-        default:
-            return .blue
-        }
+        return TagConfiguration.getColor(for: tag)
     }
 }
 
@@ -1960,7 +2025,7 @@ struct ChangeFilmView: View {
                             searchTask = Task {
                                 try? await Task.sleep(nanoseconds: 500_000_000)
                                 if !Task.isCancelled {
-                                    await performSearchDelayed()
+                                    performSearchDelayed()
                                 }
                             }
                         } else {
@@ -2036,7 +2101,7 @@ struct ChangeFilmView: View {
     private func performSearch() {
         searchTask?.cancel()
         searchTask = Task {
-            await performSearchDelayed()
+            performSearchDelayed()
         }
     }
     
@@ -2369,4 +2434,90 @@ struct ListRow: View {
         created_at: nil,
         updated_at: nil
     ))
+}
+
+// MARK: - Streaming Service Card Component
+
+struct StreamingServiceCard: View {
+    let streamingOption: StreamingOption
+    
+    var body: some View {
+        Button(action: {
+            if let url = URL(string: streamingOption.link) {
+                UIApplication.shared.open(url)
+            }
+        }) {
+            VStack(spacing: 8) {
+                VStack(spacing: 4) {
+                    Text(streamingOption.service.name)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    
+                    Text(streamingOption.type.capitalized)
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                }
+                
+                if let price = streamingOption.price {
+                    Text(price.formatted)
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundColor(.green)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 60)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(serviceBackgroundColor)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(serviceBorderColor, lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private var serviceBackgroundColor: Color {
+        switch streamingOption.service.id.lowercased() {
+        case "netflix":
+            return Color.red.opacity(0.1)
+        case "prime", "amazon":
+            return Color.blue.opacity(0.1)
+        case "disney":
+            return Color.purple.opacity(0.1)
+        case "hbo", "max":
+            return Color.purple.opacity(0.1)
+        case "hulu":
+            return Color.green.opacity(0.1)
+        case "apple":
+            return Color.gray.opacity(0.1)
+        default:
+            return Color.gray.opacity(0.05)
+        }
+    }
+    
+    private var serviceBorderColor: Color {
+        switch streamingOption.service.id.lowercased() {
+        case "netflix":
+            return Color.red.opacity(0.3)
+        case "prime", "amazon":
+            return Color.blue.opacity(0.3)
+        case "disney":
+            return Color.purple.opacity(0.3)
+        case "hbo", "max":
+            return Color.purple.opacity(0.3)
+        case "hulu":
+            return Color.green.opacity(0.3)
+        case "apple":
+            return Color.gray.opacity(0.3)
+        default:
+            return Color.gray.opacity(0.2)
+        }
+    }
 }
