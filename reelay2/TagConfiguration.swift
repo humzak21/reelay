@@ -37,8 +37,8 @@ struct TagConfiguration {
             return []
         }
         
-        // Parse tags - assuming they're comma-separated or space-separated
-        let tags = tagsString.components(separatedBy: CharacterSet(charactersIn: ", "))
+        // Parse tags - assuming they're comma-separated
+        let tags = tagsString.components(separatedBy: ",")
             .compactMap { tag in
                 tag.trimmingCharacters(in: .whitespaces).lowercased()
             }

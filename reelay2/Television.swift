@@ -51,8 +51,9 @@ struct Television: Codable, Identifiable, @unchecked Sendable {
     let current_episode_vote_average: Double?
     let created_at: String?
     let updated_at: String?
+    let favorited: Bool?
     
-    init(id: Int, name: String, first_air_year: Int?, first_air_date: String?, last_air_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, current_season: Int?, current_episode: Int?, total_seasons: Int?, total_episodes: Int?, status: String?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_name: String?, tagline: String?, series_status: String?, homepage: String?, genres: [String]?, networks: [String]?, created_by: [String]?, episode_run_time: [Int]?, in_production: Bool?, number_of_episodes: Int?, number_of_seasons: Int?, origin_country: [String]?, type: String?, current_episode_name: String?, current_episode_overview: String?, current_episode_air_date: String?, current_episode_still_path: String?, current_episode_runtime: Int?, current_episode_vote_average: Double?, created_at: String?, updated_at: String?) {
+    init(id: Int, name: String, first_air_year: Int?, first_air_date: String?, last_air_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, current_season: Int?, current_episode: Int?, total_seasons: Int?, total_episodes: Int?, status: String?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_name: String?, tagline: String?, series_status: String?, homepage: String?, genres: [String]?, networks: [String]?, created_by: [String]?, episode_run_time: [Int]?, in_production: Bool?, number_of_episodes: Int?, number_of_seasons: Int?, origin_country: [String]?, type: String?, current_episode_name: String?, current_episode_overview: String?, current_episode_air_date: String?, current_episode_still_path: String?, current_episode_runtime: Int?, current_episode_vote_average: Double?, created_at: String?, updated_at: String?, favorited: Bool? = nil) {
         self.id = id
         self.name = name
         self.first_air_year = first_air_year
@@ -96,6 +97,7 @@ struct Television: Codable, Identifiable, @unchecked Sendable {
         self.current_episode_vote_average = current_episode_vote_average
         self.created_at = created_at
         self.updated_at = updated_at
+        self.favorited = favorited
     }
     
     enum CodingKeys: String, CodingKey {
@@ -142,6 +144,7 @@ struct Television: Codable, Identifiable, @unchecked Sendable {
         case current_episode_vote_average
         case created_at
         case updated_at
+        case favorited
     }
 }
 
@@ -293,6 +296,10 @@ extension Television {
     
     var isCurrentlyWatching: Bool {
         return status == "watching"
+    }
+    
+    var isFavorited: Bool {
+        return favorited == true
     }
 }
 

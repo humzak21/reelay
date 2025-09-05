@@ -370,6 +370,7 @@ struct AddToListsView: View {
         homepage: nil,
         genres: ["Action", "Drama"],
         created_at: nil,
-        updated_at: nil
+        updated_at: nil,
+        favorited: false
     ))
 }

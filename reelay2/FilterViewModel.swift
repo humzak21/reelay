@@ -26,6 +26,7 @@ class FilterViewModel: ObservableObject {
     @Published var maxRuntime: Int? = nil
     @Published var selectedDecades: Set<String> = []
     @Published var hasReview: Bool? = nil
+    @Published var showFavoritesOnly: Bool = false
     
     // MARK: - Staging Properties (for UI editing, update UI but don't trigger filtering)
     @Published var stagingSelectedTags: Set<String> = []
@@ -42,6 +43,7 @@ class FilterViewModel: ObservableObject {
     @Published var stagingMaxRuntime: Int? = nil
     @Published var stagingSelectedDecades: Set<String> = []
     @Published var stagingHasReview: Bool? = nil
+    @Published var stagingShowFavoritesOnly: Bool = false
     
     // MARK: - Computed Properties
     var hasActiveFilters: Bool {
@@ -58,7 +60,8 @@ class FilterViewModel: ObservableObject {
                minRuntime != nil ||
                maxRuntime != nil ||
                !selectedDecades.isEmpty ||
-               hasReview != nil
+               hasReview != nil ||
+               showFavoritesOnly
     }
     
     var activeFilterCount: Int {
@@ -72,6 +75,7 @@ class FilterViewModel: ObservableObject {
         if minRuntime != nil || maxRuntime != nil { count += 1 }
         if !selectedDecades.isEmpty { count += 1 }
         if hasReview != nil { count += 1 }
+        if showFavoritesOnly { count += 1 }
         return count
     }
     
@@ -91,6 +95,7 @@ class FilterViewModel: ObservableObject {
         maxRuntime = nil
         selectedDecades.removeAll()
         hasReview = nil
+        showFavoritesOnly = false
         
         // Also clear staging
         clearStagingFilters()
@@ -111,6 +116,7 @@ class FilterViewModel: ObservableObject {
         stagingMaxRuntime = nil
         stagingSelectedDecades.removeAll()
         stagingHasReview = nil
+        stagingShowFavoritesOnly = false
     }
     
     func loadCurrentFiltersToStaging() {
@@ -128,6 +134,7 @@ class FilterViewModel: ObservableObject {
         stagingMaxRuntime = maxRuntime
         stagingSelectedDecades = selectedDecades
         stagingHasReview = hasReview
+        stagingShowFavoritesOnly = showFavoritesOnly
     }
     
     func applyStagingFilters() {
@@ -145,6 +152,7 @@ class FilterViewModel: ObservableObject {
         maxRuntime = stagingMaxRuntime
         selectedDecades = stagingSelectedDecades
         hasReview = stagingHasReview
+        showFavoritesOnly = stagingShowFavoritesOnly
     }
     
     func toggleTag(_ tag: String) {
@@ -270,6 +278,9 @@ class FilterViewModel: ObservableObject {
                 let movieHasReview = movie.review != nil && !movie.review!.trimmingCharacters(in: .whitespaces).isEmpty
                 if reviewFilter != movieHasReview { return false }
             }
+            
+            // Favorites filter
+            if showFavoritesOnly && !movie.isFavorited { return false }
             
             return true
         }

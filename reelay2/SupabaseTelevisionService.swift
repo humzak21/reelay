@@ -293,6 +293,60 @@ class SupabaseTelevisionService: ObservableObject {
         
         return show
     }
+    
+    // MARK: - Favorite Functions
+    
+    nonisolated func toggleTVShowFavorite(showId: Int) async throws -> Television {
+        do {
+            let response: Television = try await supabase
+                .from("television")
+                .update([
+                    "favorited": "NOT COALESCE(favorited, false)"
+                ])
+                .eq("id", value: showId)
+                .single()
+                .execute()
+                .value
+            
+            return response
+        } catch {
+            throw SupabaseTelevisionError.updateFailed
+        }
+    }
+    
+    nonisolated func setTVShowFavorite(showId: Int, isFavorite: Bool) async throws -> Television {
+        do {
+            let response: Television = try await supabase
+                .from("television")
+                .update([
+                    "favorited": isFavorite
+                ])
+                .eq("id", value: showId)
+                .single()
+                .execute()
+                .value
+            
+            return response
+        } catch {
+            throw SupabaseTelevisionError.updateFailed
+        }
+    }
+    
+    nonisolated func getFavoriteTelevisionShows() async throws -> [Television] {
+        do {
+            let shows: [Television] = try await supabase
+                .from("television")
+                .select()
+                .eq("favorited", value: true)
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+                
+            return shows
+        } catch {
+            throw SupabaseTelevisionError.invalidData
+        }
+    }
 }
 
 // MARK: - Request Models
@@ -338,6 +392,7 @@ struct AddTelevisionRequest: Codable {
     let current_episode_still_path: String?
     let current_episode_runtime: Int?
     let current_episode_vote_average: Double?
+    let favorited: Bool?
     let created_at: String?
 }
 

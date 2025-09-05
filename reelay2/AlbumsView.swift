@@ -25,6 +25,7 @@ struct AlbumsView: View {
     @State private var showingDeleteAlbumAlert: Bool = false
     @State private var viewMode: ViewMode = .list
     @State private var selectedStatus: AlbumStatus = .wantToListen
+    @State private var showingFavorites = false
     @State private var showingStatusPicker = false
     @State private var isRefreshingMetadata = false
     @State private var refreshingAlbumId: Int?
@@ -48,7 +49,7 @@ struct AlbumsView: View {
     }
     
     private var filteredAlbums: [Album] {
-        let statusFiltered = albums.filter { $0.albumStatus == selectedStatus }
+        let statusFiltered = showingFavorites ? albums.filter { $0.isFavorited } : albums.filter { $0.albumStatus == selectedStatus }
         let searchFiltered = searchText.isEmpty ? statusFiltered : statusFiltered.filter { album in
             album.title.localizedCaseInsensitiveContains(searchText) ||
             album.artist.localizedCaseInsensitiveContains(searchText)
@@ -62,6 +63,10 @@ struct AlbumsView: View {
     
     private var listenedCount: Int {
         albums.filter { $0.albumStatus == .listened }.count
+    }
+    
+    private var favoritesCount: Int {
+        albums.filter { $0.isFavorited }.count
     }
     
     // MARK: - Local Sorting Logic
@@ -243,7 +248,7 @@ struct AlbumsView: View {
                 status: .wantToListen,
                 count: wantToListenCount,
                 icon: "headphones.circle",
-                title: "Want to Listen"
+                title: "To Listen"
             )
             
             statusTab(
@@ -251,6 +256,12 @@ struct AlbumsView: View {
                 count: listenedCount,
                 icon: "checkmark.circle.fill",
                 title: "Listened"
+            )
+            
+            favoritesTab(
+                count: favoritesCount,
+                icon: "heart.fill",
+                title: "Best Albums"
             )
         }
         .background(Color(.systemBackground))
@@ -266,6 +277,7 @@ struct AlbumsView: View {
         Button(action: {
             withAnimation(.easeInOut(duration: 0.2)) {
                 selectedStatus = status
+                showingFavorites = false
             }
         }) {
             VStack(spacing: 4) {
@@ -281,12 +293,43 @@ struct AlbumsView: View {
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
-                .foregroundColor(selectedStatus == status ? .blue : .primary)
+                .foregroundColor(selectedStatus == status && !showingFavorites ? .blue : .primary)
                 
                 Rectangle()
-                    .fill(selectedStatus == status ? .blue : .clear)
+                    .fill(selectedStatus == status && !showingFavorites ? .blue : .clear)
                     .frame(height: 2)
                     .animation(.easeInOut(duration: 0.2), value: selectedStatus)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+    }
+    
+    private func favoritesTab(count: Int, icon: String, title: String) -> some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingFavorites = true
+            }
+        }) {
+            VStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                    
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    
+                    Text("(\(count))")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .foregroundColor(showingFavorites ? .orange : .primary)
+                
+                Rectangle()
+                    .fill(showingFavorites ? .orange : .clear)
+                    .frame(height: 2)
+                    .animation(.easeInOut(duration: 0.2), value: showingFavorites)
             }
         }
         .frame(maxWidth: .infinity)
@@ -327,6 +370,13 @@ struct AlbumsView: View {
                             Label(
                                 album.albumStatus == .listened ? "Mark as Want to Listen" : "Mark as Listened",
                                 systemImage: album.albumStatus == .listened ? "headphones.circle" : "checkmark.circle"
+                            )
+                        }
+                        
+                        Button(action: { toggleAlbumFavorite(album) }) {
+                            Label(
+                                album.isFavorited ? "Remove from Favorites" : "Add to Favorites",
+                                systemImage: album.isFavorited ? "heart.fill" : "heart"
                             )
                         }
                         
@@ -376,6 +426,13 @@ struct AlbumsView: View {
                                 Label(
                                     album.albumStatus == .listened ? "Mark as Want to Listen" : "Mark as Listened",
                                     systemImage: album.albumStatus == .listened ? "headphones.circle" : "checkmark.circle"
+                                )
+                            }
+                            
+                            Button(action: { toggleAlbumFavorite(album) }) {
+                                Label(
+                                    album.isFavorited ? "Remove from Favorites" : "Add to Favorites",
+                                    systemImage: album.isFavorited ? "heart.fill" : "heart"
                                 )
                             }
                             
@@ -452,16 +509,16 @@ struct AlbumsView: View {
     
     private var emptyFilteredStateView: some View {
         VStack(spacing: 20) {
-            Image(systemName: "magnifyingglass")
+            Image(systemName: showingFavorites ? "heart" : "magnifyingglass")
                 .font(.system(size: 50))
                 .foregroundColor(.secondary)
             
             VStack(spacing: 8) {
-                Text("No Results Found")
+                Text(showingFavorites ? "No Favorite Albums" : "No Results Found")
                     .font(.title2)
                     .fontWeight(.semibold)
                 
-                Text("Try adjusting your search or check a different status.")
+                Text(showingFavorites ? "Start adding albums to your favorites by tapping the heart icon." : "Try adjusting your search or check a different status.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -565,6 +622,19 @@ struct AlbumsView: View {
             }
         }
     }
+    
+    private func toggleAlbumFavorite(_ album: Album) {
+        Task {
+            do {
+                try await albumService.toggleAlbumFavorite(albumId: album.id)
+                await loadAlbumsIfNeeded(force: true)
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Album List Row
@@ -590,11 +660,21 @@ struct AlbumListRow: View {
                 
                 // Album info
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(album.title)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 4) {
+                        Text(album.title)
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        
+                        if album.isFavorited {
+                            Image(systemName: "heart.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                        
+                        Spacer()
+                    }
                     
                     Text(album.artist)
                         .font(.subheadline)
@@ -668,11 +748,20 @@ struct AlbumTileView: View {
                     .cornerRadius(12)
                 
                 VStack(spacing: 4) {
-                    Text(album.title)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
+                    HStack(spacing: 4) {
+                        Text(album.title)
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                        
+                        if album.isFavorited {
+                            Image(systemName: "heart.fill")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
                     
                     Text(album.artist)
                         .font(.caption)

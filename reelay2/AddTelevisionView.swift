@@ -29,6 +29,7 @@ struct AddTelevisionView: View {
     @State private var selectedSeason: Int = 1
     @State private var selectedEpisode: Int = 1
     @State private var watchingStatus: WatchingStatus = .watching
+    @State private var isFavorited: Bool = false
     
     // UI state
     @State private var isAddingShow = false
@@ -57,12 +58,21 @@ struct AddTelevisionView: View {
                 
                 if selectedShow != nil {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Add", systemImage: "checkmark") {
-                            Task {
-                                await addShow()
+                        HStack(spacing: 16) {
+                            Button(action: {
+                                isFavorited.toggle()
+                            }) {
+                                Image(systemName: isFavorited ? "heart.fill" : "heart")
+                                    .foregroundColor(isFavorited ? .orange : .gray)
                             }
+                            
+                            Button("Add", systemImage: "checkmark") {
+                                Task {
+                                    await addShow()
+                                }
+                            }
+                            .disabled(isAddingShow)
                         }
-                        .disabled(isAddingShow)
                     }
                 }
             }
@@ -503,6 +513,7 @@ struct AddTelevisionView: View {
                 current_episode_still_path: episodeStillPath,
                 current_episode_runtime: episodeRuntime,
                 current_episode_vote_average: episodeVoteAverage,
+                favorited: isFavorited,
                 created_at: ISO8601DateFormatter().string(from: Date())
             )
             

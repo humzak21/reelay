@@ -282,6 +282,86 @@ class SupabaseMovieService: ObservableObject {
         // Return unique TMDB IDs that have entries
         return Set(results.map { $0.tmdb_id })
     }
+    
+    // MARK: - Favorite Functions
+    
+    nonisolated func toggleMovieFavorite(movieId: Int) async throws -> Movie {
+        print("🔥 DEBUG SERVICE: toggleMovieFavorite called with movieId: \(movieId)")
+        
+        do {
+            // First, fetch the current movie to get its favorite status
+            print("🔥 DEBUG SERVICE: Fetching current movie state")
+            let currentMovie: Movie = try await supabase.database
+                .from("diary")
+                .select()
+                .eq("id", value: movieId)
+                .single()
+                .execute()
+                .value
+            
+            print("🔥 DEBUG SERVICE: Current movie favorited field: \(currentMovie.favorited)")
+            print("🔥 DEBUG SERVICE: Current movie isFavorited: \(currentMovie.isFavorited)")
+            
+            // Toggle the favorite status
+            let newFavoriteStatus = !(currentMovie.favorited ?? false)
+            print("🔥 DEBUG SERVICE: Setting favorited to: \(newFavoriteStatus)")
+            
+            let response: Movie = try await supabase.database
+                .from("diary")
+                .update([
+                    "favorited": newFavoriteStatus
+                ])
+                .eq("id", value: movieId)
+                .single()
+                .execute()
+                .value
+            
+            print("🔥 DEBUG SERVICE: Supabase response received")
+            print("🔥 DEBUG SERVICE: Response movie ID: \(response.id)")
+            print("🔥 DEBUG SERVICE: Response favorited field: \(response.favorited)")
+            print("🔥 DEBUG SERVICE: Response isFavorited computed: \(response.isFavorited)")
+            
+            return response
+        } catch {
+            print("🔥 DEBUG SERVICE ERROR: Supabase update failed: \(error.localizedDescription)")
+            print("🔥 DEBUG SERVICE ERROR: Full error: \(error)")
+            throw SupabaseMovieError.updateFailed(error)
+        }
+    }
+    
+    nonisolated func setMovieFavorite(movieId: Int, isFavorite: Bool) async throws -> Movie {
+        do {
+            let response: Movie = try await supabase.database
+                .from("diary")
+                .update([
+                    "favorited": isFavorite
+                ])
+                .eq("id", value: movieId)
+                .single()
+                .execute()
+                .value
+            
+            return response
+        } catch {
+            throw SupabaseMovieError.updateFailed(error)
+        }
+    }
+    
+    nonisolated func getFavoriteMovies() async throws -> [Movie] {
+        do {
+            let movies: [Movie] = try await supabase.database
+                .from("diary")
+                .select()
+                .eq("favorited", value: true)
+                .order("created_at", ascending: false)
+                .execute()
+                .value
+                
+            return movies
+        } catch {
+            throw SupabaseMovieError.fetchFailed(error)
+        }
+    }
 }
 
 // MARK: - Supporting Types

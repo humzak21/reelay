@@ -45,7 +45,7 @@ struct MovieDetailsView: View {
     }
     
     private var isUnloggedMovie: Bool {
-        currentMovie.id == -1
+        movie.id == -1
     }
     
     private var appBackground: Color {
@@ -123,6 +123,17 @@ struct MovieDetailsView: View {
                         dismiss()
                     }) {
                         Image(systemName: "xmark")
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        Task {
+                            await toggleMovieFavorite()
+                        }
+                    }) {
+                        Image(systemName: currentMovie.isFavorited ? "heart.fill" : "heart")
+                            .foregroundColor(currentMovie.isFavorited ? .orange : .primary)
                     }
                 }
                 
@@ -458,14 +469,24 @@ struct MovieDetailsView: View {
                 
                 // Movie Details
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(currentMovie.title)
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : .white)
-                        .shadow(color: shouldHighlightMustWatchTitle(currentMovie) ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 3 : 2, x: 0, y: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 0 : 1)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(currentMovie.title)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : .white)
+                            .shadow(color: shouldHighlightMustWatchTitle(currentMovie) ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 3 : 2, x: 0, y: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 0 : 1)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        
+                        if currentMovie.isFavorited {
+                            Image(systemName: "heart.fill")
+                                .foregroundColor(.orange)
+                                .font(.title3)
+                                .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                                .baselineOffset(2)  // Slight downward adjustment
+                        }
+                    }
                     
                     Text(currentMovie.formattedReleaseYear)
                         .font(.title3)
@@ -996,6 +1017,29 @@ struct MovieDetailsView: View {
             await MainActor.run {
                 previousWatches = []
             }
+        }
+    }
+    
+    private func toggleMovieFavorite() async {
+        print("🔥 DEBUG: toggleMovieFavorite called")
+        print("🔥 DEBUG: Current movie ID: \(currentMovie.id)")
+        print("🔥 DEBUG: Current favorite status: \(currentMovie.isFavorited)")
+        print("🔥 DEBUG: Current movie favorited field: \(currentMovie.favorited)")
+        
+        do {
+            let updatedMovie = try await movieService.toggleMovieFavorite(movieId: currentMovie.id)
+            
+            print("🔥 DEBUG: Received updated movie")
+            print("🔥 DEBUG: Updated favorite status: \(updatedMovie.isFavorited)")
+            print("🔥 DEBUG: Updated movie favorited field: \(updatedMovie.favorited)")
+            
+            await MainActor.run {
+                currentMovie = updatedMovie
+                print("🔥 DEBUG: UI updated with new movie state")
+            }
+        } catch {
+            print("🔥 DEBUG ERROR: Failed to toggle favorite status: \(error.localizedDescription)")
+            print("🔥 DEBUG ERROR: Full error: \(error)")
         }
     }
     
@@ -2268,7 +2312,8 @@ struct ChangeFilmView: View {
                 homepage: currentMovie.homepage,
                 genres: currentMovie.genres,
                 created_at: currentMovie.created_at,
-                updated_at: currentMovie.updated_at
+                updated_at: currentMovie.updated_at,
+                favorited: currentMovie.favorited
             )
             
             await MainActor.run {
@@ -2432,7 +2477,8 @@ struct ListRow: View {
         homepage: nil,
         genres: nil,
         created_at: nil,
-        updated_at: nil
+        updated_at: nil,
+        favorited: false
     ))
 }
 

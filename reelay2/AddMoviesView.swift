@@ -41,6 +41,7 @@ struct AddMoviesView: View {
     @State private var tags: String = ""
     @State private var watchDate = Date()
     @State private var isRewatch = false
+    @State private var isFavorited = false
     
     // UI state
     @State private var showingSimilarRatings = false
@@ -253,6 +254,8 @@ struct AddMoviesView: View {
                 
                 ratingSection
                 
+                favoriteSection
+                
                 // Previous entries section
                 if !previousWatches.isEmpty {
                     previousEntriesSection
@@ -354,6 +357,31 @@ struct AddMoviesView: View {
             Text("Tap stars to rate (tap twice for half stars)")
                 .font(.caption)
                 .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Favorite Section
+    private var favoriteSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Favorite")
+                .font(.headline)
+            
+            Button(action: {
+                isFavorited.toggle()
+            }) {
+                HStack {
+                    Image(systemName: isFavorited ? "heart.fill" : "heart")
+                        .foregroundColor(isFavorited ? .orange : .secondary)
+                        .font(.title2)
+                    
+                    Text(isFavorited ? "Remove from favorites" : "Mark as favorite")
+                        .foregroundColor(.primary)
+                    
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(PlainButtonStyle())
         }
     }
     
@@ -916,7 +944,12 @@ struct AddMoviesView: View {
                 genres: genres
             )
             
-            let _ = try await supabaseService.addMovie(movieRequest)
+            let addedMovie = try await supabaseService.addMovie(movieRequest)
+            
+            // Set favorite status if selected
+            if isFavorited {
+                let _ = try await supabaseService.setMovieFavorite(movieId: addedMovie.id, isFavorite: true)
+            }
             
             // Copy review to clipboard if it exists
             if !review.isEmpty {
@@ -946,6 +979,7 @@ struct AddMoviesView: View {
         tags = ""
         watchDate = Date()
         isRewatch = false
+        isFavorited = false
         showingSimilarRatings = false
         similarRatingMovies = []
         displayedMoviesCount = 5

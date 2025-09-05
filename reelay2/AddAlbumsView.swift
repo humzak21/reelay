@@ -40,6 +40,7 @@ struct AddAlbumsView: View {
     @State private var notes: String = ""
     @State private var listenedDate = Date()
     @State private var hasListened = false
+    @State private var isFavorited = false
     
     // UI state
     @State private var isAddingAlbum = false
@@ -607,11 +608,34 @@ struct AddAlbumsView: View {
     
     // MARK: - Listen Status Section
     private var listenStatusSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Listen Status")
                 .font(.headline)
             
             Toggle("I have already listened to this album", isOn: $hasListened)
+            
+            // Favorite toggle
+            HStack {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isFavorited.toggle()
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: isFavorited ? "heart.fill" : "heart")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(isFavorited ? .orange : .gray)
+                        
+                        Text(isFavorited ? "Remove from Favorites" : "Add to Favorites")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(isFavorited ? .orange : .primary)
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Spacer()
+            }
         }
     }
     
@@ -752,7 +776,7 @@ struct AddAlbumsView: View {
                     spotify_href: selectedResult.href,
                     status: status,
                     notes: notes.isEmpty ? nil : notes,
-                    user_id: nil
+                    favorited: isFavorited
                 )
             } else {
                 // Manual entry
@@ -775,26 +799,21 @@ struct AddAlbumsView: View {
                     spotify_href: nil,
                     status: status,
                     notes: notes.isEmpty ? nil : notes,
-                    user_id: nil
+                    favorited: isFavorited
                 )
             }
             
-            let _ = try await supabaseService.addAlbum(albumRequest)
+            let addedAlbum = try await supabaseService.addAlbum(albumRequest)
+            
+            // If this is a Spotify album, fetch and save the tracks
+            if let selectedResult = selectedResult {
+                await fetchAndSaveTracklist(for: addedAlbum, spotifyId: selectedResult.id)
+            }
             
             // Update the listened date if applicable
             if hasListened {
-                if let selectedResult = selectedResult,
-                   let album = try? await supabaseService.getAlbums().first(where: { $0.spotify_id == selectedResult.id }) {
-                    let updateRequest = UpdateAlbumRequest(listened_date: listenedDate)
-                    let _ = try await supabaseService.updateAlbum(id: album.id, with: updateRequest)
-                } else if isManualEntry,
-                          let album = try? await supabaseService.getAlbums().first(where: { 
-                              $0.title.lowercased() == manualTitle.lowercased() && 
-                              $0.artist.lowercased() == manualArtist.lowercased() 
-                          }) {
-                    let updateRequest = UpdateAlbumRequest(listened_date: listenedDate)
-                    let _ = try await supabaseService.updateAlbum(id: album.id, with: updateRequest)
-                }
+                let updateRequest = UpdateAlbumRequest(listened_date: listenedDate)
+                let _ = try await supabaseService.updateAlbum(id: addedAlbum.id, with: updateRequest)
             }
             
             await MainActor.run {
@@ -815,6 +834,7 @@ struct AddAlbumsView: View {
         notes = ""
         listenedDate = Date()
         hasListened = false
+        isFavorited = false
         previousEntries = []
         showingPreviousEntries = false
     }
@@ -839,6 +859,59 @@ struct AddAlbumsView: View {
         
         // Reset common form state
         resetForm()
+    }
+    
+    private func fetchAndSaveTracklist(for album: Album, spotifyId: String) async {
+        print("🎵 Starting track fetch for album ID: \(album.id), Spotify ID: \(spotifyId)")
+        
+        do {
+            // Use the dedicated album tracks endpoint for better efficiency
+            print("🎵 Fetching tracks from Spotify...")
+            let tracksResponse = try await spotifyService.getAlbumTracks(albumId: spotifyId, limit: 50)
+            print("🎵 Received \(tracksResponse.items.count) tracks from Spotify")
+            
+            // If we have tracks, save them to the database
+            if !tracksResponse.items.isEmpty {
+                // Convert Spotify simplified tracks to our Track model
+                let tracks = tracksResponse.items.compactMap { spotifyTrack -> Track? in
+                    guard let trackName = spotifyTrack.name,
+                          let trackNumber = spotifyTrack.trackNumber else { 
+                        print("⚠️ Skipping track - missing name or track number")
+                        return nil 
+                    }
+                    
+                    let artistName = spotifyTrack.artists?.first?.name
+                    let featuredArtists = spotifyTrack.artists?.dropFirst().compactMap { $0.name }
+                    
+                    return Track(
+                        id: 0, // Will be set by database
+                        album_id: album.id,
+                        track_number: trackNumber,
+                        title: trackName,
+                        artist: artistName,
+                        featured_artists: featuredArtists?.isEmpty == false ? Array(featuredArtists!) : nil,
+                        duration_ms: spotifyTrack.durationMs,
+                        spotify_id: spotifyTrack.id,
+                        spotify_uri: spotifyTrack.uri,
+                        spotify_href: spotifyTrack.href,
+                        created_at: "", // Will be set by database
+                        updated_at: "" // Will be set by database
+                    )
+                }
+                
+                print("🎵 Converted \(tracks.count) tracks, saving to database...")
+                
+                // Save tracks to database
+                let savedTracks = try await supabaseService.addTracksToAlbum(albumId: album.id, tracks: tracks)
+                print("✅ Successfully saved \(savedTracks.count) tracks to database")
+            } else {
+                print("⚠️ No tracks received from Spotify")
+            }
+        } catch {
+            // Log the full error for debugging
+            print("❌ Failed to fetch and save tracklist: \(error)")
+            print("❌ Error details: \(error.localizedDescription)")
+        }
     }
     
 }

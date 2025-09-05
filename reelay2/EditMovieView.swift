@@ -309,6 +309,7 @@ struct EditMovieView: View {
         homepage: nil,
         genres: nil,
         created_at: nil,
-        updated_at: nil
+        updated_at: nil,
+        favorited: false
     )) { _ in }
 }

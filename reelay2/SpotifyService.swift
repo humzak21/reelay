@@ -160,6 +160,49 @@ class SpotifyService: ObservableObject {
         }
     }
     
+    // MARK: - Get Album Tracks
+    func getAlbumTracks(albumId: String, limit: Int = 50, offset: Int = 0) async throws -> SpotifyAlbumTracksResponse {
+        try await ensureValidToken()
+        
+        guard let token = accessToken else {
+            throw SpotifyError.noAccessToken
+        }
+        
+        let urlString = "\(baseURL)/albums/\(albumId)/tracks?limit=\(limit)&offset=\(offset)"
+        
+        guard let url = URL(string: urlString) else {
+            throw SpotifyError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw SpotifyError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if httpResponse.statusCode == 429 {
+                throw SpotifyError.rateLimitExceeded
+            }
+            throw SpotifyError.httpError(httpResponse.statusCode)
+        }
+        
+        do {
+            let decoder = JSONDecoder()
+            let tracksResponse = try decoder.decode(SpotifyAlbumTracksResponse.self, from: data)
+            return tracksResponse
+        } catch {
+            print("Spotify API decoding error: \(error)")
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("Raw JSON: \(jsonString)")
+            }
+            throw SpotifyError.decodingError(error)
+        }
+    }
+    
     // MARK: - Search Artists
     func searchArtists(query: String, limit: Int = 20, offset: Int = 0) async throws -> SpotifySearchResponse {
         try await ensureValidToken()

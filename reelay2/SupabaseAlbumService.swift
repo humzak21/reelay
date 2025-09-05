@@ -91,18 +91,27 @@ class SupabaseAlbumService: ObservableObject {
     
     /// Add a new album to the list
     nonisolated func addAlbum(_ albumData: AddAlbumRequest) async throws -> Album {
-        let response = try await supabase
-            .from("albums")
-            .insert(albumData)
-            .select()
-            .execute()
+        print("🗄️ Adding album: \(albumData.title) by \(albumData.artist)")
         
-        let albums: [Album] = try JSONDecoder().decode([Album].self, from: response.data)
-        guard let album = albums.first else {
-            throw SupabaseAlbumError.noAlbumReturned
+        do {
+            let response = try await supabase
+                .from("albums")
+                .insert(albumData)
+                .select()
+                .execute()
+            
+            print("🗄️ Album insert response received")
+            let albums: [Album] = try JSONDecoder().decode([Album].self, from: response.data)
+            guard let album = albums.first else {
+                throw SupabaseAlbumError.noAlbumReturned
+            }
+            
+            print("🗄️ Album created with ID: \(album.id), user_id: \(album.user_id ?? "nil")")
+            return album
+        } catch {
+            print("❌ Album creation error: \(error)")
+            throw error
         }
-        
-        return album
     }
     
     /// Update an existing album
@@ -267,6 +276,8 @@ class SupabaseAlbumService: ObservableObject {
     
     /// Add tracks to an album
     nonisolated func addTracksToAlbum(albumId: Int, tracks: [Track]) async throws -> [Track] {
+        print("🗄️ SupabaseAlbumService: Adding \(tracks.count) tracks to album \(albumId)")
+        
         // Convert tracks to insert format (without id, created_at, updated_at)
         let tracksToInsert = tracks.map { track in
             TrackInsert(
@@ -276,18 +287,34 @@ class SupabaseAlbumService: ObservableObject {
                 artist: track.artist,
                 featured_artists: track.featured_artists,
                 duration_ms: track.duration_ms,
-                spotify_id: track.spotify_id
+                spotify_id: track.spotify_id,
+                spotify_uri: track.spotify_uri,
+                spotify_href: track.spotify_href
             )
         }
         
-        let response = try await supabase
-            .from("album_tracks")
-            .insert(tracksToInsert)
-            .select()
-            .execute()
+        print("🗄️ Inserting into 'album_tracks' table...")
         
-        let insertedTracks: [Track] = try JSONDecoder().decode([Track].self, from: response.data)
-        return insertedTracks
+        do {
+            let response = try await supabase
+                .from("album_tracks")
+                .insert(tracksToInsert)
+                .select()
+                .execute()
+            
+            print("🗄️ Database response received, decoding...")
+            let insertedTracks: [Track] = try JSONDecoder().decode([Track].self, from: response.data)
+            print("🗄️ Successfully decoded \(insertedTracks.count) tracks")
+            return insertedTracks
+        } catch {
+            print("❌ Database error: \(error)")
+            print("❌ Error type: \(type(of: error))")
+            let supabaseError = error as NSError
+            print("❌ Error domain: \(supabaseError.domain)")
+            print("❌ Error code: \(supabaseError.code)")
+            print("❌ Error userInfo: \(supabaseError.userInfo)")
+            throw error
+        }
     }
     
     /// Get tracks for an album
@@ -316,7 +343,7 @@ class SupabaseAlbumService: ObservableObject {
     nonisolated func getAlbumWithTracks(albumId: Int) async throws -> Album? {
         // Get the album
         let albums = try await getAlbums()
-        guard var album = albums.first(where: { $0.id == albumId }) else {
+        guard let album = albums.first(where: { $0.id == albumId }) else {
             return nil
         }
         
@@ -351,6 +378,38 @@ class SupabaseAlbumService: ObservableObject {
         )
         
         return albumWithTracks
+    }
+    
+    // MARK: - Favorite Functions
+    
+    nonisolated func toggleAlbumFavorite(albumId: Int) async throws -> Album {
+        // First get the current album to toggle its favorited status
+        let albums = try await getAlbums()
+        guard let currentAlbum = albums.first(where: { $0.id == albumId }) else {
+            throw SupabaseAlbumError.albumNotFound
+        }
+        
+        let newFavoritedStatus = !(currentAlbum.favorited ?? false)
+        let updateData = UpdateAlbumRequest(favorited: newFavoritedStatus)
+        
+        return try await updateAlbum(id: albumId, with: updateData)
+    }
+    
+    nonisolated func setAlbumFavorite(albumId: Int, isFavorite: Bool) async throws -> Album {
+        let updateData = UpdateAlbumRequest(favorited: isFavorite)
+        return try await updateAlbum(id: albumId, with: updateData)
+    }
+    
+    nonisolated func getFavoriteAlbums() async throws -> [Album] {
+        let response = try await supabase
+            .from("albums")
+            .select()
+            .eq("favorited", value: true)
+            .order("created_at", ascending: false)
+            .execute()
+        
+        let albums: [Album] = try JSONDecoder().decode([Album].self, from: response.data)
+        return albums
     }
 }
 

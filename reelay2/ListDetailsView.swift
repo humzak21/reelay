@@ -974,7 +974,8 @@ struct ListDetailsView: View {
                     homepage: movieDetails.homepage,
                     genres: movieDetails.genreNames,
                     created_at: nil,
-                    updated_at: nil
+                    updated_at: nil,
+                    favorited: nil
                 )
                 
                 await MainActor.run {
@@ -1194,7 +1195,8 @@ struct MoviePosterView: View {
                     homepage: movieDetails.homepage,
                     genres: movieDetails.genreNames,
                     created_at: nil,
-                    updated_at: nil
+                    updated_at: nil,
+                    favorited: nil
                 )
                 
                 await MainActor.run {

@@ -95,58 +95,52 @@ struct MoviesView: View {
         let title1 = movie1.title.lowercased()
         let title2 = movie2.title.lowercased()
         if title1 == title2 {
-          // Secondary sort by created_at for same titles
           let created1 = movie1.created_at ?? ""
           let created2 = movie2.created_at ?? ""
           return sortAscending ? created1 < created2 : created1 > created2
         }
         return sortAscending ? title1 < title2 : title1 > title2
-
+        
       case .watchDate:
         let date1 = movie1.watch_date ?? ""
         let date2 = movie2.watch_date ?? ""
         if date1 == date2 {
-          // Secondary sort by created_at for same watch dates
           let created1 = movie1.created_at ?? ""
           let created2 = movie2.created_at ?? ""
           return sortAscending ? created1 < created2 : created1 > created2
         }
         return sortAscending ? date1 < date2 : date1 > date2
-
+        
       case .releaseDate:
         let year1 = movie1.release_year ?? 0
         let year2 = movie2.release_year ?? 0
         if year1 == year2 {
-          // Secondary sort by created_at for same release years
           let created1 = movie1.created_at ?? ""
           let created2 = movie2.created_at ?? ""
           return sortAscending ? created1 < created2 : created1 > created2
         }
         return sortAscending ? year1 < year2 : year1 > year2
-
+        
       case .rating:
         let rating1 = movie1.rating ?? 0
         let rating2 = movie2.rating ?? 0
         if rating1 == rating2 {
-          // Secondary sort by created_at for same ratings
           let created1 = movie1.created_at ?? ""
           let created2 = movie2.created_at ?? ""
           return sortAscending ? created1 < created2 : created1 > created2
         }
         return sortAscending ? rating1 < rating2 : rating1 > rating2
-
+        
       case .detailedRating:
         let detailed1 = movie1.detailed_rating ?? 0
         let detailed2 = movie2.detailed_rating ?? 0
         if detailed1 == detailed2 {
-          // Secondary sort by created_at for same detailed ratings
           let created1 = movie1.created_at ?? ""
           let created2 = movie2.created_at ?? ""
           return sortAscending ? created1 < created2 : created1 > created2
         }
-        return sortAscending
-          ? detailed1 < detailed2 : detailed1 > detailed2
-
+        return sortAscending ? detailed1 < detailed2 : detailed1 > detailed2
+        
       case .dateAdded:
         let created1 = movie1.created_at ?? ""
         let created2 = movie2.created_at ?? ""
@@ -326,8 +320,17 @@ struct MoviesView: View {
         filterViewModel.loadCurrentFiltersToStaging()
       }
     }
-    .sheet(isPresented: $showingSortOptions) {
-      SortOptionsView(sortBy: $sortBy, sortAscending: $sortAscending)
+    .confirmationDialog("Sort By", isPresented: $showingSortOptions) {
+      ForEach(MovieSortField.allCases, id: \.rawValue) { field in
+        Button(field.displayName) {
+          if sortBy == field {
+            sortAscending.toggle()
+          } else {
+            sortBy = field
+            sortAscending = false
+          }
+        }
+      }
     }
     .sheet(item: $selectedMovie) { movie in
       MovieDetailsView(movie: movie)
@@ -482,10 +485,14 @@ struct MoviesView: View {
 
   @ViewBuilder
   private var loadingView: some View {
-    VStack {
+    VStack(spacing: 16) {
       Spacer()
       ProgressView()
         .progressViewStyle(CircularProgressViewStyle(tint: .white))
+        .scaleEffect(1.2)
+      Text("Finishing up a film")
+        .font(.system(size: 16, weight: .medium))
+        .foregroundColor(.white)
       Spacer()
     }
   }
@@ -708,6 +715,12 @@ struct MoviesView: View {
       Button("Log Again", systemImage: "plus.circle") {
         movieToLogAgain = movie
         showingLogAgain = true
+      }
+      Button(movie.isFavorited ? "Remove from Favorites" : "Add to Favorites", 
+             systemImage: movie.isFavorited ? "heart.fill" : "heart") {
+        Task {
+          await toggleMovieFavorite(movie)
+        }
       }
       Button("Add to List", systemImage: "list.bullet") {
         movieToAddToLists = movie
@@ -1055,6 +1068,12 @@ struct MoviesView: View {
                 movieToLogAgain = movie
                 showingLogAgain = true
               }
+              Button(movie.isFavorited ? "Remove from Favorites" : "Add to Favorites", 
+                     systemImage: movie.isFavorited ? "heart.fill" : "heart") {
+                Task {
+                  await toggleMovieFavorite(movie)
+                }
+              }
               Button("Add to List", systemImage: "list.bullet") {
                 movieToAddToLists = movie
               }
@@ -1112,24 +1131,33 @@ struct MoviesView: View {
 
       // Movie details
       VStack(alignment: .leading, spacing: 2) {
-        Text(movie.title)
-          .font(.subheadline)
-          .fontWeight(.semibold)
-          .foregroundColor(
-            shouldHighlightMustWatchTitle
-              ? .purple
-              : shouldHighlightReleaseYearTitle ? .cyan : .white
-          )
-          .shadow(
-            color: shouldHighlightMustWatchTitle
-              ? .purple.opacity(0.6)
-              : shouldHighlightReleaseYearTitle
-                ? .cyan.opacity(0.6) : .clear,
-            radius: 2,
-            x: 0,
-            y: 0
-          )
-          .lineLimit(2)
+        HStack(alignment: .top, spacing: 4) {
+          Text(movie.title)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .foregroundColor(
+              shouldHighlightMustWatchTitle
+                ? .purple
+                : shouldHighlightReleaseYearTitle ? .cyan : .white
+            )
+            .shadow(
+              color: shouldHighlightMustWatchTitle
+                ? .purple.opacity(0.6)
+                : shouldHighlightReleaseYearTitle
+                  ? .cyan.opacity(0.6) : .clear,
+              radius: 2,
+              x: 0,
+              y: 0
+            )
+            .lineLimit(2)
+          
+          if movie.isFavorited {
+            Image(systemName: "heart.fill")
+              .foregroundColor(.orange)
+              .font(.system(size: 10, weight: .semibold))
+              .baselineOffset(-12)  // Drop down by 12 points
+          }
+        }
 
         Text(movie.formattedReleaseYear)
           .font(.caption)
@@ -1434,6 +1462,12 @@ struct MoviesView: View {
       Button("Log Again", systemImage: "plus.circle") {
         movieToLogAgain = movie
         showingLogAgain = true
+      }
+      Button(movie.isFavorited ? "Remove from Favorites" : "Add to Favorites", 
+             systemImage: movie.isFavorited ? "heart.fill" : "heart") {
+        Task {
+          await toggleMovieFavorite(movie)
+        }
       }
       Button("Add to List", systemImage: "list.bullet") {
         movieToAddToLists = movie
@@ -1958,15 +1992,73 @@ struct MoviesView: View {
 
     return false
   }
-}
 
-// MARK: - DateFormatter Extension
-extension DateFormatter {
-  static let movieDateFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter
-  }()
+  // MARK: - Favorite Functions
+  
+  private func toggleMovieFavorite(_ movie: Movie) async {
+    print("🔥 DEBUG MOVIESVIEW: toggleMovieFavorite called for movie: \(movie.title)")
+    print("🔥 DEBUG MOVIESVIEW: Current favorite status: \(movie.isFavorited)")
+    print("🔥 DEBUG MOVIESVIEW: Current favorited field: \(movie.favorited)")
+    
+    do {
+      let updatedMovie = try await movieService.toggleMovieFavorite(movieId: movie.id)
+      
+      print("🔥 DEBUG MOVIESVIEW: Received updated movie")
+      print("🔥 DEBUG MOVIESVIEW: Updated favorite status: \(updatedMovie.isFavorited)")
+      print("🔥 DEBUG MOVIESVIEW: Updated favorited field: \(updatedMovie.favorited)")
+      
+      await MainActor.run {
+        // Update the movie in the local array
+        if let index = movies.firstIndex(where: { $0.id == movie.id }) {
+          print("🔥 DEBUG MOVIESVIEW: Found movie at index \(index), updating local array")
+          
+          // Create a new movie with updated favorite status
+          movies[index] = Movie(
+            id: updatedMovie.id,
+            title: updatedMovie.title,
+            release_year: updatedMovie.release_year,
+            release_date: updatedMovie.release_date,
+            rating: updatedMovie.rating,
+            detailed_rating: updatedMovie.detailed_rating,
+            review: updatedMovie.review,
+            tags: updatedMovie.tags,
+            watch_date: updatedMovie.watch_date,
+            is_rewatch: updatedMovie.is_rewatch,
+            tmdb_id: updatedMovie.tmdb_id,
+            overview: updatedMovie.overview,
+            poster_url: updatedMovie.poster_url,
+            backdrop_path: updatedMovie.backdrop_path,
+            director: updatedMovie.director,
+            runtime: updatedMovie.runtime,
+            vote_average: updatedMovie.vote_average,
+            vote_count: updatedMovie.vote_count,
+            popularity: updatedMovie.popularity,
+            original_language: updatedMovie.original_language,
+            original_title: updatedMovie.original_title,
+            tagline: updatedMovie.tagline,
+            status: updatedMovie.status,
+            budget: updatedMovie.budget,
+            revenue: updatedMovie.revenue,
+            imdb_id: updatedMovie.imdb_id,
+            homepage: updatedMovie.homepage,
+            genres: updatedMovie.genres,
+            created_at: updatedMovie.created_at,
+            updated_at: updatedMovie.updated_at,
+            favorited: updatedMovie.favorited
+          )
+          
+          print("🔥 DEBUG MOVIESVIEW: Local array updated. New status: \(movies[index].isFavorited)")
+        } else {
+          print("🔥 DEBUG MOVIESVIEW: ERROR - Could not find movie in local array!")
+        }
+      }
+    } catch {
+      print("🔥 DEBUG MOVIESVIEW ERROR: \(error.localizedDescription)")
+      await MainActor.run {
+        errorMessage = "Failed to update favorite status: \(error.localizedDescription)"
+      }
+    }
+  }
 }
 
 struct MovieRowView: View {
@@ -2054,6 +2146,15 @@ struct MovieRowView: View {
               .foregroundColor(.purple)
               .frame(minWidth: 30, alignment: .leading)
               .baselineOffset(-1)  // Slight downward adjustment
+          }
+          
+          // Favorites heart next to detailed rating
+          if movie.isFavorited {
+            Image(systemName: "heart.fill")
+              .foregroundColor(.orange)
+              .font(.system(size: 12, weight: .semibold))
+              .baselineOffset(-1)  // Match detailed rating alignment
+              .padding(.leading, -13)  // Pull closer to rating number
           }
 
         }
@@ -2165,7 +2266,7 @@ struct MovieTileView: View {
       .clipped()
       .cornerRadius(12)
 
-      // Star rating and rewatch icon centered below poster
+      // Star rating, favorites, and rewatch icon centered below poster
       HStack(spacing: 6) {
         // Star rating
         if let rating = movie.rating {
@@ -2178,6 +2279,14 @@ struct MovieTileView: View {
               .font(.system(size: 10, weight: .bold))
             }
           }
+        }
+        
+        // Favorites heart
+        if movie.isFavorited {
+          Image(systemName: "heart.fill")
+            .foregroundColor(.orange)
+            .font(.system(size: 10, weight: .bold))
+            .baselineOffset(-16)  // Drop down by 12 points
         }
 
         // Rewatch indicator
@@ -3207,6 +3316,15 @@ struct SortDirectionRow: View {
     .buttonStyle(PlainButtonStyle())
   }
 
+}
+
+// MARK: - DateFormatter Extension
+extension DateFormatter {
+  static let movieDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter
+  }()
 }
 
 #Preview {

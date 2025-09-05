@@ -69,12 +69,14 @@ struct ListsView: View {
             }
             .task {
                 if movieService.isLoggedIn && !hasLoadedInitially {
+                    isLoading = true
                     await loadListsIfNeeded(force: true)
                     hasLoadedInitially = true
                 }
             }
             .onChange(of: movieService.isLoggedIn) { _, isLoggedIn in
                 if isLoggedIn {
+                    isLoading = true
                     Task {
                         await loadListsIfNeeded(force: true)
                         hasLoadedInitially = true
@@ -87,6 +89,7 @@ struct ListsView: View {
             .onAppear {
                 // Only load if we haven't loaded initially or data is stale
                 if movieService.isLoggedIn && shouldRefreshData() {
+                    isLoading = true
                     Task {
                         await loadListsIfNeeded(force: false)
                     }
@@ -179,10 +182,14 @@ struct ListsView: View {
     
     @ViewBuilder
     private var loadingView: some View {
-        VStack {
+        VStack(spacing: 16) {
             Spacer()
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.2)
+            Text("Finishing up a film")
+                .font(.headline)
+                .foregroundColor(.white)
             Spacer()
         }
     }
@@ -301,14 +308,15 @@ struct ListsView: View {
     private func loadListsIfNeeded(force: Bool) async {
         // If force is false and data is still fresh, skip loading
         if !force && !shouldRefreshData() && !dataManager.movieLists.isEmpty {
+            isLoading = false
             return
         }
         
-        guard !isLoading else { 
-            return 
+        // Set loading state if not already loading
+        if !isLoading {
+            isLoading = true
         }
         
-        isLoading = true
         errorMessage = nil
         
         await dataManager.refreshLists()

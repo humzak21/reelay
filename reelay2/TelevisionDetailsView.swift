@@ -84,12 +84,23 @@ struct TelevisionDetailsView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button("Delete Show", systemImage: "trash", role: .destructive) {
-                            // TODO: Implement delete functionality
+                    HStack(spacing: 16) {
+                        Button(action: {
+                            Task {
+                                await toggleFavorite()
+                            }
+                        }) {
+                            Image(systemName: currentShow.isFavorited ? "heart.fill" : "heart")
+                                .foregroundColor(currentShow.isFavorited ? .orange : .primary)
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
+                        
+                        Menu {
+                            Button("Delete Show", systemImage: "trash", role: .destructive) {
+                                // TODO: Implement delete functionality
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
                     }
                 }
             }
@@ -210,7 +221,7 @@ struct TelevisionDetailsView: View {
         HStack(spacing: 15) {
             // Current Progress Card
             VStack(spacing: 10) {
-                Text("CURRENT PROGRESS")
+                Text("CURRENT EPISODE")
                     .font(.caption)
                     .fontWeight(.medium)
                     .foregroundColor(.gray)
@@ -697,6 +708,17 @@ struct TelevisionDetailsView: View {
                 isLoadingStreaming = false
                 print("Failed to load TV streaming data: \(error.localizedDescription)")
             }
+        }
+    }
+    
+    private func toggleFavorite() async {
+        do {
+            let updatedShow = try await televisionService.toggleTVShowFavorite(showId: currentShow.id)
+            await MainActor.run {
+                currentShow = updatedShow
+            }
+        } catch {
+            print("Failed to toggle favorite: \(error.localizedDescription)")
         }
     }
     

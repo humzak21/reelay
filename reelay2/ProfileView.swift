@@ -137,7 +137,12 @@ struct LoggedInProfileView: View {
     @State private var showingAddTelevision = false
     @State private var showingAddAlbum = false
     @State private var showingRandomizer = false
+    @State private var isLoading = false
+    @State private var lastDataLoadTime: Date?
+    @State private var hasLoadedInitially = false
     @Environment(\.colorScheme) private var colorScheme
+    
+    private let cacheRefreshInterval: TimeInterval = 300 // 5 minutes
     
     private var appBackground: Color {
         colorScheme == .dark ? .black : Color(.systemBackground)
@@ -145,16 +150,20 @@ struct LoggedInProfileView: View {
     
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    // Backdrop Section with overlaid profile info
-                    ZStack(alignment: .bottom) {
-                        backdropSection
-                        profileInfoSection
-                    }
-                    
-                    // Content Section
-                    VStack(spacing: 16) {
+            ZStack {
+                if isLoading {
+                    loadingView
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            // Backdrop Section with overlaid profile info
+                            ZStack(alignment: .bottom) {
+                                backdropSection
+                                profileInfoSection
+                            }
+                            
+                            // Content Section
+                            VStack(spacing: 16) {
                         // Navigation Options
                         VStack(spacing: 0) {
                             NavigationLink(destination: MoviesView()) {
@@ -241,6 +250,34 @@ struct LoggedInProfileView: View {
                             }
                             .buttonStyle(PlainButtonStyle())
                             
+                            NavigationLink(destination: TelevisionView()) {
+                                HStack(spacing: 16) {
+                                    Image(systemName: "tv")
+                                        .font(.title2)
+                                        .foregroundColor(.blue)
+                                        .frame(width: 30)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("TV Shows")
+                                            .font(.headline)
+                                            .foregroundColor(.white)
+                                        
+                                        Text("Track your television watchlist")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 16)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            
                             NavigationLink(destination: AlbumsView()) {
                                 HStack(spacing: 16) {
                                     Image(systemName: "music.note")
@@ -249,7 +286,7 @@ struct LoggedInProfileView: View {
                                         .frame(width: 30)
                                     
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("Albums")
+                                        Text("Music")
                                             .font(.headline)
                                             .foregroundColor(.white)
                                         
@@ -290,14 +327,16 @@ struct LoggedInProfileView: View {
                         .padding(.bottom, 40)
                     }
                     .padding(.horizontal, 20)
-                    .padding(.vertical, 16)
+                    .padding(.vertical, 4)
                     .background(appBackground)
                     
                     Spacer(minLength: 100)
+                        }
+                    }
+                    .background(appBackground.ignoresSafeArea())
+                    .ignoresSafeArea(edges: .top)
                 }
             }
-            .background(appBackground.ignoresSafeArea())
-            .ignoresSafeArea(edges: .top)
         }
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
@@ -373,8 +412,32 @@ struct LoggedInProfileView: View {
         } message: {
             Text("Are you sure you want to sign out?")
         }
+        .onChange(of: showingAddMovie) { _, isShowing in
+            if !isShowing && authService.isLoggedIn {
+                // Refresh profile data when add movie sheet is dismissed
+                Task {
+                    await loadProfileDataIfNeeded(force: true)
+                }
+            }
+        }
+        .onChange(of: showingAddTelevision) { _, isShowing in
+            if !isShowing && authService.isLoggedIn {
+                // Refresh profile data when add television sheet is dismissed
+                Task {
+                    await loadProfileDataIfNeeded(force: true)
+                }
+            }
+        }
+        .onChange(of: showingAddAlbum) { _, isShowing in
+            if !isShowing && authService.isLoggedIn {
+                // Refresh profile data when add album sheet is dismissed
+                Task {
+                    await loadProfileDataIfNeeded(force: true)
+                }
+            }
+        }
         .task {
-            await loadProfileData()
+            await loadProfileDataIfNeeded(force: false)
         }
     }
     
@@ -499,6 +562,37 @@ struct LoggedInProfileView: View {
         }
         .padding(.bottom, 30)
         .frame(maxWidth: .infinity)
+    }
+    
+    @ViewBuilder
+    private var loadingView: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.2)
+            Text("Finishing up a film")
+                .font(.headline)
+                .foregroundColor(.white)
+            Spacer()
+        }
+    }
+    
+    private func shouldRefreshData() -> Bool {
+        guard hasLoadedInitially, let lastLoadTime = lastDataLoadTime else {
+            return true
+        }
+        return Date().timeIntervalSince(lastLoadTime) > cacheRefreshInterval
+    }
+    
+    private func loadProfileDataIfNeeded(force: Bool = false) async {
+        if force || shouldRefreshData() {
+            isLoading = true
+            await loadProfileData()
+            lastDataLoadTime = Date()
+            hasLoadedInitially = true
+            isLoading = false
+        }
     }
     
     private func loadProfileData() async {

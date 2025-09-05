@@ -31,6 +31,7 @@ struct Album: Codable, Identifiable, @unchecked Sendable {
     let updated_at: String
     let listened_date: String?
     let tracks: [Track]?
+    let favorited: Bool?
     
     init(
         id: Int,
@@ -55,7 +56,8 @@ struct Album: Codable, Identifiable, @unchecked Sendable {
         created_at: String,
         updated_at: String,
         listened_date: String? = nil,
-        tracks: [Track]? = nil
+        tracks: [Track]? = nil,
+        favorited: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -80,6 +82,7 @@ struct Album: Codable, Identifiable, @unchecked Sendable {
         self.updated_at = updated_at
         self.listened_date = listened_date
         self.tracks = tracks
+        self.favorited = favorited
     }
     
     enum CodingKeys: String, CodingKey {
@@ -97,6 +100,7 @@ struct Album: Codable, Identifiable, @unchecked Sendable {
         case created_at
         case updated_at
         case listened_date
+        case favorited
     }
 }
 
@@ -139,6 +143,10 @@ extension Album {
         guard let tracks = total_tracks else { return "Unknown" }
         return "\(tracks) track\(tracks == 1 ? "" : "s")"
     }
+    
+    var isFavorited: Bool {
+        return favorited == true
+    }
 }
 
 // MARK: - Album Request Models
@@ -160,10 +168,11 @@ struct AddAlbumRequest: Codable {
     let barcode: String?
     let status: String
     let notes: String?
-    let user_id: String?
+    let favorited: Bool?
+    // Removed user_id - let RLS handle this automatically
     
     enum CodingKeys: String, CodingKey {
-        case title, artist, genres, label, country, notes, status
+        case title, artist, genres, label, country, notes, status, favorited
         case release_year
         case release_date
         case spotify_id
@@ -173,7 +182,7 @@ struct AddAlbumRequest: Codable {
         case spotify_uri
         case spotify_href
         case catno, barcode
-        case user_id
+        // Removed user_id from CodingKeys
     }
     
     init(
@@ -194,7 +203,7 @@ struct AddAlbumRequest: Codable {
         barcode: String? = nil,
         status: String = AlbumStatus.wantToListen.rawValue,
         notes: String? = nil,
-        user_id: String? = nil
+        favorited: Bool? = nil
     ) {
         self.title = title
         self.artist = artist
@@ -213,7 +222,7 @@ struct AddAlbumRequest: Codable {
         self.barcode = barcode
         self.status = status
         self.notes = notes
-        self.user_id = user_id
+        self.favorited = favorited
     }
 }
 
@@ -236,6 +245,7 @@ struct UpdateAlbumRequest: Codable {
     let status: String?
     let notes: String?
     let listened_date: Date?
+    let favorited: Bool?
     
     enum CodingKeys: String, CodingKey {
         case title, artist, genres, label, country, notes, status
@@ -249,6 +259,7 @@ struct UpdateAlbumRequest: Codable {
         case spotify_href
         case catno, barcode
         case listened_date
+        case favorited
     }
     
     init(
@@ -269,7 +280,8 @@ struct UpdateAlbumRequest: Codable {
         barcode: String? = nil,
         status: String? = nil,
         notes: String? = nil,
-        listened_date: Date? = nil
+        listened_date: Date? = nil,
+        favorited: Bool? = nil
     ) {
         self.title = title
         self.artist = artist
@@ -289,6 +301,7 @@ struct UpdateAlbumRequest: Codable {
         self.status = status
         self.notes = notes
         self.listened_date = listened_date
+        self.favorited = favorited
     }
 }
 
@@ -347,6 +360,8 @@ struct Track: Codable, Identifiable, @unchecked Sendable {
     let featured_artists: [String]?
     let duration_ms: Int?
     let spotify_id: String?
+    let spotify_uri: String?
+    let spotify_href: String?
     let created_at: String
     let updated_at: String
     
@@ -359,6 +374,8 @@ struct Track: Codable, Identifiable, @unchecked Sendable {
         featured_artists: [String]? = nil,
         duration_ms: Int? = nil,
         spotify_id: String? = nil,
+        spotify_uri: String? = nil,
+        spotify_href: String? = nil,
         created_at: String,
         updated_at: String
     ) {
@@ -370,6 +387,8 @@ struct Track: Codable, Identifiable, @unchecked Sendable {
         self.featured_artists = featured_artists
         self.duration_ms = duration_ms
         self.spotify_id = spotify_id
+        self.spotify_uri = spotify_uri
+        self.spotify_href = spotify_href
         self.created_at = created_at
         self.updated_at = updated_at
     }
@@ -381,6 +400,8 @@ struct Track: Codable, Identifiable, @unchecked Sendable {
         case featured_artists
         case duration_ms
         case spotify_id
+        case spotify_uri
+        case spotify_href
     }
 }
 
@@ -419,8 +440,10 @@ struct TrackInsert: Codable {
     let featured_artists: [String]?
     let duration_ms: Int?
     let spotify_id: String?
+    let spotify_uri: String?
+    let spotify_href: String?
     
     enum CodingKeys: String, CodingKey {
-        case album_id, track_number, title, artist, featured_artists, duration_ms, spotify_id
+        case album_id, track_number, title, artist, featured_artists, duration_ms, spotify_id, spotify_uri, spotify_href
     }
 }

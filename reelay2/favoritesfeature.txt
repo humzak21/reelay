@@ -1,0 +1,23 @@
+Favoriting Feature
+
+The favorites feature will be to mark Movies, TV Shows, and Albums as the user's "favorite",
+displaying an orange heart to signify this. Movies, TV, and Albums will all show this in different ways.
+
+- SQL
+One thing is similar, the diary, television, and albums table all need new "favorited" columns (SQL script to make them). Make this a boolean, it either is or isn't.
+
+- Movies
+1. Add Movies View: Add a heart glyph that when tapped fills orange to signify the user has favorited the film they are adding.
+2. MoviesView: Favorites can be set after the fact by tapping and holding the movie card (list view), movie poster (tile view), or movie card (calendar view)
+2 cont. - In MovieDetailsView, Favorites can also be added via a heart toolbar button. 
+3. The orange heart for movies will show up next to the film title (movie card lists view), the star rating (tile view), the film title (calendar view)
+4. In MovieDetailsView, the orange heart should show up next to the film title. 
+5. Add a filter to the filterview to filter by favorites.
+
+- TV
+Television should have the same functionalities (1-4) as movies, just according to what views television has.
+1. Add a new tab to television view called "Best Shows", favorited tv shows will appear there in addition to other sections it applies to.
+
+- Music/Albums
+Albums should again have the same functionalities as movies.
+1. Albums should also have another tab called "Best Albums", favorited albums will appear there in addition to other sections it applies to.

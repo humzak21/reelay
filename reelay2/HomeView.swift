@@ -49,35 +49,60 @@ struct HomeView: View {
     @State private var highestRatedFilmThisMonth: Movie?
     @State private var currentStreak: Int = 0
     
+    // Caching mechanism
+    @State private var lastDataLoadTime: Date?
+    @State private var hasLoadedInitially = false
+    private let cacheRefreshInterval: TimeInterval = 300 // 5 minutes
+    
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // Goals Section
-                if dataManager.yearlyFilmGoal > 0 || !dataManager.movieLists.isEmpty {
-                    goalsSection
+        ZStack {
+            if isLoading {
+                // Loading Screen
+                VStack(spacing: 20) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    
+                    Text("Loading...")
+                        .font(.headline)
+                        .foregroundColor(.white)
                 }
-                
-                // Recently Logged Section
-                if !recentMovies.isEmpty {
-                    recentlyLoggedSection
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.1))
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Goals Section
+                        if dataManager.yearlyFilmGoal > 0 || !dataManager.movieLists.isEmpty {
+                            goalsSection
+                        }
+                        
+                        // Recently Logged Section
+                        if !recentMovies.isEmpty {
+                            recentlyLoggedSection
+                        }
+                        
+                        // Currently Watching TV Shows Section
+                        if !currentlyWatchingShows.isEmpty {
+                            currentlyWatchingShowsSection
+                        }
+                        
+                        // Upcoming Films Section
+                        if !upcomingFilms.isEmpty {
+                            upcomingFilmsSection
+                        }
+                        
+                        // Quick Stats Section
+                        quickStatsSection
+                        
+                        Spacer()
+                    }
+                    .padding(.top, 20)
                 }
-                
-                // Currently Watching TV Shows Section
-                if !currentlyWatchingShows.isEmpty {
-                    currentlyWatchingShowsSection
+                .refreshable {
+                    await refreshAllData()
                 }
-                
-                // Upcoming Films Section
-                if !upcomingFilms.isEmpty {
-                    upcomingFilmsSection
-                }
-                
-                // Quick Stats Section
-                quickStatsSection
-                
-                Spacer()
             }
-            .padding(.top, 20)
         }
         .navigationTitle("Home")
         .toolbar {
@@ -146,7 +171,7 @@ struct HomeView: View {
             WatchlistRandomizerView()
         }
         .sheet(isPresented: $showingMustWatchesList) {
-            if let mustWatchesList = dataManager.movieLists.first(where: { $0.name == "Must Watches in \(Calendar.current.component(.year, from: Date()))" }) {
+            if let mustWatchesList = dataManager.movieLists.first(where: { $0.name == "Must Watches for \(Calendar.current.component(.year, from: Date()))" }) {
                 ListDetailsView(list: mustWatchesList)
             } else {
                 // Fallback view if list is not found
@@ -197,9 +222,9 @@ struct HomeView: View {
                     currentPosterUrl: movie.poster_url,
                     movieTitle: movie.title
                 ) { newPosterUrl in
-                    // Refresh the recent movies list from backend
+                    // Refresh data from backend
                     Task {
-                        await loadRecentMovies()
+                        await loadAllDataIfNeeded(force: true)
                     }
                 }
             }
@@ -211,9 +236,9 @@ struct HomeView: View {
                     currentBackdropUrl: movie.backdrop_path,
                     movieTitle: movie.title
                 ) { newBackdropUrl in
-                    // Refresh the recent movies list from backend
+                    // Refresh data from backend
                     Task {
-                        await loadRecentMovies()
+                        await loadAllDataIfNeeded(force: true)
                     }
                 }
             }
@@ -248,44 +273,39 @@ struct HomeView: View {
         }
         .task {
             if movieService.isLoggedIn {
-                await loadRecentMovies()
-                await loadCurrentlyWatchingShows()
-                await loadUpcomingFilms()
-                await loadQuickStats()
+                await loadAllDataIfNeeded(force: false)
             }
         }
         .onChange(of: movieService.isLoggedIn) { _, isLoggedIn in
             if isLoggedIn {
                 Task {
-                    await loadRecentMovies()
-                    await loadCurrentlyWatchingShows()
-                    await loadUpcomingFilms()
-                    await loadQuickStats()
+                    await loadAllDataIfNeeded(force: true)
                 }
             } else {
+                isLoading = false
                 recentMovies = []
                 currentlyWatchingShows = []
                 upcomingFilms = []
                 filmsThisMonth = 0
                 highestRatedFilmThisMonth = nil
                 currentStreak = 0
+                lastDataLoadTime = nil
+                hasLoadedInitially = false
             }
         }
         .onChange(of: showingAddMovie) { _, isShowing in
             if !isShowing && movieService.isLoggedIn {
-                // Refresh recent movies when add movie sheet is dismissed
+                // Refresh data when add movie sheet is dismissed
                 Task {
-                    await loadRecentMovies()
-                    await loadUpcomingFilms()
-                    await loadQuickStats()
+                    await loadAllDataIfNeeded(force: true)
                 }
             }
         }
         .onChange(of: showingAddTelevision) { _, isShowing in
             if !isShowing && movieService.isLoggedIn {
-                // Refresh currently watching shows when add television sheet is dismissed
+                // Refresh data when add television sheet is dismissed
                 Task {
-                    await loadCurrentlyWatchingShows()
+                    await loadAllDataIfNeeded(force: true)
                 }
             }
         }
@@ -299,11 +319,9 @@ struct HomeView: View {
         }
         .onChange(of: showingLogAgain) { _, isShowing in
             if !isShowing && movieService.isLoggedIn {
-                // Refresh recent movies when log again sheet is dismissed
+                // Refresh data when log again sheet is dismissed
                 Task {
-                    await loadRecentMovies()
-                    await loadUpcomingFilms()
-                    await loadQuickStats()
+                    await loadAllDataIfNeeded(force: true)
                 }
             }
         }
@@ -679,8 +697,6 @@ struct HomeView: View {
     }
     
     private func loadUpcomingFilms() async {
-        guard !isLoading else { return }
-        
         do {
             let currentYear = Calendar.current.component(.year, from: Date())
             let lookingForwardListName = "Looking Forward in \(currentYear)"
@@ -730,10 +746,6 @@ struct HomeView: View {
     }
     
     private func loadRecentMovies() async {
-        guard !isLoading else { return }
-        
-        isLoading = true
-        
         do {
             // Refresh DataManager movies for goals progress tracking
             await dataManager.refreshMovies()
@@ -750,8 +762,6 @@ struct HomeView: View {
         } catch {
             print("Error loading recent movies: \(error)")
         }
-        
-        isLoading = false
     }
     
     private func loadQuickStats() async {
@@ -814,6 +824,70 @@ struct HomeView: View {
         }
     }
     
+    // MARK: - Caching Functions
+    
+    private func shouldRefreshData() -> Bool {
+        guard let lastLoadTime = lastDataLoadTime else { return true }
+        return Date().timeIntervalSince(lastLoadTime) > cacheRefreshInterval || !hasLoadedInitially
+    }
+    
+    private func loadAllDataIfNeeded(force: Bool) async {
+        // If force is false and data is still fresh, skip loading
+        if !force && !shouldRefreshData() && hasLoadedInitially {
+            return
+        }
+        
+        isLoading = true
+        
+        // Load all data concurrently
+        async let recentMoviesTask = loadRecentMovies()
+        async let currentlyWatchingTask = loadCurrentlyWatchingShows()
+        async let upcomingFilmsTask = loadUpcomingFilms()
+        async let quickStatsTask = loadQuickStats()
+        
+        // Wait for all tasks to complete
+        await recentMoviesTask
+        await currentlyWatchingTask
+        await upcomingFilmsTask
+        await quickStatsTask
+        
+        lastDataLoadTime = Date()
+        hasLoadedInitially = true
+        isLoading = false
+    }
+    
+    // MARK: - Refresh Function
+    
+    private func refreshAllData() async {
+        guard movieService.isLoggedIn else { return }
+        
+        isLoading = true
+        
+        // Refresh all data sources concurrently for better performance
+        async let recentMoviesTask = loadRecentMovies()
+        async let currentlyWatchingTask = loadCurrentlyWatchingShows()
+        async let upcomingFilmsTask = loadUpcomingFilms()
+        async let quickStatsTask = loadQuickStats()
+        async let listsRefreshTask = dataManager.refreshLists()
+        async let moviesRefreshTask = dataManager.refreshMovies()
+        async let televisionRefreshTask = dataManager.refreshTelevision()
+        async let albumsRefreshTask = dataManager.refreshAlbums()
+        
+        // Wait for all tasks to complete
+        await recentMoviesTask
+        await currentlyWatchingTask
+        await upcomingFilmsTask
+        await quickStatsTask
+        await listsRefreshTask
+        await moviesRefreshTask
+        await televisionRefreshTask
+        await albumsRefreshTask
+        
+        lastDataLoadTime = Date()
+        hasLoadedInitially = true
+        isLoading = false
+    }
+    
     // MARK: - Helper Functions
     
     private func checkIfMovieIsLoggedAndNavigate(item: ListItem) async {
@@ -857,7 +931,8 @@ struct HomeView: View {
                         homepage: nil,
                         genres: nil,
                         created_at: nil,
-                        updated_at: nil
+                        updated_at: nil,
+                        favorited: nil
                     )
                     selectedUpcomingMovie = unloggedMovie
                 }
@@ -896,7 +971,8 @@ struct HomeView: View {
                     homepage: nil,
                     genres: nil,
                     created_at: nil,
-                    updated_at: nil
+                    updated_at: nil,
+                    favorited: nil
                 )
                 selectedUpcomingMovie = unloggedMovie
             }
@@ -1055,7 +1131,8 @@ struct HomeView: View {
             homepage: nil,
             genres: nil,
             created_at: nil,
-            updated_at: nil
+            updated_at: nil,
+            favorited: nil
         )
     }
     
@@ -1114,10 +1191,13 @@ struct HomeView: View {
                 let mustWatchesProgress = dataManager.getMustWatchesProgress(for: currentYear)
                 if mustWatchesProgress.total > 0 {
                     Button(action: {
-                        showingMustWatchesList = true
+                        Task {
+                            await dataManager.refreshLists()
+                            showingMustWatchesList = true
+                        }
                     }) {
                         goalProgressCard(
-                            title: "Must Watches in \(currentYear)",
+                            title: "Must Watches for \(currentYear)",
                             current: mustWatchesProgress.watched,
                             total: mustWatchesProgress.total,
                             systemImage: "star.fill",
@@ -1131,7 +1211,10 @@ struct HomeView: View {
                 let lookingForwardProgress = dataManager.getLookingForwardProgress(for: currentYear)
                 if lookingForwardProgress.total > 0 {
                     Button(action: {
-                        showingLookingForwardList = true
+                        Task {
+                            await dataManager.refreshLists()
+                            showingLookingForwardList = true
+                        }
                     }) {
                         goalProgressCard(
                             title: "Looking Forward in \(currentYear)",
@@ -1147,8 +1230,11 @@ struct HomeView: View {
                 // Themed lists progress
                 ForEach(dataManager.getThemedLists(), id: \.id) { themedList in
                     Button(action: {
-                        selectedThemedList = themedList
-                        showingThemedList = true
+                        Task {
+                            await dataManager.refreshLists()
+                            selectedThemedList = themedList
+                            showingThemedList = true
+                        }
                     }) {
                         let progress = dataManager.getThemedListProgress(for: themedList)
                         goalProgressCard(

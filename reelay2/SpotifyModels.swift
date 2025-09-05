@@ -60,6 +60,17 @@ struct SpotifyTracksResponse: Codable {
     let total: Int?
 }
 
+// MARK: - Spotify Album Tracks Response (for /albums/{id}/tracks endpoint)
+struct SpotifyAlbumTracksResponse: Codable {
+    let href: String?
+    let items: [SpotifySimplifiedTrack]
+    let limit: Int?
+    let next: String?
+    let offset: Int?
+    let previous: String?
+    let total: Int?
+}
+
 // MARK: - Spotify Album
 struct SpotifyAlbum: Codable, Identifiable {
     let id: String

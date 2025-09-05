@@ -85,7 +85,17 @@ struct AlbumDetailsView: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
+                    HStack(spacing: 16) {
+                        Button(action: {
+                            Task {
+                                await toggleFavorite()
+                            }
+                        }) {
+                            Image(systemName: currentAlbum.isFavorited ? "heart.fill" : "heart")
+                                .foregroundColor(currentAlbum.isFavorited ? .orange : .primary)
+                        }
+                        
+                        Menu {
                         Button("Change Status", systemImage: currentAlbum.albumStatus.systemImageName) {
                             showingChangeStatus = true
                         }
@@ -105,8 +115,9 @@ struct AlbumDetailsView: View {
                         Button("Share", systemImage: "square.and.arrow.up") {
                             // Share action - to be implemented later
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
                     }
                 }
             }
@@ -496,102 +507,152 @@ struct AlbumDetailsView: View {
         }
     }
     
+    private func toggleFavorite() async {
+        do {
+            let updateRequest = UpdateAlbumRequest(
+                favorited: !currentAlbum.isFavorited
+            )
+            let updatedAlbum = try await albumService.updateAlbum(id: currentAlbum.id, with: updateRequest)
+            
+            await MainActor.run {
+                currentAlbum = updatedAlbum
+            }
+        } catch {
+            // Handle error - could show alert
+            print("Failed to toggle favorite: \(error)")
+        }
+    }
+    
     private func refreshTracksFromSpotify() async {
+        print("🎵 Starting track refresh for album: \(currentAlbum.title)")
+        
         await MainActor.run {
             isRefreshingTracks = true
         }
         
         do {
-            // First, try to get the album from Spotify if we have a Spotify ID
-            var spotifyAlbum: SpotifyAlbum?
+            var spotifyId: String?
             
-            if let spotifyId = currentAlbum.spotify_id {
-                // We have a Spotify ID, get the album directly
-                spotifyAlbum = try await spotifyService.getAlbumDetails(albumId: spotifyId)
+            if let existingSpotifyId = currentAlbum.spotify_id {
+                // We already have a Spotify ID
+                spotifyId = existingSpotifyId
+                print("🎵 Using existing Spotify ID: \(existingSpotifyId)")
             } else {
-                // Search for the album on Spotify
+                // Search for the album on Spotify to get its ID
                 let searchQuery = "\(currentAlbum.title) \(currentAlbum.artist)"
+                print("🎵 Searching Spotify for: \(searchQuery)")
                 let searchResponse = try await spotifyService.searchAlbums(query: searchQuery, limit: 5)
                 
                 // Find the best match
                 if let searchResults = searchResponse.albums?.items, !searchResults.isEmpty {
-                    spotifyAlbum = findBestSpotifyMatch(searchResults: searchResults)
+                    let bestMatch = findBestSpotifyMatch(searchResults: searchResults)
+                    spotifyId = bestMatch?.id
                     
                     // If we found a match and don't have a Spotify ID, update the album with it
-                    if let match = spotifyAlbum, currentAlbum.spotify_id == nil {
-                        let updateRequest = UpdateAlbumRequest(spotify_id: match.id)
+                    if let matchId = spotifyId {
+                        print("🎵 Found Spotify match, updating album with ID: \(matchId)")
+                        let updateRequest = UpdateAlbumRequest(spotify_id: matchId)
                         _ = try await albumService.updateAlbum(id: currentAlbum.id, with: updateRequest)
                     }
+                } else {
+                    print("🎵 No Spotify matches found")
                 }
             }
             
-            // If we have a Spotify album with tracks, add them to our database
-            if let album = spotifyAlbum,
-               let spotifyTracks = album.tracks?.items,
-               !spotifyTracks.isEmpty {
+            // If we have a Spotify ID, fetch tracks using the dedicated endpoint
+            if let albumSpotifyId = spotifyId {
+                print("🎵 Fetching tracks from Spotify using dedicated tracks endpoint...")
                 
-                // Delete existing tracks first (in case we're refreshing)
-                try await albumService.deleteTracksForAlbum(albumId: currentAlbum.id)
+                // Use the efficient tracks endpoint
+                let tracksResponse = try await spotifyService.getAlbumTracks(albumId: albumSpotifyId, limit: 50)
+                print("🎵 Received \(tracksResponse.items.count) tracks from Spotify")
                 
-                // Convert Spotify tracks to our Track model
-                let tracks = spotifyTracks.compactMap { spotifyTrack -> Track? in
-                    guard let trackName = spotifyTrack.name,
-                          let trackNumber = spotifyTrack.trackNumber else { return nil }
+                if !tracksResponse.items.isEmpty {
+                    // Delete existing tracks first (in case we're refreshing)
+                    try await albumService.deleteTracksForAlbum(albumId: currentAlbum.id)
+                    print("🎵 Deleted existing tracks")
                     
-                    let artistName = spotifyTrack.artists?.first?.name
-                    let featuredArtists = spotifyTrack.artists?.dropFirst().compactMap { $0.name }
+                    // Convert Spotify simplified tracks to our Track model with unique track numbers
+                    var usedTrackNumbers = Set<Int>()
+                    let tracks = tracksResponse.items.compactMap { spotifyTrack -> Track? in
+                        guard let trackName = spotifyTrack.name,
+                              let originalTrackNumber = spotifyTrack.trackNumber else { 
+                            print("⚠️ Skipping track - missing name or track number")
+                            return nil 
+                        }
+                        
+                        // Ensure unique track numbers by incrementing if duplicate
+                        var trackNumber = originalTrackNumber
+                        while usedTrackNumbers.contains(trackNumber) {
+                            trackNumber += 1
+                        }
+                        usedTrackNumbers.insert(trackNumber)
+                        
+                        let artistName = spotifyTrack.artists?.first?.name
+                        let featuredArtists = spotifyTrack.artists?.dropFirst().compactMap { $0.name }
+                        
+                        return Track(
+                            id: 0, // Will be set by database
+                            album_id: currentAlbum.id,
+                            track_number: trackNumber,
+                            title: trackName,
+                            artist: artistName,
+                            featured_artists: featuredArtists?.isEmpty == false ? Array(featuredArtists!) : nil,
+                            duration_ms: spotifyTrack.durationMs,
+                            spotify_id: spotifyTrack.id,
+                            spotify_uri: spotifyTrack.uri,
+                            spotify_href: spotifyTrack.href,
+                            created_at: "", // Will be set by database
+                            updated_at: "" // Will be set by database
+                        )
+                    }
                     
-                    return Track(
-                        id: 0, // Will be set by database
-                        album_id: currentAlbum.id,
-                        track_number: trackNumber,
-                        title: trackName,
-                        artist: artistName,
-                        featured_artists: featuredArtists?.isEmpty == false ? Array(featuredArtists!) : nil,
-                        duration_ms: spotifyTrack.durationMs,
-                        spotify_id: spotifyTrack.id,
-                        created_at: "", // Will be set by database
-                        updated_at: "" // Will be set by database
-                    )
+                    print("🎵 Converted \(tracks.count) tracks, saving to database...")
+                    
+                    // Save tracks to database
+                    let savedTracks = try await albumService.addTracksToAlbum(albumId: currentAlbum.id, tracks: tracks)
+                    print("✅ Successfully saved \(savedTracks.count) tracks to database")
+                    
+                    // Update the current album with the saved tracks
+                    await MainActor.run {
+                        var updatedAlbum = currentAlbum
+                        updatedAlbum = Album(
+                            id: updatedAlbum.id,
+                            title: updatedAlbum.title,
+                            artist: updatedAlbum.artist,
+                            release_year: updatedAlbum.release_year,
+                            release_date: updatedAlbum.release_date,
+                            genres: updatedAlbum.genres,
+                            label: updatedAlbum.label,
+                            country: updatedAlbum.country,
+                            spotify_id: spotifyId, // Use the found or existing Spotify ID
+                            album_type: updatedAlbum.album_type,
+                            total_tracks: updatedAlbum.total_tracks,
+                            cover_image_url: updatedAlbum.cover_image_url,
+                            spotify_uri: updatedAlbum.spotify_uri,
+                            spotify_href: updatedAlbum.spotify_href,
+                            catno: updatedAlbum.catno,
+                            barcode: updatedAlbum.barcode,
+                            status: updatedAlbum.status,
+                            notes: updatedAlbum.notes,
+                            user_id: updatedAlbum.user_id,
+                            created_at: updatedAlbum.created_at,
+                            updated_at: updatedAlbum.updated_at,
+                            listened_date: updatedAlbum.listened_date,
+                            tracks: savedTracks
+                        )
+                        currentAlbum = updatedAlbum
+                    }
+                } else {
+                    print("⚠️ No tracks found for this album")
                 }
-                
-                // Save tracks to database
-                let savedTracks = try await albumService.addTracksToAlbum(albumId: currentAlbum.id, tracks: tracks)
-                
-                // Update the current album with the saved tracks
-                await MainActor.run {
-                    var updatedAlbum = currentAlbum
-                    updatedAlbum = Album(
-                        id: updatedAlbum.id,
-                        title: updatedAlbum.title,
-                        artist: updatedAlbum.artist,
-                        release_year: updatedAlbum.release_year,
-                        release_date: updatedAlbum.release_date,
-                        genres: updatedAlbum.genres,
-                        label: updatedAlbum.label,
-                        country: updatedAlbum.country,
-                        spotify_id: updatedAlbum.spotify_id ?? album.id,
-                        album_type: updatedAlbum.album_type,
-                        total_tracks: updatedAlbum.total_tracks,
-                        cover_image_url: updatedAlbum.cover_image_url,
-                        spotify_uri: updatedAlbum.spotify_uri,
-                        spotify_href: updatedAlbum.spotify_href,
-                        catno: updatedAlbum.catno,
-                        barcode: updatedAlbum.barcode,
-                        status: updatedAlbum.status,
-                        notes: updatedAlbum.notes,
-                        user_id: updatedAlbum.user_id,
-                        created_at: updatedAlbum.created_at,
-                        updated_at: updatedAlbum.updated_at,
-                        listened_date: updatedAlbum.listened_date,
-                        tracks: savedTracks
-                    )
-                    currentAlbum = updatedAlbum
-                }
+            } else {
+                print("❌ No Spotify ID available, cannot fetch tracks")
             }
             
         } catch {
-            print("Failed to refresh tracks from Spotify: \(error)")
+            print("❌ Failed to refresh tracks from Spotify: \(error)")
+            print("❌ Error details: \(error.localizedDescription)")
         }
         
         await MainActor.run {

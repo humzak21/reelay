@@ -38,8 +38,9 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
     let genres: [String]?
     let created_at: String?
     let updated_at: String?
+    let favorited: Bool?
     
-    init(id: Int, title: String, release_year: Int?, release_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, watch_date: String?, is_rewatch: Bool?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, director: String?, runtime: Int?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_title: String?, tagline: String?, status: String?, budget: Int?, revenue: Int?, imdb_id: String?, homepage: String?, genres: [String]?, created_at: String?, updated_at: String?) {
+    init(id: Int, title: String, release_year: Int?, release_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, watch_date: String?, is_rewatch: Bool?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, director: String?, runtime: Int?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_title: String?, tagline: String?, status: String?, budget: Int?, revenue: Int?, imdb_id: String?, homepage: String?, genres: [String]?, created_at: String?, updated_at: String?, favorited: Bool? = nil) {
         self.id = id
         self.title = title
         self.release_year = release_year
@@ -70,6 +71,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         self.genres = genres
         self.created_at = created_at
         self.updated_at = updated_at
+        self.favorited = favorited
     }
     
     enum CodingKeys: String, CodingKey {
@@ -103,6 +105,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         case genres
         case created_at
         case updated_at
+        case favorited
     }
     
     init(from decoder: Decoder) throws {
@@ -137,6 +140,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         genres = try container.decodeIfPresent([String].self, forKey: .genres)
         created_at = try container.decodeIfPresent(String.self, forKey: .created_at)
         updated_at = try container.decodeIfPresent(String.self, forKey: .updated_at)
+        favorited = try container.decodeIfPresent(Bool.self, forKey: .favorited)
         
         // Handle rewatch field which can be "yes"/"no" string or boolean
         if let rewatchString = try? container.decodeIfPresent(String.self, forKey: .is_rewatch) {
@@ -180,6 +184,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         try container.encodeIfPresent(genres, forKey: .genres)
         try container.encodeIfPresent(created_at, forKey: .created_at)
         try container.encodeIfPresent(updated_at, forKey: .updated_at)
+        try container.encodeIfPresent(favorited, forKey: .favorited)
         
         // Encode rewatch as string for Supabase compatibility
         if let isRewatch = is_rewatch {
@@ -256,5 +261,9 @@ extension Movie {
     
     var isRewatchMovie: Bool {
         return is_rewatch == true
+    }
+    
+    var isFavorited: Bool {
+        return favorited ?? false
     }
 }
