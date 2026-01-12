@@ -216,10 +216,31 @@ struct ListDetailsView: View {
                 Text("Are you sure you want to delete '\(currentList.name)'? This action cannot be undone.")
             }
             .task {
-                // Force-reload items from Supabase to capture new movie_release_date values
-                _ = try? await dataManager.reloadItemsForList(list.id)
-                await loadWatchedCount()
+                // Use optimized function to get items with watched status in one query
+                await loadItemsWithWatchedStatusOptimized()
             }
+        }
+    }
+    
+    /// Load list items with watched status using optimized database function
+    private func loadItemsWithWatchedStatusOptimized() async {
+        await MainActor.run {
+            isLoadingProgress = true
+        }
+        
+        do {
+            // Try optimized function that returns items with watched status in one query
+            let (_, watchedIds) = try await SupabaseListService.shared.getItemsForListOptimized(list.id)
+            
+            await MainActor.run {
+                watchedTmdbIds = watchedIds
+                watchedCount = watchedIds.count
+                isLoadingProgress = false
+            }
+        } catch {
+            // Fallback to legacy method
+            _ = try? await dataManager.reloadItemsForList(list.id)
+            await loadWatchedCount()
         }
     }
     

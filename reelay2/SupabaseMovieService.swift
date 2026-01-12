@@ -291,7 +291,7 @@ class SupabaseMovieService: ObservableObject {
         do {
             // First, fetch the current movie to get its favorite status
             print("🔥 DEBUG SERVICE: Fetching current movie state")
-            let currentMovie: Movie = try await supabase.database
+            let currentMovie: Movie = try await supabase
                 .from("diary")
                 .select()
                 .eq("id", value: movieId)
@@ -299,14 +299,14 @@ class SupabaseMovieService: ObservableObject {
                 .execute()
                 .value
             
-            print("🔥 DEBUG SERVICE: Current movie favorited field: \(currentMovie.favorited)")
+            print("🔥 DEBUG SERVICE: Current movie favorited field: \(currentMovie.favorited ?? false)")
             print("🔥 DEBUG SERVICE: Current movie isFavorited: \(currentMovie.isFavorited)")
             
             // Toggle the favorite status
             let newFavoriteStatus = !(currentMovie.favorited ?? false)
             print("🔥 DEBUG SERVICE: Setting favorited to: \(newFavoriteStatus)")
             
-            let response: Movie = try await supabase.database
+            let response: Movie = try await supabase
                 .from("diary")
                 .update([
                     "favorited": newFavoriteStatus
@@ -318,7 +318,7 @@ class SupabaseMovieService: ObservableObject {
             
             print("🔥 DEBUG SERVICE: Supabase response received")
             print("🔥 DEBUG SERVICE: Response movie ID: \(response.id)")
-            print("🔥 DEBUG SERVICE: Response favorited field: \(response.favorited)")
+            print("🔥 DEBUG SERVICE: Response favorited field: \(response.favorited ?? false)")
             print("🔥 DEBUG SERVICE: Response isFavorited computed: \(response.isFavorited)")
             
             return response
@@ -331,7 +331,7 @@ class SupabaseMovieService: ObservableObject {
     
     nonisolated func setMovieFavorite(movieId: Int, isFavorite: Bool) async throws -> Movie {
         do {
-            let response: Movie = try await supabase.database
+            let response: Movie = try await supabase
                 .from("diary")
                 .update([
                     "favorited": isFavorite
@@ -349,7 +349,7 @@ class SupabaseMovieService: ObservableObject {
     
     nonisolated func getFavoriteMovies() async throws -> [Movie] {
         do {
-            let movies: [Movie] = try await supabase.database
+            let movies: [Movie] = try await supabase
                 .from("diary")
                 .select()
                 .eq("favorited", value: true)
@@ -361,6 +361,56 @@ class SupabaseMovieService: ObservableObject {
         } catch {
             throw SupabaseMovieError.fetchFailed(error)
         }
+    }
+    
+    // MARK: - Optimized Database Functions
+    
+    /// Fetch first watch dates for multiple TMDB IDs in a single batch query
+    /// Uses the get_first_watch_dates database function
+    nonisolated func getFirstWatchDatesBatch(tmdbIds: [Int]) async throws -> [FirstWatchDate] {
+        guard !tmdbIds.isEmpty else { return [] }
+        
+        let response = try await supabase
+            .rpc("get_first_watch_dates", params: ["tmdb_ids": tmdbIds])
+            .execute()
+        
+        let firstWatchDates = try JSONDecoder().decode([FirstWatchDate].self, from: response.data)
+        return firstWatchDates
+    }
+    
+    /// Fetch must watches mapping for the current user
+    /// Uses the get_must_watches_mapping database function
+    nonisolated func getMustWatchesMapping(userId: UUID) async throws -> [MustWatchesMapping] {
+        let response = try await supabase
+            .rpc("get_must_watches_mapping", params: ["user_id_param": userId.uuidString])
+            .execute()
+        
+        let mappings = try JSONDecoder().decode([MustWatchesMapping].self, from: response.data)
+        return mappings
+    }
+    
+    /// Fetch goals data (Must Watches, Looking Forward, Themed Month) in a single query
+    /// Uses the get_goals_data database function
+    nonisolated func getGoalsData(userId: UUID, targetYear: Int, currentMonth: Int) async throws -> [GoalListData] {
+        // Create properly typed parameters
+        struct GoalsDataParams: Encodable {
+            let user_id_param: String
+            let target_year: Int
+            let current_month: Int
+        }
+        
+        let params = GoalsDataParams(
+            user_id_param: userId.uuidString,
+            target_year: targetYear,
+            current_month: currentMonth
+        )
+        
+        let response = try await supabase
+            .rpc("get_goals_data", params: params)
+            .execute()
+        
+        let goalsData = try JSONDecoder().decode([GoalListData].self, from: response.data)
+        return goalsData
     }
 }
 

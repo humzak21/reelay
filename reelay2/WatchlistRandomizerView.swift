@@ -17,20 +17,21 @@ struct WatchlistRandomizerView: View {
     @State private var errorMessage: String?
     @State private var selectedMovie: Movie?
     
-    // List selection
-    @State private var selectedListId: UUID?
+    // Multi-list selection
+    @State private var selectedListIds: Set<UUID> = []
     @State private var availableLists: [MovieList] = []
+    @State private var showingListSelector = false
     
     // Filter criteria
     @State private var minYear: Int = 1880
     @State private var maxYear: Int = Calendar.current.component(.year, from: Date())
-    @State private var selectedGenres: Set<String> = []
     @State private var showingFilters = false
     
-    // Year range for pickers
-    private var yearRange: [Int] {
-        Array(1880...Calendar.current.component(.year, from: Date())).reversed()
-    }
+    // Cached year range for pickers (computed once)
+    private let yearRange: [Int] = {
+        let currentYear = Calendar.current.component(.year, from: Date())
+        return Array(1880...currentYear).reversed()
+    }()
     
     var body: some View {
         NavigationView {
@@ -73,7 +74,7 @@ struct WatchlistRandomizerView: View {
                             .font(.system(size: 60))
                             .foregroundColor(.gray.opacity(0.5))
                         
-                        Text(selectedListId != nil ? "Tap the dice to get a random movie from your selected list!" : "Select a list and tap the dice to get a random movie!")
+                        Text(selectedListIds.isEmpty ? "Select one or more lists and tap the dice!" : "Tap the dice to get a random movie from your selected lists!")
                             .font(.body)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
@@ -89,8 +90,13 @@ struct WatchlistRandomizerView: View {
                         .padding(.horizontal, 20)
                 }
                 
-                // List selection
-                listSelectionSection
+                // List selection summary (always visible)
+                listSelectionSummary
+                
+                // Multi-list selection (collapsible)
+                if showingListSelector {
+                    multiListSelectionSection
+                }
                 
                 // Filter controls
                 if showingFilters {
@@ -101,6 +107,25 @@ struct WatchlistRandomizerView: View {
                 
                 // Action buttons
                 VStack(spacing: 12) {
+                    // List selector toggle button
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            showingListSelector.toggle()
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: "list.bullet")
+                                .font(.title2)
+                            Text(showingListSelector ? "Hide Lists" : "Select Lists")
+                                .fontWeight(.medium)
+                        }
+                        .foregroundColor(.blue)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(10)
+                    }
+                    
                     // Filter toggle button
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.3)) {
@@ -134,10 +159,10 @@ struct WatchlistRandomizerView: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
-                        .background(Color.blue)
+                        .background(selectedListIds.isEmpty || isLoading ? Color.gray : Color.blue)
                         .cornerRadius(12)
                     }
-                    .disabled(isLoading || selectedListId == nil)
+                    .disabled(isLoading || selectedListIds.isEmpty)
                     
                     if randomMovie != nil {
                         Button(action: {
@@ -178,49 +203,106 @@ struct WatchlistRandomizerView: View {
     }
     
     @ViewBuilder
-    private var listSelectionSection: some View {
+    private var listSelectionSummary: some View {
+        VStack(spacing: 8) {
+            if !selectedListIds.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "checklist")
+                        .foregroundColor(.blue)
+                    Text("\(selectedListIds.count) list\(selectedListIds.count == 1 ? "" : "s") selected")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                    Text("No lists selected - tap 'Select Lists' below")
+                        .font(.subheadline)
+                        .foregroundColor(.orange)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+    
+    @ViewBuilder
+    private var multiListSelectionSection: some View {
         VStack(spacing: 16) {
-            Text("Select List")
-                .font(.headline)
-                .foregroundColor(.white)
+            HStack {
+                Text("Select Lists")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                if !availableLists.isEmpty {
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            if selectedListIds.count == availableLists.count {
+                                selectedListIds.removeAll()
+                            } else {
+                                selectedListIds = Set(availableLists.map { $0.id })
+                            }
+                            randomMovie = nil
+                            errorMessage = nil
+                        }) {
+                            Text(selectedListIds.count == availableLists.count ? "Deselect All" : "Select All")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                        }
+                    }
+                }
+            }
             
             if availableLists.isEmpty {
                 Text("Loading lists...")
                     .font(.subheadline)
                     .foregroundColor(.gray)
+                    .frame(height: 100)
             } else {
-                Menu {
-                    ForEach(availableLists, id: \.id) { list in
-                        Button(action: {
-                            selectedListId = list.id
-                            randomMovie = nil // Clear current random movie when switching lists
-                            errorMessage = nil
-                        }) {
-                            Text(list.name)
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(availableLists, id: \.id) { list in
+                            Button(action: {
+                                if selectedListIds.contains(list.id) {
+                                    selectedListIds.remove(list.id)
+                                } else {
+                                    selectedListIds.insert(list.id)
+                                }
+                                randomMovie = nil
+                                errorMessage = nil
+                            }) {
+                                HStack {
+                                    Image(systemName: selectedListIds.contains(list.id) ? "checkmark.square.fill" : "square")
+                                        .foregroundColor(selectedListIds.contains(list.id) ? .blue : .gray)
+                                        .font(.title3)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(list.name)
+                                            .foregroundColor(.white)
+                                            .font(.body)
+                                        
+                                        Text("\(list.itemCount) movies")
+                                            .foregroundColor(.gray)
+                                            .font(.caption)
+                                    }
+                                    
+                                    Spacer()
+                                }
+                                .padding(12)
+                                .background(selectedListIds.contains(list.id) ? Color.blue.opacity(0.15) : Color.gray.opacity(0.1))
+                                .cornerRadius(10)
+                            }
+                            .buttonStyle(PlainButtonStyle())
                         }
                     }
-                } label: {
-                    HStack {
-                        if let selectedListId = selectedListId,
-                           let selectedList = availableLists.first(where: { $0.id == selectedListId }) {
-                            Text(selectedList.name)
-                                .foregroundColor(.white)
-                            Spacer()
-                        } else {
-                            Text("Choose a list")
-                                .foregroundColor(.gray)
-                            Spacer()
-                        }
-                        Image(systemName: "chevron.down")
-                            .foregroundColor(.blue)
-                    }
-                    .padding()
-                    .background(Color.gray.opacity(0.15))
-                    .cornerRadius(12)
                 }
+                .frame(maxHeight: 250)
             }
         }
         .padding(.horizontal, 20)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
     
     @ViewBuilder
@@ -252,6 +334,14 @@ struct WatchlistRandomizerView: View {
                             .frame(width: 100)
                             .background(Color(.systemGray6))
                             .cornerRadius(8)
+                            .onChange(of: minYear) { oldValue, newValue in
+                                // Ensure min year doesn't exceed max year
+                                if newValue > maxYear {
+                                    maxYear = newValue
+                                }
+                                randomMovie = nil
+                                errorMessage = nil
+                            }
                         }
                         
                         Text("to")
@@ -272,21 +362,16 @@ struct WatchlistRandomizerView: View {
                             .frame(width: 100)
                             .background(Color(.systemGray6))
                             .cornerRadius(8)
+                            .onChange(of: maxYear) { oldValue, newValue in
+                                // Ensure max year doesn't go below min year
+                                if newValue < minYear {
+                                    minYear = newValue
+                                }
+                                randomMovie = nil
+                                errorMessage = nil
+                            }
                         }
                     }
-                }
-                
-                // Genre filter (placeholder)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Genres (Coming Soon)")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                    
-                    Text("Genre filtering will be available in a future update")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .italic()
                 }
             }
             .padding(16)
@@ -338,25 +423,46 @@ struct WatchlistRandomizerView: View {
     }
     
     private func randomizeSelection() async {
-        isLoading = true
-        errorMessage = nil
+        guard !selectedListIds.isEmpty else {
+            await MainActor.run {
+                errorMessage = "Please select at least one list"
+            }
+            return
+        }
+        
+        // Validate year range
+        guard minYear <= maxYear else {
+            await MainActor.run {
+                errorMessage = "Minimum year cannot be greater than maximum year"
+            }
+            return
+        }
+        
+        await MainActor.run {
+            isLoading = true
+            errorMessage = nil
+        }
         
         do {
-            let allMovies = try await getMoviesFromSelectedList()
+            // Use the optimized DataManager method with SQL-side random selection
+            let selectedListIdsArray = Array(selectedListIds)
+            let result = try await dataManager.getRandomMovieFromLists(
+                listIds: selectedListIdsArray,
+                minYear: minYear,
+                maxYear: maxYear
+            )
             
             await MainActor.run {
-                if allMovies.isEmpty {
+                if let result = result {
+                    randomMovie = result
+                } else {
+                    // No movies found matching criteria
                     if showingFilters && (minYear > 1880 || maxYear < Calendar.current.component(.year, from: Date())) {
                         errorMessage = "No movies found matching your filter criteria. Try adjusting your year range."
-                    } else if let selectedListId = selectedListId,
-                              let selectedList = availableLists.first(where: { $0.id == selectedListId }) {
-                        errorMessage = "No movies found in '\(selectedList.name)'."
                     } else {
-                        errorMessage = "No movies found in the selected list."
+                        errorMessage = "No movies found in the selected list(s)."
                     }
                     randomMovie = nil
-                } else {
-                    randomMovie = allMovies.randomElement()
                 }
                 isLoading = false
             }
@@ -367,37 +473,6 @@ struct WatchlistRandomizerView: View {
                 isLoading = false
             }
         }
-    }
-    
-    private func getMoviesFromSelectedList() async throws -> [ListItem] {
-        guard let selectedListId = selectedListId else {
-            throw NSError(domain: "RandomizerError", code: 1, userInfo: [NSLocalizedDescriptionKey: "No list selected"])
-        }
-        
-        // Ensure list data is loaded
-        if selectedListId == SupabaseWatchlistService.watchlistListId {
-            await dataManager.refreshWatchlist()
-        } else {
-            await dataManager.refreshLists()
-        }
-        
-        // Get the items from the selected list
-        let listItems = dataManager.listItems[selectedListId] ?? []
-        
-        // Capture year filters on MainActor to avoid concurrency issues
-        let currentMinYear = await MainActor.run { minYear }
-        let currentMaxYear = await MainActor.run { maxYear }
-        
-        // Filter movies by year criteria only
-        let filteredItems = listItems.filter { item in
-            if let year = item.movieYear {
-                return year >= currentMinYear && year <= currentMaxYear
-            } else {
-                return true // Include movies with no year information
-            }
-        }
-        
-        return filteredItems
     }
     
     private func openMovieDetails() async {
@@ -468,21 +543,18 @@ struct WatchlistRandomizerView: View {
     }
     
     private func loadAvailableLists() async {
-        await dataManager.refreshLists()
-        await dataManager.refreshWatchlist()
-        
+        // Only load list metadata - no need to load items
+        // Lists are already cached in DataManager
         await MainActor.run {
             // Get all lists including the watchlist
             var lists = dataManager.movieLists
             
-            // Add watchlist if user is logged in
+            // Add watchlist if user is logged in and it's not already in the list
             if movieService.isLoggedIn {
-                let watchlist = MovieList.watchlistPlaceholder(userId: movieService.currentUser?.id ?? UUID())
-                lists.insert(watchlist, at: 0)
-                
-                // Set watchlist as default selection
-                if selectedListId == nil {
-                    selectedListId = watchlist.id
+                let watchlistId = SupabaseWatchlistService.watchlistListId
+                if !lists.contains(where: { $0.id == watchlistId }) {
+                    let watchlist = MovieList.watchlistPlaceholder(userId: movieService.currentUser?.id ?? UUID())
+                    lists.insert(watchlist, at: 0)
                 }
             }
             
@@ -500,24 +572,13 @@ struct WatchlistRandomizerView: View {
             }
             
             availableLists = sortedLists
-        }
-        
-        // Ensure all list items are loaded
-        for list in availableLists {
-            if list.id == SupabaseWatchlistService.watchlistListId {
-                // Watchlist items are already loaded by refreshWatchlist()
-                continue
-            } else {
-                // Force-reload list items for regular lists
-                do {
-                    _ = try await dataManager.reloadItemsForList(list.id)
-                } catch {
-                    print("⚠️ Error loading items for list '\(list.name)': \(error)")
-                }
+            
+            // Auto-select watchlist by default if available
+            if let watchlist = sortedLists.first(where: { $0.id == SupabaseWatchlistService.watchlistListId }) {
+                selectedListIds.insert(watchlist.id)
             }
         }
     }
-    
 }
 
 #Preview {

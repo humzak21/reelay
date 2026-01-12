@@ -423,8 +423,6 @@ struct AddTelevisionView: View {
             await MainActor.run {
                 searchResults = []
                 isSearching = false
-                alertMessage = "Search failed. Please try again."
-                showingAlert = true
             }
         }
     }

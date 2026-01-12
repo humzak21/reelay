@@ -63,7 +63,7 @@ struct HomeView: View {
                         .scaleEffect(1.5)
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     
-                    Text("Loading...")
+                    Text("Finishing a film...")
                         .font(.headline)
                         .foregroundColor(.white)
                 }
@@ -454,11 +454,13 @@ struct HomeView: View {
                         .font(.caption2)
                         .foregroundColor(.white)
                         .lineLimit(1)
+                        .frame(height: 16, alignment: .top)
                 } else {
                     Text("TBA")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                        .frame(height: 16, alignment: .top)
                 }
             }
             .frame(width: 100)
@@ -540,6 +542,7 @@ struct HomeView: View {
                     .font(.caption2)
                     .foregroundColor(.white)
                     .lineLimit(1)
+                    .frame(height: 16, alignment: .top)
             }
         }
         .frame(width: 100)
@@ -644,6 +647,7 @@ struct HomeView: View {
                     .foregroundColor(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
+                    .frame(height: 32, alignment: .top)
             }
         }
         .frame(width: 100)
@@ -839,17 +843,19 @@ struct HomeView: View {
         
         isLoading = true
         
-        // Load all data concurrently
+        // Load all data concurrently using optimized methods where available
         async let recentMoviesTask = loadRecentMovies()
         async let currentlyWatchingTask = loadCurrentlyWatchingShows()
         async let upcomingFilmsTask = loadUpcomingFilms()
         async let quickStatsTask = loadQuickStats()
+        async let listsTask = dataManager.refreshListsOptimized()
         
         // Wait for all tasks to complete
         await recentMoviesTask
         await currentlyWatchingTask
         await upcomingFilmsTask
         await quickStatsTask
+        await listsTask
         
         lastDataLoadTime = Date()
         hasLoadedInitially = true
@@ -863,12 +869,12 @@ struct HomeView: View {
         
         isLoading = true
         
-        // Refresh all data sources concurrently for better performance
+        // Refresh all data sources concurrently using optimized methods
         async let recentMoviesTask = loadRecentMovies()
         async let currentlyWatchingTask = loadCurrentlyWatchingShows()
         async let upcomingFilmsTask = loadUpcomingFilms()
         async let quickStatsTask = loadQuickStats()
-        async let listsRefreshTask = dataManager.refreshLists()
+        async let listsRefreshTask = dataManager.refreshListsOptimized()
         async let moviesRefreshTask = dataManager.refreshMovies()
         async let televisionRefreshTask = dataManager.refreshTelevision()
         async let albumsRefreshTask = dataManager.refreshAlbums()
@@ -1022,15 +1028,8 @@ struct HomeView: View {
     
     private func updateTelevisionProgress(show: Television, season: Int, episode: Int) async {
         do {
-            let updatedShow = try await televisionService.updateProgress(id: show.id, season: season, episode: episode)
-            await MainActor.run {
-                // Update the show in the currentlyWatchingShows array
-                if let index = currentlyWatchingShows.firstIndex(where: { $0.id == show.id }) {
-                    currentlyWatchingShows[index] = updatedShow
-                    // Re-sort the array to move the updated show to the top
-                    currentlyWatchingShows = sortCurrentlyWatchingShows(currentlyWatchingShows)
-                }
-            }
+            try await dataManager.updateTelevisionProgress(id: show.id, season: season, episode: episode)
+            // The onChange listener for dataManager.allTelevision will handle refreshing currentlyWatchingShows
         } catch {
             print("Error updating television progress: \(error)")
         }
@@ -1038,19 +1037,8 @@ struct HomeView: View {
     
     private func updateTelevisionStatus(show: Television, status: WatchingStatus) async {
         do {
-            let updatedShow = try await televisionService.updateStatus(id: show.id, status: status)
-            await MainActor.run {
-                // Update the show in the currentlyWatchingShows array
-                if let index = currentlyWatchingShows.firstIndex(where: { $0.id == show.id }) {
-                    currentlyWatchingShows[index] = updatedShow
-                    // Re-sort the array to move the updated show to the top
-                    currentlyWatchingShows = sortCurrentlyWatchingShows(currentlyWatchingShows)
-                }
-                // If marked as completed or not watching, remove from currently watching list
-                if status != .watching {
-                    currentlyWatchingShows.removeAll { $0.id == show.id }
-                }
-            }
+            try await dataManager.updateTelevisionStatus(id: show.id, status: status)
+            // The onChange listener for dataManager.allTelevision will handle refreshing currentlyWatchingShows
         } catch {
             print("Error updating television status: \(error)")
         }

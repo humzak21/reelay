@@ -692,8 +692,7 @@ struct AddAlbumsView: View {
             let response = try await spotifyService.searchAlbums(query: searchText)
             searchResults = response.albums?.items ?? []
         } catch {
-            alertMessage = "Search failed: \(error.localizedDescription)"
-            showingAlert = true
+            print("Search error: \(error)")
             searchResults = []
         }
         

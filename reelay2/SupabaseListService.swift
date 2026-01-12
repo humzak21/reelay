@@ -890,6 +890,159 @@ class SupabaseListService: ObservableObject {
             sortLists()
         }
     }
+    
+    // MARK: - Random Selection
+    
+    /// Fetch a random item from one or more lists with optional year filtering
+    /// Uses SQL-side filtering and client-side random selection for optimal performance
+    /// - Parameters:
+    ///   - listIds: Array of list UUIDs to select from
+    ///   - minYear: Optional minimum release year (inclusive). If nil, no minimum filter applied.
+    ///   - maxYear: Optional maximum release year (inclusive). If nil, no maximum filter applied.
+    /// - Returns: A randomly selected ListItem, or nil if no items match criteria
+    /// - Throws: ListServiceError.invalidData if listIds array is empty
+    /// - Note: Movies with null year values are included when no year filters are specified,
+    ///         but excluded when year filtering is active
+    func fetchRandomItemFromLists(listIds: [UUID], minYear: Int? = nil, maxYear: Int? = nil) async throws -> ListItem? {
+        guard !listIds.isEmpty else {
+            throw ListServiceError.invalidData("No lists provided")
+        }
+        
+        // Validate year range if both are provided
+        if let minYear = minYear, let maxYear = maxYear, minYear > maxYear {
+            throw ListServiceError.invalidData("Minimum year cannot be greater than maximum year")
+        }
+        
+        // Build query with list filtering
+        let listIdStrings = listIds.map { $0.uuidString }
+        
+        var query = supabaseClient
+            .from("list_items")
+            .select()
+        
+        // Filter by list IDs using 'in' operator
+        if listIds.count == 1 {
+            query = query.eq("list_id", value: listIdStrings[0])
+        } else {
+            query = query.in("list_id", values: listIdStrings)
+        }
+        
+        // Add year filters if provided
+        // Note: gte/lte will exclude null values, which is the desired behavior
+        // when year filtering is active
+        if let minYear = minYear {
+            query = query.gte("movie_year", value: minYear)
+        }
+        if let maxYear = maxYear {
+            query = query.lte("movie_year", value: maxYear)
+        }
+        
+        // Fetch matching items (up to 1000 for random selection)
+        let response = try await query
+            .limit(1000)
+            .execute()
+        
+        guard !response.data.isEmpty else {
+            return nil // No items found matching criteria
+        }
+        
+        let items = try JSONDecoder().decode([ListItem].self, from: response.data)
+        
+        if items.isEmpty {
+            return nil
+        }
+        
+        // Pick random item from the fetched set
+        return items.randomElement()
+    }
+    
+    // MARK: - Optimized Database Functions
+    
+    /// Fetch all lists with pre-computed summary data in a single query
+    /// Uses the get_lists_with_summary database function
+    func fetchListsWithSummaryOptimized() async throws -> [ListWithSummaryDb] {
+        guard let currentUserId = getCurrentUserId() else {
+            throw ListServiceError.authenticationRequired
+        }
+        
+        let response = try await supabaseClient
+            .rpc("get_lists_with_summary", params: ["user_id_param": currentUserId.uuidString])
+            .execute()
+        
+        let lists = try JSONDecoder().decode([ListWithSummaryDb].self, from: response.data)
+        return lists
+    }
+    
+    /// Sync lists using the optimized database function
+    /// Falls back to legacy method if the function doesn't exist
+    func syncListsFromSupabaseOptimized() async {
+        isLoading = true
+        error = nil
+        
+        defer { isLoading = false }
+        
+        do {
+            // Try optimized function first
+            let listsWithSummary = try await fetchListsWithSummaryOptimized()
+            
+            // Convert to MovieList objects
+            let lists = listsWithSummary.map { $0.toMovieList() }
+            
+            // Save all lists locally
+            for list in lists {
+                try saveListLocally(list)
+            }
+            
+            // Update in-memory data and sort
+            self.movieLists = lists
+            sortLists()
+            
+            // Note: We don't need to fetch items separately for the list view
+            // Items will be fetched on-demand when opening a specific list
+            
+        } catch {
+            // Fallback to legacy method if optimized function fails
+            print("Optimized list sync failed, falling back to legacy: \(error)")
+            await syncListsFromSupabase()
+        }
+    }
+    
+    /// Fetch list items with watched status in a single query
+    /// Uses the get_list_items_with_watched database function
+    func fetchListItemsWithWatchedOptimized(listId: UUID) async throws -> [ListItemWithWatched] {
+        let response = try await supabaseClient
+            .rpc("get_list_items_with_watched", params: ["list_id_param": listId.uuidString])
+            .execute()
+        
+        let items = try JSONDecoder().decode([ListItemWithWatched].self, from: response.data)
+        return items
+    }
+    
+    /// Get items for a list with watched status using optimized query
+    /// Falls back to legacy method if the function doesn't exist
+    func getItemsForListOptimized(_ listId: UUID) async throws -> ([ListItem], Set<Int>) {
+        do {
+            let itemsWithWatched = try await fetchListItemsWithWatchedOptimized(listId: listId)
+            
+            let listItems = itemsWithWatched.map { $0.toListItem() }
+            let watchedTmdbIds = Set(itemsWithWatched.filter { $0.isWatched }.map { $0.tmdbId })
+            
+            // Cache the results
+            self.listItems[listId] = listItems
+            
+            // Save locally
+            for item in listItems {
+                try? saveListItemLocally(item)
+            }
+            
+            return (listItems, watchedTmdbIds)
+        } catch {
+            // Fallback to legacy method
+            print("Optimized list items fetch failed, falling back to legacy: \(error)")
+            let items = try await getItemsForList(listId)
+            return (items, Set())
+        }
+    }
 }
 
 // MARK: - Error Types

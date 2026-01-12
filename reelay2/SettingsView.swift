@@ -10,11 +10,13 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("appearanceMode") private var appearanceModeRawValue: String = AppearanceMode.automatic.rawValue
     @StateObject private var profileService = SupabaseProfileService.shared
+    @StateObject private var authService = SupabaseMovieService.shared
     @State private var showingBackdropPicker = false
     @State private var availableMovies: [Movie] = []
     @State private var selectedBackdropMovie: Movie?
     @State private var errorMessage: String?
     @State private var successMessage: String?
+    @State private var showingSignOutAlert = false
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -130,6 +132,22 @@ struct SettingsView: View {
                     }
                 }
                 
+                Section("Account") {
+                    Button(action: {
+                        showingSignOutAlert = true
+                    }) {
+                        HStack {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .foregroundColor(.red)
+                            
+                            Text("Sign Out")
+                                .foregroundColor(.red)
+                            
+                            Spacer()
+                        }
+                    }
+                }
+                
                 if let errorMessage = errorMessage {
                     Section {
                         Text(errorMessage)
@@ -171,6 +189,17 @@ struct SettingsView: View {
             }
             .task {
                 await loadCurrentProfile()
+            }
+            .alert("Sign Out", isPresented: $showingSignOutAlert) {
+                Button("Cancel", role: .cancel) {}
+                Button("Sign Out", role: .destructive) {
+                    Task {
+                        try await authService.signOut()
+                        dismiss()
+                    }
+                }
+            } message: {
+                Text("Are you sure you want to sign out?")
             }
         }
     }

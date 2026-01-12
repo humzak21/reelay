@@ -66,6 +66,11 @@ struct AddMoviesView: View {
     @State private var movieLists: [MovieList] = []
     @State private var showingMovieLists = false
     
+    // Comparison tool state
+    @State private var showingComparisonTool = false
+    @State private var comparisonMoviesPool: [Movie] = []
+    @State private var isLoadingComparisonMovies = false
+    
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -109,6 +114,22 @@ struct AddMoviesView: View {
             .sheet(isPresented: $showingMovieDetails) {
                 if let selectedMovie = selectedPreviousMovie {
                     MovieDetailsView(movie: selectedMovie)
+                }
+            }
+            .sheet(isPresented: $showingComparisonTool) {
+                if let movie = selectedMovie {
+                    ComparisonToolView(
+                        movieToRate: movie,
+                        starRating: starRating,
+                        moviesInRange: comparisonMoviesPool,
+                        onComplete: { rating in
+                            detailedRating = String(rating)
+                            showingComparisonTool = false
+                        },
+                        onDismiss: {
+                            showingComparisonTool = false
+                        }
+                    )
                 }
             }
             .onAppear {
@@ -254,6 +275,8 @@ struct AddMoviesView: View {
                 
                 ratingSection
                 
+                comparisonToolSection
+                
                 favoriteSection
                 
                 // Previous entries section
@@ -355,6 +378,46 @@ struct AddMoviesView: View {
             StarRatingView(rating: $starRating, size: 30)
             
             Text("Tap stars to rate (tap twice for half stars)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Comparison Tool Section
+    private var comparisonToolSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button(action: {
+                Task {
+                    await loadComparisonMovies()
+                    showingComparisonTool = true
+                }
+            }) {
+                HStack {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .font(.system(size: 16, weight: .medium))
+                    
+                    Text("Use Comparison Tool")
+                        .font(.headline)
+                    
+                    Spacer()
+                    
+                    if isLoadingComparisonMovies {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+                .background(starRating > 0 ? Color.purple.opacity(0.2) : Color.gray.opacity(0.15))
+                .foregroundColor(starRating > 0 ? .purple : .gray)
+                .cornerRadius(12)
+            }
+            .disabled(starRating == 0 || isLoadingComparisonMovies)
+            
+            Text("Compare against films you've rated to find the perfect detailed rating")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -988,6 +1051,33 @@ struct AddMoviesView: View {
         ratingSearchText = ""
         movieLists = []
         showingMovieLists = false
+        comparisonMoviesPool = []
+        showingComparisonTool = false
+    }
+    
+    // MARK: - Comparison Tool Helper
+    private func loadComparisonMovies() async {
+        isLoadingComparisonMovies = true
+        
+        let range = ComparisonToolViewModel.getRatingRange(for: starRating)
+        
+        do {
+            let movies = try await supabaseService.getMoviesInRatingRange(
+                minRating: Double(range.min),
+                maxRating: Double(range.max),
+                limit: 500
+            )
+            
+            await MainActor.run {
+                comparisonMoviesPool = movies.shuffled()
+                isLoadingComparisonMovies = false
+            }
+        } catch {
+            await MainActor.run {
+                comparisonMoviesPool = []
+                isLoadingComparisonMovies = false
+            }
+        }
     }
     
     // MARK: - Watchlist Operations

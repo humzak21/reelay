@@ -25,6 +25,8 @@ struct TelevisionDetailsView: View {
     @State private var selectedStatus: WatchingStatus
     @State private var streamingData: StreamingAvailabilityResponse?
     @State private var isLoadingStreaming = false
+    @State private var isStreamingExpanded = false
+    @State private var showingImageChanger = false
     
     init(televisionShow: Television) {
         self.televisionShow = televisionShow
@@ -79,6 +81,9 @@ struct TelevisionDetailsView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Close", systemImage: "xmark") {
+                        Task {
+                            await dataManager.refreshTelevision()
+                        }
                         dismiss()
                     }
                 }
@@ -95,6 +100,10 @@ struct TelevisionDetailsView: View {
                         }
                         
                         Menu {
+                            Button("Change Poster/Backdrop", systemImage: "photo") {
+                                showingImageChanger = true
+                            }
+                            
                             Button("Delete Show", systemImage: "trash", role: .destructive) {
                                 // TODO: Implement delete functionality
                             }
@@ -102,6 +111,14 @@ struct TelevisionDetailsView: View {
                             Image(systemName: "ellipsis")
                         }
                     }
+                }
+            }
+        }
+        .onAppear {
+            // Auto-load streaming availability when view appears
+            if streamingData == nil && !isLoadingStreaming {
+                Task {
+                    await loadStreamingData()
                 }
             }
         }
@@ -116,6 +133,34 @@ struct TelevisionDetailsView: View {
                     }
                 }
             )
+        }
+        .sheet(isPresented: $showingImageChanger) {
+            if let tmdbId = currentShow.tmdb_id {
+                TVPosterBackdropChangeView(
+                    tmdbId: tmdbId,
+                    currentPosterUrl: currentShow.poster_url,
+                    currentBackdropUrl: currentShow.backdrop_path,
+                    tvShowName: currentShow.name,
+                    onPosterSelected: { newPosterUrl in
+                        Task {
+                            await MainActor.run {
+                                if let updatedShow = dataManager.allTelevision.first(where: { $0.id == currentShow.id }) {
+                                    currentShow = updatedShow
+                                }
+                            }
+                        }
+                    },
+                    onBackdropSelected: { newBackdropUrl in
+                        Task {
+                            await MainActor.run {
+                                if let updatedShow = dataManager.allTelevision.first(where: { $0.id == currentShow.id }) {
+                                    currentShow = updatedShow
+                                }
+                            }
+                        }
+                    }
+                )
+            }
         }
     }
     
@@ -634,8 +679,8 @@ struct TelevisionDetailsView: View {
                 }
             }
             
-            // Update progress and episode information
-            _ = try await televisionService.updateProgressWithEpisodeInfo(
+            // Update progress and episode information through DataManager
+            try await dataManager.updateTelevisionProgressWithEpisodeInfo(
                 id: currentShow.id,
                 season: season,
                 episode: episode,
@@ -646,9 +691,6 @@ struct TelevisionDetailsView: View {
                 episodeRuntime: episodeRuntime,
                 episodeVoteAverage: episodeVoteAverage
             )
-            
-            // Refresh data from DataManager
-            await dataManager.refreshTelevision()
             
             // Update local state
             await MainActor.run {
@@ -690,25 +732,99 @@ struct TelevisionDetailsView: View {
     // MARK: - Streaming Availability Functions
     
     private func loadStreamingData() async {
-        guard let tmdbId = currentShow.tmdb_id else { return }
+        print("📺 [TelevisionDetailsView] 🔄 loadStreamingData() function called")
+        
+        guard let tmdbId = currentShow.tmdb_id else { 
+            print("📺 [TelevisionDetailsView] ❌ No TMDB ID available for TV show: \(currentShow.name)")
+            return 
+        }
+        
+        print("📺 [TelevisionDetailsView] ✅ Starting to load streaming data for TV show: \(currentShow.name) (TMDB: \(tmdbId))")
+        print("📺 [TelevisionDetailsView] 🌐 Will call streamingService.getTVShowStreamingAvailability()")
         
         await MainActor.run {
             isLoadingStreaming = true
+            print("📺 [TelevisionDetailsView] 🔄 Set isLoadingStreaming = true")
         }
         
         do {
+            print("📺 [TelevisionDetailsView] 📞 Calling streamingService.getTVShowStreamingAvailability(tmdbId: \(tmdbId), country: \"us\")")
             let streaming = try await streamingService.getTVShowStreamingAvailability(tmdbId: tmdbId, country: "us")
+            print("📺 [TelevisionDetailsView] 📨 Received response from streaming service")
+            
             await MainActor.run {
                 streamingData = streaming
                 isLoadingStreaming = false
+                print("📺 [TelevisionDetailsView] ✅ Updated UI state: isLoadingStreaming = false")
+                
+                // Log successful result
+                if let title = streaming.title {
+                    print("📺 [TelevisionDetailsView] ✅ Successfully loaded streaming data for: \(title)")
+                    if let options = streaming.streamingOptions?["us"] {
+                        print("📺 [TelevisionDetailsView] 📺 Found \(options.count) streaming options")
+                        for (index, option) in options.prefix(3).enumerated() {
+                            print("📺 [TelevisionDetailsView]   \(index + 1). \(option.service.name): \(option.type) - \(option.link)")
+                        }
+                        if options.count > 3 {
+                            print("📺 [TelevisionDetailsView]   ... and \(options.count - 3) more options")
+                        }
+                    } else {
+                        print("📺 [TelevisionDetailsView] ⚠️ No streaming options found in response")
+                    }
+                } else {
+                    print("📺 [TelevisionDetailsView] ⚠️ No title found in response")
+                }
+                
+                if let error = streaming.error ?? streaming.message {
+                    print("📺 [TelevisionDetailsView] ⚠️ API returned error: \(error)")
+                } else {
+                    print("📺 [TelevisionDetailsView] ✅ No API-level errors in response")
+                }
             }
         } catch {
+            print("📺 [TelevisionDetailsView] ❌ Exception caught in loadStreamingData()")
             await MainActor.run {
                 streamingData = nil
                 isLoadingStreaming = false
-                print("Failed to load TV streaming data: \(error.localizedDescription)")
+                print("📺 [TelevisionDetailsView] ❌ Failed to load streaming data for \(currentShow.name): \(error.localizedDescription)")
+                print("📺 [TelevisionDetailsView] ❌ Full error: \(error)")
+                
+                // Log specific error types for debugging
+                if let streamingError = error as? StreamingServiceError {
+                    print("📺 [TelevisionDetailsView] 🔍 StreamingServiceError details:")
+                    switch streamingError {
+                    case .httpError(let code):
+                        if code == 404 {
+                            print("📺 [TelevisionDetailsView] ⚠️ HTTP 404 - TV show not found in streaming database")
+                            // Create a mock response indicating the show wasn't found
+                            streamingData = StreamingAvailabilityResponse(
+                                itemType: nil, showType: nil, id: nil, imdbId: nil, tmdbId: nil,
+                                title: currentShow.name, overview: nil, releaseYear: nil, originalTitle: nil,
+                                genres: nil, directors: nil, cast: nil, rating: nil, runtime: nil,
+                                imageSet: nil, streamingOptions: [:],
+                                error: "TV show not found in streaming database", message: nil
+                            )
+                        } else {
+                            print("📺 [TelevisionDetailsView] ❌ HTTP Error \(code) - Check API key and endpoint")
+                        }
+                    case .decodingError(let decodingError):
+                        print("📺 [TelevisionDetailsView] ❌ Decoding Error - API response format may have changed: \(decodingError)")
+                    case .authenticationRequired:
+                        print("📺 [TelevisionDetailsView] ❌ Authentication Error - Check RapidAPI key configuration")
+                    case .networkError(let networkError):
+                        print("📺 [TelevisionDetailsView] ❌ Network Error - Check internet connection: \(networkError)")
+                    case .invalidURL:
+                        print("📺 [TelevisionDetailsView] ❌ Invalid URL Error")
+                    case .invalidResponse:
+                        print("📺 [TelevisionDetailsView] ❌ Invalid Response Error")
+                    }
+                } else {
+                    print("📺 [TelevisionDetailsView] ❌ Non-StreamingServiceError: \(type(of: error))")
+                }
             }
         }
+        
+        print("📺 [TelevisionDetailsView] 🏁 loadStreamingData() function completed")
     }
     
     private func toggleFavorite() async {
@@ -738,6 +854,16 @@ struct TelevisionDetailsView: View {
                 
                 Spacer()
                 
+                if let streaming = streamingData, streaming.error == nil {
+                    let usStreamingOptions = streaming.streamingOptions?["us"] ?? []
+                    if !usStreamingOptions.isEmpty {
+                        Text("\(usStreamingOptions.count)")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.gray)
+                    }
+                }
+                
                 if isLoadingStreaming {
                     ProgressView()
                         .scaleEffect(0.8)
@@ -751,7 +877,7 @@ struct TelevisionDetailsView: View {
                         .foregroundColor(.gray)
                         .padding(.vertical, 8)
                 } else {
-                    let usStreamingOptions = streaming.streamingOptions["us"] ?? []
+                    let usStreamingOptions = streaming.streamingOptions?["us"] ?? []
                     
                     if usStreamingOptions.isEmpty {
                         Text("Not currently available on major streaming platforms")
@@ -759,29 +885,39 @@ struct TelevisionDetailsView: View {
                             .foregroundColor(.gray)
                             .padding(.vertical, 8)
                     } else {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 12) {
-                            ForEach(Array(usStreamingOptions.prefix(6)), id: \.link) { option in
-                                TVStreamingServiceCard(streamingOption: option)
+                        let displayedOptions = isStreamingExpanded ? usStreamingOptions : Array(usStreamingOptions.prefix(6))
+                        
+                        LazyVStack(spacing: 8) {
+                            ForEach(displayedOptions) { option in
+                                TVStreamingServiceRow(streamingOption: option)
                             }
                         }
                         
                         if usStreamingOptions.count > 6 {
-                            Text("+ \(usStreamingOptions.count - 6) more services")
-                                .font(.caption)
-                                .foregroundColor(.gray)
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isStreamingExpanded.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Text(isStreamingExpanded ? "Show Less" : "+ \(usStreamingOptions.count - 6) more services")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    
+                                    Image(systemName: isStreamingExpanded ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .foregroundColor(.blue)
                                 .padding(.top, 8)
+                            }
                         }
                     }
                 }
             } else if !isLoadingStreaming {
-                Button("Load Streaming Availability") {
-                    Task {
-                        await loadStreamingData()
-                    }
-                }
-                .font(.body)
-                .foregroundColor(.blue)
-                .padding(.vertical, 8)
+                Text("Loading streaming availability...")
+                    .font(.body)
+                    .foregroundColor(.gray)
+                    .padding(.vertical, 8)
             }
         }
         .padding(.vertical, 20)
@@ -977,9 +1113,9 @@ struct StatusSelectorView: View {
     ))
 }
 
-// MARK: - TV Streaming Service Card Component
+// MARK: - TV Streaming Service Row Component
 
-struct TVStreamingServiceCard: View {
+struct TVStreamingServiceRow: View {
     let streamingOption: StreamingOption
     
     var body: some View {
@@ -988,77 +1124,90 @@ struct TVStreamingServiceCard: View {
                 UIApplication.shared.open(url)
             }
         }) {
-            VStack(spacing: 8) {
-                VStack(spacing: 4) {
-                    Text(streamingOption.service.name)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                    
-                    Text(streamingOption.type.capitalized)
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                        .lineLimit(1)
+            HStack(spacing: 12) {
+                // Service Icon
+                Group {
+                    if let iconName = serviceIconName {
+                        Image(iconName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 24, height: 24)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.blue.opacity(0.15))
+                            )
+                    } else {
+                        // Generic icon for services without custom icons
+                        Image(systemName: "tv.fill")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.blue)
+                            .frame(width: 24, height: 24)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.blue.opacity(0.15))
+                            )
+                    }
                 }
                 
-                if let price = streamingOption.price {
-                    Text(price.formatted)
-                        .font(.caption2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(streamingOption.service.name)
+                        .font(.body)
                         .fontWeight(.medium)
-                        .foregroundColor(.green)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(1)
+                    
+                    HStack(spacing: 8) {
+                        Text(streamingOption.type.capitalized)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        
+                        if let price = streamingOption.price {
+                            Text(price.formatted)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.green)
+                        }
+                    }
                 }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.gray)
             }
-            .frame(maxWidth: .infinity, minHeight: 60)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(serviceBackgroundColor)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(serviceBorderColor, lineWidth: 1)
-                    )
-            )
+            .background(Color(.secondarySystemFill))
+            .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())
     }
     
-    private var serviceBackgroundColor: Color {
-        switch streamingOption.service.id.lowercased() {
-        case "netflix":
-            return Color.red.opacity(0.1)
-        case "prime", "amazon":
-            return Color.blue.opacity(0.1)
-        case "disney":
-            return Color.purple.opacity(0.1)
-        case "hbo", "max":
-            return Color.purple.opacity(0.1)
-        case "hulu":
-            return Color.green.opacity(0.1)
-        case "apple":
-            return Color.gray.opacity(0.1)
+    private var serviceIconName: String? {
+        let serviceId = streamingOption.service.id.lowercased()
+        let serviceName = streamingOption.service.name.lowercased()
+        
+        // Map service IDs/names to icon file names
+        switch true {
+        case serviceId.contains("netflix") || serviceName.contains("netflix"):
+            return "netflix"
+        case serviceId.contains("prime") || serviceId.contains("amazon") || serviceName.contains("prime") || serviceName.contains("amazon"):
+            return "primevideo"
+        case serviceId.contains("disney") || serviceName.contains("disney"):
+            return "disney"
+        case serviceId.contains("hbo") || serviceId.contains("max") || serviceName.contains("hbo") || serviceName.contains("max"):
+            return "hbomax"
+        case serviceId.contains("hulu") || serviceName.contains("hulu"):
+            return "hulu"
+        case serviceId.contains("apple") || serviceName.contains("apple"):
+            return "AppleTV"
+        case serviceId.contains("plex") || serviceName.contains("plex"):
+            return "plex"
         default:
-            return Color.gray.opacity(0.05)
-        }
-    }
-    
-    private var serviceBorderColor: Color {
-        switch streamingOption.service.id.lowercased() {
-        case "netflix":
-            return Color.red.opacity(0.3)
-        case "prime", "amazon":
-            return Color.blue.opacity(0.3)
-        case "disney":
-            return Color.purple.opacity(0.3)
-        case "hbo", "max":
-            return Color.purple.opacity(0.3)
-        case "hulu":
-            return Color.green.opacity(0.3)
-        case "apple":
-            return Color.gray.opacity(0.3)
-        default:
-            return Color.gray.opacity(0.2)
+            return nil
         }
     }
 }

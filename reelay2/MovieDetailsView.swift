@@ -38,6 +38,7 @@ struct MovieDetailsView: View {
     @State private var showingBackdropChange = false
     @State private var streamingData: StreamingAvailabilityResponse?
     @State private var isLoadingStreaming = false
+    @State private var isStreamingExpanded = false
     
     init(movie: Movie) {
         self.movie = movie
@@ -161,11 +162,24 @@ struct MovieDetailsView: View {
             }
         }
         .task {
-            await loadPreviousWatches()
-            await loadAllMoviesForColorCalculation()
-            await listService.syncListsFromSupabase()
+            // Load data concurrently to avoid blocking the UI
+            async let previousWatchesTask = loadPreviousWatches()
+            async let allMoviesTask = loadAllMoviesForColorCalculation()
+            async let listSyncTask = listService.syncListsFromSupabase()
+            
+            // Wait for essential data first
+            await previousWatchesTask
+            await allMoviesTask
+            await listSyncTask
+            
+            // Load movie lists after list sync completes
             await loadMovieLists()
-            await loadStreamingData()
+        }
+        .onAppear {
+            // Load streaming data separately and lazily to avoid initial blocking
+            Task {
+                await loadStreamingData()
+            }
         }
         .sheet(isPresented: $isEditingReview) {
             EditReviewSheet(
@@ -556,13 +570,7 @@ struct MovieDetailsView: View {
                     .textCase(.uppercase)
                     .tracking(0.5)
                 
-                HStack(spacing: 3) {
-                    ForEach(0..<5) { index in
-                        Image(systemName: starType(for: index, rating: currentMovie.rating))
-                            .foregroundColor(starColor(for: currentMovie.rating))
-                            .font(.system(size: 18, weight: .regular))
-                    }
-                }
+                CompactStarRatingView(rating: currentMovie.rating, fontSize: 18)
             }
             .frame(maxWidth: .infinity, minHeight: 80)
             .padding(.vertical, 25)
@@ -826,6 +834,16 @@ struct MovieDetailsView: View {
                 
                 Spacer()
                 
+                if let streaming = streamingData, streaming.error == nil {
+                    let usStreamingOptions = streaming.streamingOptions?["us"] ?? []
+                    if !usStreamingOptions.isEmpty {
+                        Text("\(usStreamingOptions.count)")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.gray)
+                    }
+                }
+                
                 if isLoadingStreaming {
                     ProgressView()
                         .scaleEffect(0.8)
@@ -839,7 +857,7 @@ struct MovieDetailsView: View {
                         .foregroundColor(.gray)
                         .padding(.vertical, 8)
                 } else {
-                    let usStreamingOptions = streaming.streamingOptions["us"] ?? []
+                    let usStreamingOptions = streaming.streamingOptions?["us"] ?? []
                     
                     if usStreamingOptions.isEmpty {
                         Text("Not currently available on major streaming platforms")
@@ -847,17 +865,31 @@ struct MovieDetailsView: View {
                             .foregroundColor(.gray)
                             .padding(.vertical, 8)
                     } else {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2), spacing: 12) {
-                            ForEach(Array(usStreamingOptions.prefix(6)), id: \.link) { option in
-                                StreamingServiceCard(streamingOption: option)
+                        let displayedOptions = isStreamingExpanded ? usStreamingOptions : Array(usStreamingOptions.prefix(6))
+                        
+                        LazyVStack(spacing: 8) {
+                            ForEach(displayedOptions) { option in
+                                StreamingServiceRow(streamingOption: option)
                             }
                         }
                         
                         if usStreamingOptions.count > 6 {
-                            Text("+ \(usStreamingOptions.count - 6) more services")
-                                .font(.caption)
-                                .foregroundColor(.gray)
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    isStreamingExpanded.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Text(isStreamingExpanded ? "Show Less" : "+ \(usStreamingOptions.count - 6) more services")
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    
+                                    Image(systemName: isStreamingExpanded ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .foregroundColor(.blue)
                                 .padding(.top, 8)
+                            }
                         }
                     }
                 }
@@ -1394,7 +1426,12 @@ struct MovieDetailsView: View {
     // MARK: - Streaming Availability Functions
     
     private func loadStreamingData() async {
-        guard let tmdbId = currentMovie.tmdb_id else { return }
+        guard let tmdbId = currentMovie.tmdb_id else { 
+            print("🎬 [MovieDetailsView] No TMDB ID available for movie: \(currentMovie.title)")
+            return 
+        }
+        
+        print("🎬 [MovieDetailsView] Loading streaming data for movie: \(currentMovie.title) (TMDB: \(tmdbId))")
         
         await MainActor.run {
             isLoadingStreaming = true
@@ -1405,12 +1442,41 @@ struct MovieDetailsView: View {
             await MainActor.run {
                 streamingData = streaming
                 isLoadingStreaming = false
+                
+                // Log successful result
+                if let title = streaming.title {
+                    print("✅ [MovieDetailsView] Successfully loaded streaming data for: \(title)")
+                    if let options = streaming.streamingOptions?["us"] {
+                        print("📺 [MovieDetailsView] Found \(options.count) streaming options")
+                        for option in options.prefix(3) {
+                            print("   - \(option.service.name): \(option.type)")
+                        }
+                    }
+                } else if let error = streaming.error ?? streaming.message {
+                    print("⚠️ [MovieDetailsView] API returned error: \(error)")
+                }
             }
         } catch {
             await MainActor.run {
                 streamingData = nil
                 isLoadingStreaming = false
-                print("Failed to load streaming data: \(error.localizedDescription)")
+                print("❌ [MovieDetailsView] Failed to load streaming data for \(currentMovie.title): \(error.localizedDescription)")
+                
+                // Log specific error types for debugging
+                if let streamingError = error as? StreamingServiceError {
+                    switch streamingError {
+                    case .httpError(let code):
+                        print("❌ [MovieDetailsView] HTTP Error \(code) - Check API key and endpoint")
+                    case .decodingError(let decodingError):
+                        print("❌ [MovieDetailsView] Decoding Error - API response format may have changed: \(decodingError)")
+                    case .authenticationRequired:
+                        print("❌ [MovieDetailsView] Authentication Error - Check RapidAPI key configuration")
+                    case .networkError(let networkError):
+                        print("❌ [MovieDetailsView] Network Error - Check internet connection: \(networkError)")
+                    default:
+                        print("❌ [MovieDetailsView] Other streaming error: \(streamingError)")
+                    }
+                }
             }
         }
     }
@@ -1526,13 +1592,7 @@ struct PreviousWatchRow: View {
                     
                     HStack(spacing: 8) {
                         // Star rating
-                        HStack(spacing: 2) {
-                            ForEach(0..<5) { index in
-                                Image(systemName: starType(for: index, rating: movie.rating))
-                                    .foregroundColor(starColor(for: movie.rating))
-                                    .font(.system(size: 12))
-                            }
-                        }
+                        CompactStarRatingView(rating: movie.rating, fontSize: 12)
                         
                         if let rating = movie.rating {
                             Text("(\(String(format: "%.1f", rating)))")
@@ -2484,7 +2544,7 @@ struct ListRow: View {
 
 // MARK: - Streaming Service Card Component
 
-struct StreamingServiceCard: View {
+struct StreamingServiceRow: View {
     let streamingOption: StreamingOption
     
     var body: some View {
@@ -2493,77 +2553,90 @@ struct StreamingServiceCard: View {
                 UIApplication.shared.open(url)
             }
         }) {
-            VStack(spacing: 8) {
-                VStack(spacing: 4) {
-                    Text(streamingOption.service.name)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                    
-                    Text(streamingOption.type.capitalized)
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                        .lineLimit(1)
+            HStack(spacing: 12) {
+                // Service Icon
+                Group {
+                    if let iconName = serviceIconName {
+                        Image(iconName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 24, height: 24)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.blue.opacity(0.15))
+                            )
+                    } else {
+                        // Generic icon for services without custom icons
+                        Image(systemName: "tv.fill")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.blue)
+                            .frame(width: 24, height: 24)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.blue.opacity(0.15))
+                            )
+                    }
                 }
                 
-                if let price = streamingOption.price {
-                    Text(price.formatted)
-                        .font(.caption2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(streamingOption.service.name)
+                        .font(.body)
                         .fontWeight(.medium)
-                        .foregroundColor(.green)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(1)
+                    
+                    HStack(spacing: 8) {
+                        Text(streamingOption.type.capitalized)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        
+                        if let price = streamingOption.price {
+                            Text(price.formatted)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(.green)
+                        }
+                    }
                 }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.gray)
             }
-            .frame(maxWidth: .infinity, minHeight: 60)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(serviceBackgroundColor)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(serviceBorderColor, lineWidth: 1)
-                    )
-            )
+            .background(Color(.secondarySystemFill))
+            .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())
     }
     
-    private var serviceBackgroundColor: Color {
-        switch streamingOption.service.id.lowercased() {
-        case "netflix":
-            return Color.red.opacity(0.1)
-        case "prime", "amazon":
-            return Color.blue.opacity(0.1)
-        case "disney":
-            return Color.purple.opacity(0.1)
-        case "hbo", "max":
-            return Color.purple.opacity(0.1)
-        case "hulu":
-            return Color.green.opacity(0.1)
-        case "apple":
-            return Color.gray.opacity(0.1)
+    private var serviceIconName: String? {
+        let serviceId = streamingOption.service.id.lowercased()
+        let serviceName = streamingOption.service.name.lowercased()
+        
+        // Map service IDs/names to icon file names
+        switch true {
+        case serviceId.contains("netflix") || serviceName.contains("netflix"):
+            return "netflix"
+        case serviceId.contains("prime") || serviceId.contains("amazon") || serviceName.contains("prime") || serviceName.contains("amazon"):
+            return "primevideo"
+        case serviceId.contains("disney") || serviceName.contains("disney"):
+            return "disney"
+        case serviceId.contains("hbo") || serviceId.contains("max") || serviceName.contains("hbo") || serviceName.contains("max"):
+            return "hbomax"
+        case serviceId.contains("hulu") || serviceName.contains("hulu"):
+            return "hulu"
+        case serviceId.contains("apple") || serviceName.contains("apple"):
+            return "AppleTV"
+        case serviceId.contains("plex") || serviceName.contains("plex"):
+            return "plex"
         default:
-            return Color.gray.opacity(0.05)
-        }
-    }
-    
-    private var serviceBorderColor: Color {
-        switch streamingOption.service.id.lowercased() {
-        case "netflix":
-            return Color.red.opacity(0.3)
-        case "prime", "amazon":
-            return Color.blue.opacity(0.3)
-        case "disney":
-            return Color.purple.opacity(0.3)
-        case "hbo", "max":
-            return Color.purple.opacity(0.3)
-        case "hulu":
-            return Color.green.opacity(0.3)
-        case "apple":
-            return Color.gray.opacity(0.3)
-        default:
-            return Color.gray.opacity(0.2)
+            return nil
         }
     }
 }

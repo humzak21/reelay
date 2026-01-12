@@ -10,6 +10,7 @@ import SDWebImageSwiftUI
 
 struct TelevisionView: View {
     @StateObject private var televisionService = SupabaseTelevisionService.shared
+    @StateObject private var dataManager = DataManager.shared
     @State private var televisionShows: [Television] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -21,6 +22,8 @@ struct TelevisionView: View {
     @State private var selectedShow: Television?
     @State private var showToDelete: Television?
     @State private var showingDeleteShowAlert: Bool = false
+    @State private var showingImageChanger = false
+    @State private var showForImageChange: Television?
     @State private var viewMode: ViewMode = .list
     @State private var selectedStatus: WatchingStatus = .watching
     @State private var selectedTab: TabType = .status(.watching)
@@ -77,8 +80,8 @@ struct TelevisionView: View {
         televisionShows.filter { $0.watchingStatus == .planToWatch }.count
     }
     
-    private var droppedCount: Int {
-        televisionShows.filter { $0.watchingStatus == .dropped }.count
+    private var waitingCount: Int {
+        televisionShows.filter { $0.watchingStatus == .waiting }.count
     }
     
     private var favoritesCount: Int {
@@ -169,8 +172,9 @@ struct TelevisionView: View {
         contentWithNavigation
     }
     
+    @ViewBuilder
     private var contentWithNavigation: some View {
-        VStack(spacing: 0) {
+        let baseView = VStack(spacing: 0) {
             mainContentView
         }
         .navigationTitle("TV Shows")
@@ -180,56 +184,83 @@ struct TelevisionView: View {
         .toolbar {
             toolbarContent
         }
-        .task {
-            if !hasLoadedInitially {
-                await loadShowsIfNeeded(force: true)
-                hasLoadedInitially = true
-            }
-        }
-        .onAppear {
-            if shouldRefreshData() {
-                Task {
-                    await loadShowsIfNeeded(force: false)
-                }
-            }
-        }
-        .onChange(of: showingAddTelevision) { _, isShowing in
-            if !isShowing {
-                Task {
+        
+        let lifecycleView = baseView
+            .task {
+                if !hasLoadedInitially {
                     await loadShowsIfNeeded(force: true)
+                    hasLoadedInitially = true
                 }
             }
-        }
-        .sheet(isPresented: $showingAddTelevision) {
-            AddTelevisionView()
-        }
-        .confirmationDialog("Sort By", isPresented: $showingSortOptions) {
-            ForEach(TVSortField.allCases, id: \.rawValue) { field in
-                Button(field.displayName) {
-                    if sortBy == field {
-                        sortAscending.toggle()
-                    } else {
-                        sortBy = field
-                        sortAscending = true
+            .onAppear {
+                if shouldRefreshData() {
+                    Task {
+                        await loadShowsIfNeeded(force: false)
                     }
                 }
             }
-        }
-        .alert("Delete TV Show", isPresented: $showingDeleteShowAlert) {
-            Button("Delete", role: .destructive) {
-                if let show = showToDelete {
-                    deleteShow(show)
+        
+        let changeHandlersView = lifecycleView
+            .onChange(of: showingAddTelevision) { _, isShowing in
+                if !isShowing {
+                    Task {
+                        await loadShowsIfNeeded(force: true)
+                    }
                 }
             }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            if let show = showToDelete {
-                Text("Are you sure you want to delete \"\(show.name)\"?")
+        
+        changeHandlersView
+            .sheet(isPresented: $showingAddTelevision) {
+                AddTelevisionView()
             }
-        }
-        .sheet(item: $selectedShow) { show in
-            TelevisionDetailsView(televisionShow: show)
-        }
+            .confirmationDialog("Sort By", isPresented: $showingSortOptions) {
+                ForEach(TVSortField.allCases, id: \.rawValue) { field in
+                    Button(field.displayName) {
+                        if sortBy == field {
+                            sortAscending.toggle()
+                        } else {
+                            sortBy = field
+                            sortAscending = true
+                        }
+                    }
+                }
+            }
+            .alert("Delete TV Show", isPresented: $showingDeleteShowAlert) {
+                Button("Delete", role: .destructive) {
+                    if let show = showToDelete {
+                        deleteShow(show)
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                if let show = showToDelete {
+                    Text("Are you sure you want to delete \"\(show.name)\"?")
+                }
+            }
+            .sheet(item: $selectedShow) { show in
+                TelevisionDetailsView(televisionShow: show)
+            }
+            .sheet(isPresented: $showingImageChanger) {
+                if let showForImageChange = showForImageChange,
+                   let tmdbId = showForImageChange.tmdb_id {
+                    TVPosterBackdropChangeView(
+                        tmdbId: tmdbId,
+                        currentPosterUrl: showForImageChange.poster_url,
+                        currentBackdropUrl: showForImageChange.backdrop_path,
+                        tvShowName: showForImageChange.name,
+                        onPosterSelected: { newPosterUrl in
+                            Task {
+                                await loadShowsIfNeeded(force: true)
+                            }
+                        },
+                        onBackdropSelected: { newBackdropUrl in
+                            Task {
+                                await loadShowsIfNeeded(force: true)
+                            }
+                        }
+                    )
+                }
+            }
     }
     
     @ToolbarContentBuilder
@@ -285,10 +316,10 @@ struct TelevisionView: View {
                 )
                 
                 statusTab(
-                    status: .dropped,
-                    count: droppedCount,
-                    icon: "xmark.circle.fill",
-                    title: "Dropped"
+                    status: .waiting,
+                    count: waitingCount,
+                    icon: "clock.circle.fill",
+                    title: "Waiting"
                 )
                 
                 favoritesTab(
@@ -396,9 +427,35 @@ struct TelevisionView: View {
                         onDelete: { 
                             showToDelete = show
                             showingDeleteShowAlert = true
-                        }
+                        },
+                        onPreviousEpisode: { previousEpisode(for: show) },
+                        onNextEpisode: { nextEpisode(for: show) }
                     )
                     .contextMenu {
+                        Button(action: {
+                            Task {
+                                await updateShowStatus(show, to: .waiting)
+                            }
+                        }) {
+                            Label("Waiting", systemImage: "clock.circle.fill")
+                        }
+                        
+                        Button(action: {
+                            Task {
+                                await updateShowStatus(show, to: .planToWatch)
+                            }
+                        }) {
+                            Label("Plan to Watch", systemImage: "bookmark.circle")
+                        }
+                        
+                        Button(action: {
+                            Task {
+                                await updateShowStatus(show, to: .completed)
+                            }
+                        }) {
+                            Label("Completed", systemImage: "checkmark.circle.fill")
+                        }
+                        
                         Button(action: {
                             Task {
                                 await toggleTVShowFavorite(show)
@@ -408,6 +465,13 @@ struct TelevisionView: View {
                                 show.isFavorited ? "Remove from Favorites" : "Add to Favorites",
                                 systemImage: show.isFavorited ? "heart.fill" : "heart"
                             )
+                        }
+                        
+                        Button(action: {
+                            showForImageChange = show
+                            showingImageChanger = true
+                        }) {
+                            Label("Change Poster/Backdrop", systemImage: "photo")
                         }
                         
                         Button(role: .destructive, action: {
@@ -445,6 +509,30 @@ struct TelevisionView: View {
                         .contextMenu {
                             Button(action: {
                                 Task {
+                                    await updateShowStatus(show, to: .waiting)
+                                }
+                            }) {
+                                Label("Waiting", systemImage: "clock.circle.fill")
+                            }
+                            
+                            Button(action: {
+                                Task {
+                                    await updateShowStatus(show, to: .planToWatch)
+                                }
+                            }) {
+                                Label("Plan to Watch", systemImage: "bookmark.circle")
+                            }
+                            
+                            Button(action: {
+                                Task {
+                                    await updateShowStatus(show, to: .completed)
+                                }
+                            }) {
+                                Label("Completed", systemImage: "checkmark.circle.fill")
+                            }
+                            
+                            Button(action: {
+                                Task {
                                     await toggleTVShowFavorite(show)
                                 }
                             }) {
@@ -452,6 +540,13 @@ struct TelevisionView: View {
                                     show.isFavorited ? "Remove from Favorites" : "Add to Favorites",
                                     systemImage: show.isFavorited ? "heart.fill" : "heart"
                                 )
+                            }
+                            
+                            Button(action: {
+                                showForImageChange = show
+                                showingImageChanger = true
+                            }) {
+                                Label("Change Poster/Backdrop", systemImage: "photo")
                             }
                             
                             Button(role: .destructive, action: {
@@ -588,6 +683,48 @@ struct TelevisionView: View {
         }
     }
     
+    private func previousEpisode(for show: Television) {
+        Task {
+            guard let currentEpisode = show.current_episode, currentEpisode > 1 else { return }
+            let newEpisode = currentEpisode - 1
+            let currentSeasonNum = show.current_season ?? 1
+            
+            do {
+                try await dataManager.updateTelevisionProgress(id: show.id, season: currentSeasonNum, episode: newEpisode)
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to update episode: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    
+    private func nextEpisode(for show: Television) {
+        Task {
+            let newEpisode = (show.current_episode ?? 1) + 1
+            let currentSeasonNum = show.current_season ?? 1
+            
+            do {
+                try await dataManager.updateTelevisionProgress(id: show.id, season: currentSeasonNum, episode: newEpisode)
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to update episode: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    
+    private func updateShowStatus(_ show: Television, to newStatus: WatchingStatus) async {
+        do {
+            try await dataManager.updateTelevisionStatus(id: show.id, status: newStatus)
+            await loadShowsIfNeeded(force: true)
+        } catch {
+            await MainActor.run {
+                errorMessage = "Failed to update status: \(error.localizedDescription)"
+            }
+        }
+    }
+    
     private func toggleTVShowFavorite(_ show: Television) async {
         do {
             let updatedShow = try await televisionService.toggleTVShowFavorite(showId: show.id)
@@ -664,6 +801,8 @@ struct TelevisionListRow: View {
     let television: Television
     let onTap: () -> Void
     let onDelete: () -> Void
+    let onPreviousEpisode: () -> Void
+    let onNextEpisode: () -> Void
     
     var body: some View {
         Button(action: onTap) {
@@ -722,6 +861,10 @@ struct TelevisionListRow: View {
                         Text(television.progressText)
                             .font(.caption2)
                             .foregroundColor(.blue)
+                    } else if television.watchingStatus == .waiting {
+                        Text(television.progressText)
+                            .font(.caption2)
+                            .foregroundColor(.purple)
                     } else if television.isCompleted {
                         HStack(spacing: 4) {
                             Image(systemName: "checkmark.circle.fill")
@@ -736,9 +879,33 @@ struct TelevisionListRow: View {
                 
                 Spacer()
                 
-                // Status badge
+                // Episode navigation buttons
                 VStack(alignment: .trailing, spacing: 4) {
-                    statusBadge
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            onPreviousEpisode()
+                        }) {
+                            Image(systemName: "backward.fill")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(6)
+                                .background(Color.gray.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        Button(action: {
+                            onNextEpisode()
+                        }) {
+                            Image(systemName: "forward.fill")
+                                .font(.caption)
+                                .foregroundColor(.white)
+                                .padding(6)
+                                .background(Color.blue)
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
                     
                     if let rating = television.rating, rating > 0 {
                         HStack(spacing: 2) {
@@ -756,30 +923,6 @@ struct TelevisionListRow: View {
         .buttonStyle(PlainButtonStyle())
         .padding(.vertical, 4)
     }
-    
-    private var statusBadge: some View {
-        Text(television.watchingStatus.displayName)
-            .font(.caption2)
-            .fontWeight(.medium)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(statusColor.opacity(0.2))
-            .foregroundColor(statusColor)
-            .cornerRadius(8)
-    }
-    
-    private var statusColor: Color {
-        switch television.watchingStatus {
-        case .watching:
-            return .green
-        case .completed:
-            return .blue
-        case .dropped:
-            return .red
-        case .planToWatch:
-            return .orange
-        }
-    }
 }
 
 // MARK: - Television Tile View
@@ -789,83 +932,63 @@ struct TelevisionTileView: View {
     
     var body: some View {
         Button(action: onTap) {
-            VStack(spacing: 8) {
-                // TV show poster
-                WebImage(url: television.posterURL)
-                    .resizable()
-                    .indicator(.activity)
-                    .transition(.fade(duration: 0.5))
-                    .aspectRatio(2/3, contentMode: .fill)
-                    .cornerRadius(12)
-                    .overlay(
-                        VStack {
-                            Spacer()
-                            HStack {
+            WebImage(url: television.posterURL)
+                .resizable()
+                .indicator(.activity)
+                .transition(.fade(duration: 0.5))
+                .aspectRatio(2/3, contentMode: .fill)
+                .cornerRadius(12)
+                .clipped()
+                .overlay(
+                    // Episode progress overlay (similar to rank overlay)
+                    Group {
+                        if television.isCurrentlyWatching || television.watchingStatus == .waiting {
+                            VStack {
+                                HStack {
+                                    Spacer()
+                                    Text(television.progressText)
+                                        .font(.caption2)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(
+                                            .ultraThinMaterial.opacity(0.6),
+                                            in: RoundedRectangle(cornerRadius: 6)
+                                        )
+                                        .shadow(color: .black.opacity(0.4), radius: 3, x: 0, y: 1)
+                                }
                                 Spacer()
-                                statusBadge
                             }
-                            .padding(8)
+                            .padding(6)
                         }
-                    )
-                
-                VStack(spacing: 4) {
-                    HStack(spacing: 4) {
-                        Text(television.name)
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
-                        
+                    }, alignment: .topTrailing
+                )
+                .overlay(
+                    // Favorite heart overlay
+                    Group {
                         if television.isFavorited {
-                            Image(systemName: "heart.fill")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
+                            VStack {
+                                HStack {
+                                    Image(systemName: "heart.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                        .padding(4)
+                                        .background(
+                                            Circle()
+                                                .fill(.ultraThinMaterial.opacity(0.6))
+                                        )
+                                        .shadow(color: .black.opacity(0.4), radius: 2, x: 0, y: 1)
+                                    Spacer()
+                                }
+                                Spacer()
+                            }
+                            .padding(6)
                         }
-                    }
-                    
-                    if let year = television.first_air_year {
-                        Text(String(year))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                    
-                    if television.isCurrentlyWatching {
-                        Text(television.progressText)
-                            .font(.caption2)
-                            .foregroundColor(.blue)
-                    }
-                }
-            }
+                    }, alignment: .topLeading
+                )
         }
         .buttonStyle(PlainButtonStyle())
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(16)
-    }
-    
-    private var statusBadge: some View {
-        Text(television.watchingStatus.displayName)
-            .font(.caption2)
-            .fontWeight(.medium)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(statusColor.opacity(0.9))
-            .foregroundColor(.white)
-            .cornerRadius(6)
-    }
-    
-    private var statusColor: Color {
-        switch television.watchingStatus {
-        case .watching:
-            return .green
-        case .completed:
-            return .blue
-        case .dropped:
-            return .red
-        case .planToWatch:
-            return .orange
-        }
     }
 }
 

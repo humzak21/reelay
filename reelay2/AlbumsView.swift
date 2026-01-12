@@ -739,41 +739,59 @@ struct AlbumTileView: View {
     var body: some View {
         Button(action: onTap) {
             VStack(spacing: 8) {
-                // Album cover (no status indicator)
+                // Album cover with fixed size
                 WebImage(url: album.coverURL)
                     .resizable()
                     .indicator(.activity)
                     .transition(.fade(duration: 0.5))
                     .aspectRatio(1, contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .cornerRadius(12)
+                    .clipped()
+                    .overlay(
+                        // Favorite heart overlay
+                        Group {
+                            if album.isFavorited {
+                                VStack {
+                                    HStack {
+                                        Image(systemName: "heart.fill")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                            .padding(4)
+                                            .background(
+                                                Circle()
+                                                    .fill(.ultraThinMaterial.opacity(0.6))
+                                            )
+                                            .shadow(color: .black.opacity(0.4), radius: 2, x: 0, y: 1)
+                                        Spacer()
+                                    }
+                                    Spacer()
+                                }
+                                .padding(6)
+                            }
+                        }, alignment: .topLeading
+                    )
                 
+                // Fixed height text container
                 VStack(spacing: 4) {
-                    HStack(spacing: 4) {
-                        Text(album.title)
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
-                        
-                        if album.isFavorited {
-                            Image(systemName: "heart.fill")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
+                    Text(album.title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                     
                     Text(album.artist)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
+                .frame(height: 44)
+                .frame(maxWidth: .infinity)
             }
         }
         .buttonStyle(PlainButtonStyle())
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(16)
+        .frame(maxWidth: .infinity)
     }
 }
 

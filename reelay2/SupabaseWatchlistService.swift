@@ -224,6 +224,70 @@ class SupabaseWatchlistService: ObservableObject {
         }
         return mapped
     }
+    
+    /// Fetch a random item from the watchlist with optional year filtering
+    /// Uses SQL-side filtering and client-side random selection for optimal performance
+    /// - Parameters:
+    ///   - minYear: Optional minimum release year (inclusive). If nil, no minimum filter applied.
+    ///   - maxYear: Optional maximum release year (inclusive). If nil, no maximum filter applied.
+    /// - Returns: A randomly selected ListItem, or nil if no items match criteria
+    /// - Note: Movies with null year values are included when no year filters are specified,
+    ///         but excluded when year filtering is active
+    func fetchRandomItem(minYear: Int? = nil, maxYear: Int? = nil) async throws -> ListItem? {
+        guard let userId = SupabaseMovieService.shared.currentUser?.id.uuidString else {
+            throw ListServiceError.authenticationRequired
+        }
+        
+        // Build query with year filtering
+        var query = supabaseClient
+            .from("watchlist")
+            .select()
+            .eq("user_id", value: userId)
+        
+        // Add year filters if provided
+        // Note: gte/lte will exclude null values, which is the desired behavior
+        // when year filtering is active
+        if let minYear = minYear {
+            query = query.gte("movie_year", value: minYear)
+        }
+        if let maxYear = maxYear {
+            query = query.lte("movie_year", value: maxYear)
+        }
+        
+        // Fetch matching items (up to 1000 for random selection)
+        let response = try await query
+            .limit(1000)
+            .execute()
+        
+        guard !response.data.isEmpty else {
+            return nil // No items found matching criteria
+        }
+        
+        let items = try JSONDecoder().decode([WatchlistItem].self, from: response.data)
+        
+        if items.isEmpty {
+            return nil
+        }
+        
+        // Pick random item from the fetched set
+        guard let randomItem = items.randomElement() else {
+            return nil
+        }
+        
+        // Convert to ListItem
+        return ListItem(
+            id: randomItem.id,
+            listId: Self.watchlistListId,
+            tmdbId: randomItem.tmdbId,
+            movieTitle: randomItem.movieTitle,
+            moviePosterUrl: randomItem.moviePosterUrl,
+            movieBackdropPath: randomItem.movieBackdropPath,
+            movieYear: randomItem.movieYear,
+            movieReleaseDate: randomItem.movieReleaseDate,
+            addedAt: randomItem.addedAt,
+            sortOrder: 0
+        )
+    }
 }
 
 

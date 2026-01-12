@@ -347,6 +347,24 @@ class SupabaseTelevisionService: ObservableObject {
             throw SupabaseTelevisionError.invalidData
         }
     }
+    
+    /// Update poster URL for all TV shows with the given TMDB ID
+    nonisolated func updateTVPosterForTmdbId(tmdbId: Int, newPosterUrl: String) async throws {
+        try await supabase
+            .from("television")
+            .update(["poster_url": newPosterUrl])
+            .eq("tmdb_id", value: tmdbId)
+            .execute()
+    }
+    
+    /// Update backdrop URL for all TV shows with the given TMDB ID
+    nonisolated func updateTVBackdropForTmdbId(tmdbId: Int, newBackdropUrl: String) async throws {
+        try await supabase
+            .from("television")
+            .update(["backdrop_path": newBackdropUrl])
+            .eq("tmdb_id", value: tmdbId)
+            .execute()
+    }
 }
 
 // MARK: - Request Models

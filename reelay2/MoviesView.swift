@@ -234,8 +234,8 @@ struct MoviesView: View {
     .task {
       if movieService.isLoggedIn && !hasLoadedInitially {
         await loadMoviesIfNeeded(force: true)
-        // Ensure lists are loaded for border detection
-        await listService.syncListsFromSupabase()
+        // Ensure lists are loaded for border detection using optimized sync
+        await listService.syncListsFromSupabaseOptimized()
         // Load month descriptors
         try? await monthDescriptorService.loadMonthDescriptors()
         hasLoadedInitially = true
@@ -490,7 +490,7 @@ struct MoviesView: View {
       ProgressView()
         .progressViewStyle(CircularProgressViewStyle(tint: .white))
         .scaleEffect(1.2)
-      Text("Finishing up a film")
+      Text("Finishing a film...")
         .font(.system(size: 16, weight: .medium))
         .foregroundColor(.white)
       Spacer()
@@ -1174,18 +1174,7 @@ struct MoviesView: View {
 
         // Star rating and detailed rating
         HStack(spacing: 6) {
-          HStack(spacing: 1) {
-            ForEach(0..<5) { index in
-              Image(
-                systemName: starType(
-                  for: index,
-                  rating: movie.rating
-                )
-              )
-              .foregroundColor(starColor(for: movie.rating))
-              .font(.system(size: 10, weight: .regular))
-            }
-          }
+          CompactStarRatingView(rating: movie.rating, fontSize: 10)
 
           if let detailedRating = movie.detailed_rating {
             Text(String(format: "%.0f", detailedRating))
@@ -1546,10 +1535,29 @@ struct MoviesView: View {
         limit: 3000
       )
       lastRefreshTime = Date()
+      
+      // Load optimized caches for rewatch colors and must watches highlighting
+      await loadOptimizedCaches()
     } catch {
       errorMessage = error.localizedDescription
     }
     isLoading = false
+  }
+  
+  /// Load first watch dates and must watches mapping using batch queries
+  private func loadOptimizedCaches() async {
+    // Get unique TMDB IDs from rewatch movies for first watch date lookup
+    let rewatchTmdbIds = movies
+      .filter { $0.isRewatchMovie }
+      .compactMap { $0.tmdb_id }
+    let uniqueRewatchIds = Array(Set(rewatchTmdbIds))
+    
+    // Load first watch dates and must watches mapping concurrently
+    async let firstWatchTask: () = DataManager.shared.loadFirstWatchDates(for: uniqueRewatchIds)
+    async let mustWatchesTask: () = DataManager.shared.loadMustWatchesMapping()
+    
+    await firstWatchTask
+    await mustWatchesTask
   }
 
   private func refreshMovies() async {
@@ -1737,8 +1745,13 @@ struct MoviesView: View {
 
   private func isOnMustWatchesList(_ movie: Movie, for year: Int) -> Bool {
     guard let tmdbId = movie.tmdb_id else { return false }
+    
+    // Try to use cached must watches mapping for better performance
+    if !MustWatchesCache.shared.needsRefresh {
+      return MustWatchesCache.shared.isOnMustWatches(tmdbId: tmdbId, year: year)
+    }
 
-    // Look for list named exactly "Must Watches for xxxx"
+    // Fallback to legacy lookup if cache is stale
     let mustWatchesListName = "Must Watches for \(year)"
     guard
       let mustWatchesList = listService.movieLists.first(where: {
@@ -1775,6 +1788,42 @@ struct MoviesView: View {
   private func getRewatchIconColor(for movie: Movie) -> Color {
     guard movie.isRewatchMovie else { return .orange }
 
+    // Try to use cached first watch date for better performance
+    if let tmdbId = movie.tmdb_id,
+       let cachedFirstWatch = FirstWatchDateCache.shared.getFirstWatch(for: tmdbId) {
+      return getRewatchColorFromCache(movie: movie, firstWatch: cachedFirstWatch)
+    }
+    
+    // Fallback to legacy computation if cache miss
+    return getRewatchColorLegacy(for: movie)
+  }
+  
+  /// Compute rewatch color using cached first watch date
+  private func getRewatchColorFromCache(movie: Movie, firstWatch: (date: Date?, year: Int?)) -> Color {
+    guard let watchDateString = movie.watch_date,
+          let movieWatchDate = DateFormatter.movieDateFormatter.date(from: watchDateString) else {
+      return .orange
+    }
+    
+    let calendar = Calendar.current
+    let movieYear = calendar.component(.year, from: movieWatchDate)
+    
+    // Grey: No first watch found (first entry but marked as rewatch)
+    guard let firstWatchYear = firstWatch.year else {
+      return .gray
+    }
+    
+    // Yellow: First watched and rewatched in same calendar year
+    if movieYear == firstWatchYear {
+      return .yellow
+    }
+    
+    // Orange: Movie was logged in a previous year
+    return .orange
+  }
+  
+  /// Legacy rewatch color computation (fallback when cache is not available)
+  private func getRewatchColorLegacy(for movie: Movie) -> Color {
     // Grey: First entry in DB but marked as rewatch
     if isFirstEntryButMarkedAsRewatch(movie) {
       return .gray
@@ -2120,18 +2169,7 @@ struct MovieRowView: View {
         // Star rating and score in same row
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           // Stars container with fixed alignment
-          HStack(spacing: 2) {
-            ForEach(0..<5) { index in
-              Image(
-                systemName: starType(
-                  for: index,
-                  rating: movie.rating
-                )
-              )
-              .foregroundColor(starColor(for: movie.rating))
-              .font(.system(size: 12, weight: .regular))
-            }
-          }
+          CompactStarRatingView(rating: movie.rating, fontSize: 12)
 
           // Numerical rating with baseline alignment
           if let detailedRating = movie.detailed_rating {
@@ -2269,17 +2307,7 @@ struct MovieTileView: View {
       // Star rating, favorites, and rewatch icon centered below poster
       HStack(spacing: 6) {
         // Star rating
-        if let rating = movie.rating {
-          HStack(spacing: 1) {
-            ForEach(0..<5, id: \.self) { index in
-              Image(
-                systemName: starType(for: index, rating: rating)
-              )
-              .foregroundColor(starColor(for: rating))
-              .font(.system(size: 10, weight: .bold))
-            }
-          }
-        }
+        CompactStarRatingView(rating: movie.rating, fontSize: 10)
         
         // Favorites heart
         if movie.isFavorited {
@@ -3316,6 +3344,37 @@ struct SortDirectionRow: View {
     .buttonStyle(PlainButtonStyle())
   }
 
+}
+
+// MARK: - Compact Star Rating View
+struct CompactStarRatingView: View {
+  let rating: Double?
+  let fontSize: CGFloat
+  
+  var body: some View {
+    HStack(spacing: 2) {
+      if let rating = rating, rating > 0 {
+        let wholeStars = Int(rating)
+        let hasHalfStar = rating.truncatingRemainder(dividingBy: 1) >= 0.5
+        
+        // Show whole stars
+        if wholeStars > 0 {
+          ForEach(0..<wholeStars, id: \.self) { _ in
+            Image(systemName: "star.fill")
+              .foregroundColor(rating == 5.0 ? .yellow : .blue)
+              .font(.system(size: fontSize, weight: .regular))
+          }
+        }
+        
+        // Show half star icon
+        if hasHalfStar {
+          Image(systemName: "star.leadinghalf.filled")
+            .foregroundColor(rating == 5.0 ? .yellow : .blue)
+            .font(.system(size: fontSize, weight: .regular))
+        }
+      }
+    }
+  }
 }
 
 // MARK: - DateFormatter Extension

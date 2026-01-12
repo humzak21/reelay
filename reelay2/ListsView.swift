@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SDWebImageSwiftUI
 
 struct ListsView: View {
     @StateObject private var dataManager = DataManager.shared
@@ -187,7 +188,7 @@ struct ListsView: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 .scaleEffect(1.2)
-            Text("Finishing up a film")
+            Text("Finishing a film...")
                 .font(.headline)
                 .foregroundColor(.white)
             Spacer()
@@ -319,7 +320,8 @@ struct ListsView: View {
         
         errorMessage = nil
         
-        await dataManager.refreshLists()
+        // Use optimized refresh which uses batch database function
+        await dataManager.refreshListsOptimized()
         
         lastRefreshTime = Date()
         isLoading = false
@@ -333,7 +335,8 @@ struct ListsView: View {
         isRefreshing = true
         errorMessage = nil
         
-        await dataManager.refreshLists()
+        // Use optimized refresh
+        await dataManager.refreshListsOptimized()
         
         lastRefreshTime = Date()
         isRefreshing = false
@@ -376,90 +379,112 @@ struct ListCardView: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 12) {
-                // List header
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(list.name)
-                                .font(.title2)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                                .lineLimit(2)
-                            
-                            if list.pinned {
-                                Image(systemName: "pin.fill")
-                                    .foregroundColor(.yellow)
-                                    .font(.caption)
-                            }
-                        }
-                        
-                        if let description = list.description, !description.isEmpty {
-                            Text(description)
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
-                                .lineLimit(2)
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    VStack(alignment: .trailing, spacing: 4) {
-                        HStack {
-                            Text("\(list.itemCount)")
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                        }
-                        
-                        Text("films")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                            .textCase(.uppercase)
-                    }
-                }
-                
-                // Movie posters preview
-                HStack(spacing: 6) {
-                    ForEach(0..<6, id: \.self) { index in
-                        if index < listItems.count {
-                            let item = listItems[index]
-                            if let posterUrl = item.moviePosterUrl, !posterUrl.isEmpty {
-                                AsyncImage(url: URL(string: posterUrl)) { image in
-                                    image
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                } placeholder: {
-                                    Rectangle()
-                                        .fill(Color.gray.opacity(0.3))
-                                }
-                                .frame(width: 50, height: 75)
-                                .cornerRadius(8)
-                                .clipped()
-                            } else {
-                                Rectangle()
-                                    .fill(Color.gray.opacity(0.2))
-                                    .frame(width: 50, height: 75)
-                                    .cornerRadius(8)
-                                    .overlay(
-                                        Image(systemName: "photo")
-                                            .foregroundColor(.gray.opacity(0.5))
-                                            .font(.caption)
-                                    )
-                            }
-                        } else {
-                            Rectangle()
-                                .fill(Color.clear)
-                                .frame(width: 50, height: 75)
-                                .cornerRadius(8)
-                        }
-                    }
-                }
+                listHeaderView
+                posterPreviewSection
             }
             .padding(16)
             .background(Color(.secondarySystemFill))
             .cornerRadius(16)
         }
         .buttonStyle(PlainButtonStyle())
+    }
+    
+    private var listHeaderView: some View {
+        HStack {
+            leftHeaderSection
+            Spacer()
+            rightHeaderSection
+        }
+    }
+    
+    private var leftHeaderSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(list.name)
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                
+                if list.pinned {
+                    Image(systemName: "pin.fill")
+                        .foregroundColor(.yellow)
+                        .font(.caption)
+                }
+            }
+            
+            if let description = list.description, !description.isEmpty {
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                    .lineLimit(2)
+            }
+        }
+    }
+    
+    private var rightHeaderSection: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Text("\(list.itemCount)")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+            }
+            
+            Text("films")
+                .font(.caption)
+                .foregroundColor(.gray)
+                .textCase(.uppercase)
+        }
+    }
+    
+    private var posterPreviewSection: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(listItems.prefix(6).enumerated()), id: \.offset) { index, item in
+                posterImageView(for: item)
+            }
+            
+            // Add empty placeholders for remaining slots
+            ForEach(0..<max(0, 6 - listItems.count), id: \.self) { _ in
+                emptyPosterPlaceholder
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func posterImageView(for item: ListItem) -> some View {
+        if let posterUrl = item.moviePosterUrl, !posterUrl.isEmpty {
+            WebImage(url: URL(string: posterUrl))
+                .resizable()
+                .indicator(.activity)
+                .transition(.fade(duration: 0.2))
+                .scaledToFill()
+                .frame(width: 50, height: 75)
+                .cornerRadius(8)
+                .clipped()
+        } else {
+            emptyPosterView
+        }
+    }
+    
+    
+    private var emptyPosterView: some View {
+        Rectangle()
+            .fill(Color.gray.opacity(0.2))
+            .frame(width: 50, height: 75)
+            .cornerRadius(8)
+            .overlay(
+                Image(systemName: "photo")
+                    .foregroundColor(.gray.opacity(0.5))
+                    .font(.caption)
+            )
+    }
+    
+    private var emptyPosterPlaceholder: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 50, height: 75)
+            .cornerRadius(8)
     }
 }
 

@@ -307,7 +307,7 @@ extension Television {
 enum WatchingStatus: String, CaseIterable {
     case watching = "watching"
     case completed = "completed"
-    case dropped = "dropped"
+    case waiting = "waiting"
     case planToWatch = "plan_to_watch"
     
     var displayName: String {
@@ -316,8 +316,8 @@ enum WatchingStatus: String, CaseIterable {
             return "Watching"
         case .completed:
             return "Completed"
-        case .dropped:
-            return "Dropped"
+        case .waiting:
+            return "Waiting"
         case .planToWatch:
             return "Plan to Watch"
         }
@@ -329,8 +329,8 @@ enum WatchingStatus: String, CaseIterable {
             return "green"
         case .completed:
             return "blue"
-        case .dropped:
-            return "red"
+        case .waiting:
+            return "purple"
         case .planToWatch:
             return "orange"
         }

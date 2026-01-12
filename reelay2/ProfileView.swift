@@ -130,7 +130,6 @@ struct LoginView: View {
 struct LoggedInProfileView: View {
     @StateObject private var authService = SupabaseMovieService.shared
     @StateObject private var profileService = SupabaseProfileService.shared
-    @State private var showingSignOutAlert = false
     @State private var showingSettings = false
     @State private var backdropMovie: Movie?
     @State private var showingAddMovie = false
@@ -311,20 +310,6 @@ struct LoggedInProfileView: View {
                         .padding(.horizontal, 20)
                         .padding(.top, 20)
                         
-                        // Sign Out Button
-                        Button(action: {
-                            showingSignOutAlert = true
-                        }) {
-                            Text("Sign Out")
-                                .fontWeight(.semibold)
-                                .foregroundColor(.red)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(Color(.secondarySystemBackground).opacity(0.8))
-                        .cornerRadius(10)
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 40)
                     }
                     .padding(.horizontal, 20)
                     .padding(.vertical, 4)
@@ -401,16 +386,6 @@ struct LoggedInProfileView: View {
         }
         .sheet(isPresented: $showingRandomizer) {
             WatchlistRandomizerView()
-        }
-        .alert("Sign Out", isPresented: $showingSignOutAlert) {
-            Button("Cancel", role: .cancel) {}
-            Button("Sign Out", role: .destructive) {
-                Task {
-                    try await authService.signOut()
-                }
-            }
-        } message: {
-            Text("Are you sure you want to sign out?")
         }
         .onChange(of: showingAddMovie) { _, isShowing in
             if !isShowing && authService.isLoggedIn {
@@ -571,7 +546,7 @@ struct LoggedInProfileView: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 .scaleEffect(1.2)
-            Text("Finishing up a film")
+            Text("Finishing a film...")
                 .font(.headline)
                 .foregroundColor(.white)
             Spacer()

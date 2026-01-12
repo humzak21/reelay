@@ -164,9 +164,68 @@ class DataManager: ObservableObject {
     }
     
     func refreshLists() async {
-        await listService.syncListsFromSupabase()
+        // Try optimized sync first, falls back to legacy automatically
+        await listService.syncListsFromSupabaseOptimized()
         await refreshWatchlist()
         movieLists = mergeWatchlist(into: movieLists)
+    }
+    
+    /// Refresh lists using optimized database function
+    /// This is the preferred method for initial load and refresh
+    func refreshListsOptimized() async {
+        await listService.syncListsFromSupabaseOptimized()
+        await refreshWatchlist()
+        movieLists = mergeWatchlist(into: movieLists)
+    }
+    
+    /// Load first watch dates for rewatch color computation
+    /// Uses batch query to avoid N+1 pattern
+    func loadFirstWatchDates(for tmdbIds: [Int]) async {
+        guard !tmdbIds.isEmpty else { return }
+        
+        do {
+            let firstWatchDates = try await movieService.getFirstWatchDatesBatch(tmdbIds: tmdbIds)
+            await MainActor.run {
+                FirstWatchDateCache.shared.update(with: firstWatchDates)
+            }
+        } catch {
+            print("Error loading first watch dates: \(error)")
+        }
+    }
+    
+    /// Load must watches mapping for purple title highlighting
+    /// Uses batch query to avoid N+1 pattern
+    func loadMustWatchesMapping() async {
+        guard let userId = movieService.currentUser?.id else { return }
+        
+        do {
+            let mappings = try await movieService.getMustWatchesMapping(userId: UUID(uuidString: userId.uuidString) ?? UUID())
+            await MainActor.run {
+                MustWatchesCache.shared.update(with: mappings)
+            }
+        } catch {
+            print("Error loading must watches mapping: \(error)")
+        }
+    }
+    
+    /// Load goals data using optimized database function
+    func loadGoalsDataOptimized() async -> [GoalListData] {
+        guard let userId = movieService.currentUser?.id else { return [] }
+        
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let currentMonth = Calendar.current.component(.month, from: Date())
+        
+        do {
+            let goalsData = try await movieService.getGoalsData(
+                userId: UUID(uuidString: userId.uuidString) ?? UUID(),
+                targetYear: currentYear,
+                currentMonth: currentMonth
+            )
+            return goalsData
+        } catch {
+            print("Error loading goals data: \(error)")
+            return []
+        }
     }
 
     // MARK: - Watchlist Operations
@@ -230,6 +289,14 @@ class DataManager: ObservableObject {
         try await listService.updateListItemBackdrop(tmdbId: tmdbId, newBackdropUrl: newBackdropUrl)
     }
     
+    func updateTVPosterForTmdbId(tmdbId: Int, newPosterUrl: String) async throws {
+        try await televisionService.updateTVPosterForTmdbId(tmdbId: tmdbId, newPosterUrl: newPosterUrl)
+    }
+    
+    func updateTVBackdropForTmdbId(tmdbId: Int, newBackdropUrl: String) async throws {
+        try await televisionService.updateTVBackdropForTmdbId(tmdbId: tmdbId, newBackdropUrl: newBackdropUrl)
+    }
+    
     // MARK: - Movie Data Management
     
     func loadMovies() async {
@@ -279,6 +346,31 @@ class DataManager: ObservableObject {
     
     func updateTelevisionStatus(id: Int, status: WatchingStatus) async throws {
         _ = try await televisionService.updateStatus(id: id, status: status)
+        await refreshTelevision()
+    }
+    
+    func updateTelevisionProgressWithEpisodeInfo(
+        id: Int,
+        season: Int,
+        episode: Int,
+        episodeName: String? = nil,
+        episodeOverview: String? = nil,
+        episodeAirDate: String? = nil,
+        episodeStillPath: String? = nil,
+        episodeRuntime: Int? = nil,
+        episodeVoteAverage: Double? = nil
+    ) async throws {
+        _ = try await televisionService.updateProgressWithEpisodeInfo(
+            id: id,
+            season: season,
+            episode: episode,
+            episodeName: episodeName,
+            episodeOverview: episodeOverview,
+            episodeAirDate: episodeAirDate,
+            episodeStillPath: episodeStillPath,
+            episodeRuntime: episodeRuntime,
+            episodeVoteAverage: episodeVoteAverage
+        )
         await refreshTelevision()
     }
     
@@ -468,5 +560,73 @@ class DataManager: ObservableObject {
             guard let items = listItems[list.id] else { return false }
             return items.contains { $0.tmdbId == tmdbId }
         }
+    }
+    
+    // MARK: - Random Selection
+    
+    /// Get a random movie from one or more lists with optional year filtering
+    /// Combines results from watchlist and regular lists for true multi-list random selection
+    /// - Parameters:
+    ///   - listIds: Array of list UUIDs to select from (can include watchlist ID)
+    ///   - minYear: Optional minimum release year (inclusive). If nil, no minimum filter applied.
+    ///   - maxYear: Optional maximum release year (inclusive). If nil, no maximum filter applied.
+    /// - Returns: A randomly selected ListItem, or nil if no items match criteria
+    /// - Throws: ListServiceError.invalidData if listIds is empty or year range is invalid
+    /// - Note: When multiple lists are selected, each list contributes random candidates,
+    ///         and a final random selection is made from all candidates for fair distribution
+    func getRandomMovieFromLists(listIds: [UUID], minYear: Int? = nil, maxYear: Int? = nil) async throws -> ListItem? {
+        guard !listIds.isEmpty else {
+            throw ListServiceError.invalidData("No lists selected")
+        }
+        
+        // Validate year range if both are provided
+        if let minYear = minYear, let maxYear = maxYear, minYear > maxYear {
+            throw ListServiceError.invalidData("Minimum year cannot be greater than maximum year")
+        }
+        
+        // Separate watchlist from regular lists
+        let watchlistId = SupabaseWatchlistService.watchlistListId
+        let containsWatchlist = listIds.contains(watchlistId)
+        let regularListIds = listIds.filter { $0 != watchlistId }
+        
+        var candidates: [ListItem] = []
+        var errors: [Error] = []
+        
+        // Fetch from watchlist if selected
+        if containsWatchlist {
+            do {
+                if let watchlistItem = try await watchlistService.fetchRandomItem(minYear: minYear, maxYear: maxYear) {
+                    candidates.append(watchlistItem)
+                }
+            } catch {
+                // Store error but continue trying other sources
+                errors.append(error)
+            }
+        }
+        
+        // Fetch from regular lists if any selected
+        if !regularListIds.isEmpty {
+            do {
+                if let listItem = try await listService.fetchRandomItemFromLists(listIds: regularListIds, minYear: minYear, maxYear: maxYear) {
+                    candidates.append(listItem)
+                }
+            } catch {
+                // Store error but continue
+                errors.append(error)
+            }
+        }
+        
+        // If we have candidates, pick randomly between them
+        if !candidates.isEmpty {
+            return candidates.randomElement()
+        }
+        
+        // If no candidates and we had errors, throw the first error
+        if let firstError = errors.first {
+            throw firstError
+        }
+        
+        // Otherwise, return nil (no items found matching criteria)
+        return nil
     }
 }
