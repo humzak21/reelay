@@ -60,29 +60,53 @@ struct AppearanceOptionView: View {
     private var previewBackgroundColor: Color {
         switch mode {
         case .automatic:
-            return Color(.systemBackground)
+            #if os(macOS)
+            return Color(NSColor.windowBackgroundColor)
+            #else
+            return Color(.systemGroupedBackground)
+            #endif
         case .light:
-            return .white
+            #if os(macOS)
+            return Color(NSColor.windowBackgroundColor)
+            #else
+            return Color(.systemGroupedBackground)
+            #endif
         case .dark:
             return Color(.black)
         }
     }
-    
+
     private var previewBorderColor: Color {
         switch mode {
         case .automatic:
+            #if os(macOS)
+            return Color(NSColor.separatorColor)
+            #else
             return Color(.systemGray3)
+            #endif
         case .light:
+            #if os(macOS)
+            return Color(NSColor.gridColor)
+            #else
             return Color(.systemGray4)
+            #endif
         case .dark:
+            #if os(macOS)
+            return Color(NSColor.quaternaryLabelColor)
+            #else
             return Color(.systemGray2)
+            #endif
         }
     }
-    
+
     private var previewTextColor: Color {
         switch mode {
         case .automatic:
+            #if os(macOS)
+            return Color(NSColor.labelColor)
+            #else
             return Color(.label)
+            #endif
         case .light:
             return .black
         case .dark:

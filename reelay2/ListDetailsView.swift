@@ -6,12 +6,13 @@
 //
 
 import SwiftUI
+import SDWebImageSwiftUI
 
 struct ListDetailsView: View {
     let list: MovieList
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @StateObject private var dataManager = DataManager.shared
+    @ObservedObject private var dataManager = DataManager.shared
     @State private var isLoading = false
     @State private var showingAddMovies = false
     @State private var showingEditList = false
@@ -27,10 +28,20 @@ struct ListDetailsView: View {
     @State private var showingSortMenu = false
     @State private var selectedMovie: Movie?
     @State private var showingMovieDetails = false
-    
+    @State private var viewMode: ViewMode = .grid
+
+    enum ViewMode {
+        case grid
+        case list
+    }
+
     private var currentList: MovieList {
         dataManager.movieLists.first(where: { $0.id == list.id }) ?? list
     }
+    
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
 
     private var listItems: [ListItem] {
         let items = dataManager.getListItems(currentList)
@@ -51,8 +62,11 @@ struct ListDetailsView: View {
     }
     
     private var watchProgress: Double {
-        guard !listItems.isEmpty else { return 0.0 }
-        return Double(watchedCount) / Double(listItems.count)
+        let count = listItems.count
+        guard count > 0 else { return 0.0 }
+        let progress = Double(watchedCount) / Double(count)
+
+        return progress
     }
     
     private var watchProgressPercentage: Int {
@@ -60,7 +74,11 @@ struct ListDetailsView: View {
     }
     
     private var appBackground: Color {
-        colorScheme == .dark ? .black : Color(.systemBackground)
+        #if os(macOS)
+        colorScheme == .dark ? .black : Color(NSColor.windowBackgroundColor)
+        #else
+        colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+        #endif
     }
     
     var body: some View {
@@ -93,7 +111,11 @@ struct ListDetailsView: View {
                                     theaterTicketsView
                                 }
                             } else {
-                                moviesGridView
+                                if viewMode == .list {
+                                    moviesListView
+                                } else {
+                                    moviesGridView
+                                }
                             }
                         }
                     }
@@ -108,17 +130,23 @@ struct ListDetailsView: View {
             .ignoresSafeArea(edges: .top)
             
             .navigationTitle("")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: "xmark") {
+                        #if os(iOS)
                         dismiss()
+                        #else
+                        navigationCoordinator.clearDetail()
+                        #endif
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .fontWeight(.medium)
                 }
 
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .automatic) {
                     if isLookingForwardList || isTheaterList {
                         Button(action: {
                             withAnimation(.easeInOut(duration: 0.25)) {
@@ -126,17 +154,28 @@ struct ListDetailsView: View {
                             }
                         }) {
                             Image(systemName: showSpecialLayout ? "square.grid.3x3" : (isLookingForwardList ? "calendar" : "ticket"))
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                 .fontWeight(.medium)
                         }
                         .accessibilityLabel(showSpecialLayout ? "Show Classic View" : (isLookingForwardList ? "Show Calendar View" : "Show Ticket View"))
                     }
 
                     Button(action: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            viewMode = viewMode == .grid ? .list : .grid
+                        }
+                    }) {
+                        Image(systemName: viewMode == .grid ? "list.bullet" : "square.grid.3x3")
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                            .fontWeight(.medium)
+                    }
+                    .accessibilityLabel(viewMode == .grid ? "Show List View" : "Show Grid View")
+
+                    Button(action: {
                         showWatchedFaded.toggle()
                     }) {
                         Image(systemName: showWatchedFaded ? "eye.slash.fill" : "eye.fill")
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             .fontWeight(.medium)
                     }
 
@@ -150,7 +189,7 @@ struct ListDetailsView: View {
                         }
                     } label: {
                         Image(systemName: "arrow.up.arrow.down")
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             .fontWeight(.medium)
                     }
 
@@ -186,7 +225,7 @@ struct ListDetailsView: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             .fontWeight(.medium)
                     }
                 }
@@ -200,11 +239,20 @@ struct ListDetailsView: View {
             .sheet(isPresented: $showingEditWatchlist) {
                 WatchlistEditView()
             }
+            #if os(iOS)
             .sheet(isPresented: $showingMovieDetails) {
                 if let selectedMovie = selectedMovie {
                     MovieDetailsView(movie: selectedMovie)
                 }
             }
+            #else
+            .onChange(of: showingMovieDetails) { _, showing in
+                if showing, let movie = selectedMovie {
+                    navigationCoordinator.showMovieDetails(movie)
+                    showingMovieDetails = false
+                }
+            }
+            #endif
             .alert("Delete List", isPresented: $showingDeleteAlert) {
                 Button("Cancel", role: .cancel) { }
                 Button("Delete", role: .destructive) {
@@ -218,6 +266,14 @@ struct ListDetailsView: View {
             .task {
                 // Use optimized function to get items with watched status in one query
                 await loadItemsWithWatchedStatusOptimized()
+                
+                // Preload Plex library if configured (for icon badges)
+                let plex = PlexService.shared
+                if plex.isConfigured && !plex.isLibraryLoaded {
+                    Task(priority: .utility) {
+                        _ = try? await plex.refreshLibrary()
+                    }
+                }
             }
         }
     }
@@ -230,11 +286,12 @@ struct ListDetailsView: View {
         
         do {
             // Try optimized function that returns items with watched status in one query
-            let (_, watchedIds) = try await SupabaseListService.shared.getItemsForListOptimized(list.id)
+            let (items, watchedIds) = try await SupabaseListService.shared.getItemsForListOptimized(list.id)
             
             await MainActor.run {
                 watchedTmdbIds = watchedIds
-                watchedCount = watchedIds.count
+                // Count how many items in the list (including duplicates) are watched
+                watchedCount = items.filter { watchedIds.contains($0.tmdbId) }.count
                 isLoadingProgress = false
             }
         } catch {
@@ -288,17 +345,17 @@ struct ListDetailsView: View {
                 }
             }) {
                 Image(systemName: "chevron.left")
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .font(.title2)
             }
-            
+
             Spacer()
-            
+
             VStack(spacing: 6) {
                 Text(lfMonthYearFormatter.string(from: lfCurrentCalendarMonth))
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .onTapGesture(count: 2) {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             lfCurrentCalendarMonth = Date()
@@ -307,16 +364,16 @@ struct ListDetailsView: View {
                     }
                 lfMonthCountPill
             }
-            
+
             Spacer()
-            
+
             Button(action: {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     lfCurrentCalendarMonth = Calendar.current.date(byAdding: .month, value: 1, to: lfCurrentCalendarMonth) ?? lfCurrentCalendarMonth
                 }
             }) {
                 Image(systemName: "chevron.right")
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .font(.title2)
             }
         }
@@ -345,10 +402,10 @@ struct ListDetailsView: View {
             }
         }
         .padding(.vertical, 12)
-        .background(Color(.secondarySystemFill))
+        .background(Color.adaptiveCardBackground(scheme: colorScheme))
         .cornerRadius(16)
     }
-    
+
     private var lfCalendarDays: [Date] {
         let calendar = Calendar.current
         let startOfMonth = calendar.dateInterval(of: .month, for: lfCurrentCalendarMonth)?.start ?? lfCurrentCalendarMonth
@@ -430,7 +487,7 @@ struct ListDetailsView: View {
                         Text("Releasing in \(lfMonthYearFormatter.string(from: lfCurrentCalendarMonth))")
                             .font(.headline)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         Spacer()
                         Text("\(monthlyItems.count)")
                             .foregroundColor(.gray)
@@ -451,7 +508,7 @@ struct ListDetailsView: View {
                         Text("No Release Date Yet")
                             .font(.headline)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         Spacer()
                         Text("\(unknownItems.count)")
                             .foregroundColor(.gray)
@@ -476,7 +533,7 @@ struct ListDetailsView: View {
             }
         }) {
             HStack(spacing: 12) {
-                AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
+                WebImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -490,7 +547,7 @@ struct ListDetailsView: View {
                     Text(item.movieTitle)
                         .font(.subheadline)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .lineLimit(1)
                     if let year = item.movieYear {
                         Text(String(year))
@@ -512,13 +569,13 @@ struct ListDetailsView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(.secondarySystemFill))
+            .background(Color.adaptiveCardBackground(scheme: colorScheme))
             .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())
     }
-    
-    
+
+
     // MARK: - LF Helpers
     private var lfMonthYearFormatter: DateFormatter {
         let f = DateFormatter()
@@ -580,9 +637,11 @@ struct ListDetailsView: View {
     }
     
     private func lfDayTextColor(isCurrentMonth: Bool, isSelected: Bool, isToday: Bool) -> Color {
-        if isSelected { return .black }
+        if isSelected {
+            return colorScheme == .dark ? .black : .white
+        }
         if isToday { return .white }
-        if isCurrentMonth { return .white }
+        if isCurrentMonth { return Color.adaptiveText(scheme: colorScheme) }
         return .gray
     }
     
@@ -607,28 +666,28 @@ struct ListDetailsView: View {
                 Text(currentList.name.uppercased())
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .tracking(1)
-                
+
                 if currentList.pinned {
                     Image(systemName: "pin.fill")
                         .foregroundColor(.yellow)
                         .font(.body)
                 }
             }
-            
+
             if let description = currentList.description, !description.isEmpty {
                 Text(description)
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
             }
-            
+
             Text("\(currentList.itemCount) FILMS")
                 .font(.caption)
                 .fontWeight(.medium)
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                 .textCase(.uppercase)
                 .tracking(1.2)
         }
@@ -636,51 +695,33 @@ struct ListDetailsView: View {
         .padding(.bottom, 4)
         .frame(maxWidth: .infinity)
         .background(
-            LinearGradient(
-                colors: [Color.black.opacity(0.8), Color.black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            LinearGradient.adaptiveSectionBackground(scheme: colorScheme)
         )
     }
     
     private var backdropSection: some View {
-        AsyncImage(url: firstMovieBackdropURL) { phase in
-            switch phase {
-            case .success(let image):
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            case .failure(_):
-                // Fallback to default gradient when backdrop fails
-                LinearGradient(
-                    colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.8)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            case .empty:
-                // Loading state
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-            @unknown default:
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-            }
+        WebImage(url: firstMovieBackdropURL) { image in
+            image
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } placeholder: {
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
         }
+        .onFailure { _ in }
+        .background(
+            // Fallback gradient shown beneath the placeholder
+            LinearGradient(
+                colors: [Color.blue.opacity(0.6), Color.purple.opacity(0.8)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
         .frame(height: 300)
         .clipped()
         .overlay(
             // Enhanced gradient overlay for recessed appearance
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.1), 
-                    Color.black.opacity(0.3),
-                    Color.black.opacity(0.6),
-                    Color.black.opacity(0.9)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            LinearGradient.adaptiveBackdropOverlay(scheme: colorScheme)
         )
     }
     
@@ -690,51 +731,49 @@ struct ListDetailsView: View {
                 Text("PROGRESS")
                     .font(.caption)
                     .fontWeight(.medium)
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                     .textCase(.uppercase)
                     .tracking(1.2)
-                
+
                 Spacer()
-                
+
                 if isLoadingProgress {
                     ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .progressViewStyle(CircularProgressViewStyle(tint: Color.adaptiveText(scheme: colorScheme)))
                         .scaleEffect(0.6)
                 } else {
                     Text("\(watchedCount) / \(listItems.count) WATCHED")
                         .font(.caption)
                         .fontWeight(.medium)
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                         .textCase(.uppercase)
                         .tracking(1.2)
                 }
             }
-            
+
             // Progress Bar
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    // Background
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.white.opacity(0.2))
-                        .frame(height: 8)
-                    
-                    // Progress Fill
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            LinearGradient(
-                                colors: watchProgress >= 1.0 ?
-                                    [Color.green, Color.green.opacity(0.8)] :
-                                    [Color.blue, Color.blue.opacity(0.8)],
-                                startPoint: .leading,
-                                endPoint: .trailing
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.gray.opacity(0.2))
+                .frame(height: 8)
+                .overlay(
+                    GeometryReader { geometry in
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(
+                                LinearGradient(
+                                    colors: watchProgress >= 1.0 ?
+                                        [Color.green, Color.green.opacity(0.8)] :
+                                        [Color.blue, Color.blue.opacity(0.8)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                             )
-                        )
-                        .frame(width: geometry.size.width * watchProgress, height: 8)
-                        .animation(.easeInOut(duration: 0.5), value: watchProgress)
-                }
-            }
-            .frame(height: 8)
-            
+                            .frame(width: max(0, min(geometry.size.width * CGFloat(watchProgress), geometry.size.width)))
+                            .animation(.easeInOut(duration: 0.5), value: watchProgress)
+                    },
+                    alignment: .leading
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
             // Percentage Text
             HStack {
                 Spacer()
@@ -749,11 +788,7 @@ struct ListDetailsView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
         .background(
-            LinearGradient(
-                colors: [Color.black.opacity(0.8), Color.black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            LinearGradient.adaptiveSectionBackground(scheme: colorScheme)
         )
     }
     
@@ -764,13 +799,13 @@ struct ListDetailsView: View {
                 Text("TAGS")
                     .font(.caption)
                     .fontWeight(.medium)
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                     .textCase(.uppercase)
                     .tracking(1.2)
-                
+
                 Spacer()
             }
-            
+
             // Tags Flow Layout
             HStack(alignment: .top) {
                 LazyVStack(alignment: .leading, spacing: 8) {
@@ -790,11 +825,7 @@ struct ListDetailsView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(
-            LinearGradient(
-                colors: [Color.black.opacity(0.6), Color.black.opacity(0.4)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            LinearGradient.adaptiveSectionBackground(scheme: colorScheme)
         )
     }
     
@@ -802,33 +833,15 @@ struct ListDetailsView: View {
     private func tagView(for tag: String) -> some View {
         Text(tag)
             .font(.system(size: 11, weight: .semibold))
-            .foregroundColor(.white)
+            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
                 Capsule()
-                    .fill(tagColor(for: tag))
+                    .fill(AppColorHelpers.tagColor(for: tag))
                     .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
             )
             .lineLimit(1)
-    }
-    
-    private func tagColor(for tag: String) -> Color {
-        // Generate consistent colors based on tag name
-        let tagHash = tag.lowercased().hash
-        let colors: [Color] = [
-            .blue.opacity(0.8),
-            .green.opacity(0.8),
-            .orange.opacity(0.8),
-            .purple.opacity(0.8),
-            .red.opacity(0.8),
-            .yellow.opacity(0.8),
-            .pink.opacity(0.8),
-            .cyan.opacity(0.8),
-            .indigo.opacity(0.8),
-            .mint.opacity(0.8)
-        ]
-        return colors[abs(tagHash) % colors.count]
     }
     
     private func createTagRows(tags: [String]) -> [[String]] {
@@ -864,12 +877,12 @@ struct ListDetailsView: View {
             Image(systemName: "film.stack")
                 .font(.system(size: 64))
                 .foregroundColor(.gray)
-            
+
             Text("No Movies Yet")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
-            
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
             Text("Add movies to this list to get started.")
                 .font(.body)
                 .foregroundColor(.gray)
@@ -893,7 +906,22 @@ struct ListDetailsView: View {
             }
         }
     }
-    
+
+    @ViewBuilder
+    private var moviesListView: some View {
+        LazyVStack(spacing: 12) {
+            ForEach(Array(listItems.enumerated()), id: \.element.id) { index, item in
+                MovieListItemView(
+                    item: item,
+                    list: currentList,
+                    rank: currentList.ranked ? index + 1 : nil,
+                    showWatchedFaded: showWatchedFaded,
+                    hasWatchedEntries: watchedTmdbIds.contains(item.tmdbId)
+                )
+            }
+        }
+    }
+
     @ViewBuilder
     private var theaterTicketsView: some View {
         LazyVStack(spacing: 16) {
@@ -937,14 +965,17 @@ struct ListDetailsView: View {
         
         do {
             // Extract all TMDB IDs from list items
-            let tmdbIds = listItems.map { $0.tmdbId }
+            // Access property directly to avoid potential infinite recursion if using computed property
+            let currentItems = dataManager.getListItems(currentList)
+            let tmdbIds = currentItems.map { $0.tmdbId }
             
             // Get watched status for all movies in a single batch query
             let watchedIds = try await dataManager.checkWatchedStatusForTmdbIds(tmdbIds: tmdbIds)
             
             await MainActor.run {
                 watchedTmdbIds = watchedIds
-                watchedCount = watchedIds.count
+                // Count how many items in the list are watched
+                watchedCount = currentItems.filter { watchedIds.contains($0.tmdbId) }.count
                 isLoadingProgress = false
             }
         } catch {
@@ -1030,13 +1061,17 @@ struct MoviePosterView: View {
     let rank: Int?
     let showWatchedFaded: Bool
     let hasWatchedEntries: Bool
-    @StateObject private var dataManager = DataManager.shared
+    @ObservedObject private var dataManager = DataManager.shared
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
     @State private var showingRemoveAlert = false
     @State private var selectedMovie: Movie?
     @State private var showingMovieDetails = false
     @State private var isLoadingMovie = false
     @State private var showingPosterChange = false
     @State private var showingBackdropChange = false
+    @ObservedObject private var plexService = PlexService.shared
     
     var body: some View {
         Button(action: {
@@ -1044,7 +1079,7 @@ struct MoviePosterView: View {
                 await loadLatestMovieEntry()
             }
         }) {
-            AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
+            WebImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
                 image
                     .resizable()
                     .aspectRatio(2/3, contentMode: .fill)
@@ -1119,6 +1154,29 @@ struct MoviePosterView: View {
                     }
                 }, alignment: .topLeading
             )
+            .overlay(
+                // Plex availability badge
+                Group {
+                    if plexService.isLibraryLoaded && plexService.isMovieAvailable(tmdbId: item.tmdbId) {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                Image("plex_transparent")
+                                    .resizable()
+                                    .frame(width: 18, height: 18)
+                                    .padding(4)
+                                    .background(
+                                        .ultraThinMaterial.opacity(0.8),
+                                        in: RoundedRectangle(cornerRadius: 6)
+                                    )
+                                    .shadow(color: .black.opacity(0.3), radius: 2, x: 0, y: 1)
+                            }
+                        }
+                        .padding(6)
+                    }
+                }, alignment: .bottomTrailing
+            )
             .contextMenu {
                 Button("Change Poster", systemImage: "photo") {
                     showingPosterChange = true
@@ -1142,11 +1200,20 @@ struct MoviePosterView: View {
         } message: {
             Text("Remove '\(item.movieTitle)' from '\(list.name)'?")
         }
+        #if os(iOS)
         .sheet(isPresented: $showingMovieDetails) {
             if let selectedMovie = selectedMovie {
                 MovieDetailsView(movie: selectedMovie)
             }
         }
+        #else
+        .onChange(of: showingMovieDetails) { _, showing in
+            if showing, let movie = selectedMovie {
+                navigationCoordinator.showMovieDetails(movie)
+                showingMovieDetails = false
+            }
+        }
+        #endif
         .sheet(isPresented: $showingPosterChange) {
             PosterChangeView(
                 tmdbId: item.tmdbId,
@@ -1249,12 +1316,275 @@ struct MoviePosterView: View {
     }
 }
 
+// Movie List Item View for List Layout
+struct MovieListItemView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let item: ListItem
+    let list: MovieList
+    let rank: Int?
+    let showWatchedFaded: Bool
+    let hasWatchedEntries: Bool
+
+    @ObservedObject private var dataManager = DataManager.shared
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
+    @State private var selectedMovie: Movie?
+    @State private var showingMovieDetails = false
+    @State private var isLoadingMovie = false
+    @State private var loadedRating: Double?
+    @State private var loadedDetailedRating: Double?
+    @State private var hasLoadedRatings = false
+    @ObservedObject private var plexService = PlexService.shared
+
+    var body: some View {
+        Button(action: {
+            Task {
+                await loadLatestMovieEntry()
+            }
+        }) {
+            HStack(spacing: 12) {
+                // Rank number (if applicable)
+                if let rank = rank {
+                    Text("\(rank)")
+                        .font(.title3)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white.opacity(0.6))
+                        .frame(width: 30)
+                }
+
+                // Poster
+                WebImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(2/3, contentMode: .fill)
+                } placeholder: {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.3))
+                        .aspectRatio(2/3, contentMode: .fill)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .foregroundColor(.gray)
+                        )
+                }
+                .frame(width: 50, height: 75)
+                .cornerRadius(8)
+                .clipped()
+                .overlay(
+                    Group {
+                        if isLoadingMovie {
+                            Color.black.opacity(0.6)
+                                .cornerRadius(8)
+                                .overlay(
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                        .scaleEffect(0.6)
+                                )
+                        } else if showWatchedFaded && hasWatchedEntries {
+                            Color.black.opacity(0.3)
+                                .cornerRadius(8)
+                        }
+                    }
+                )
+
+                // Movie details
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.movieTitle)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                        .lineLimit(2)
+
+                    if let year = item.movieYear {
+                        Text(String(year))
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+
+                    // Ratings row
+                    if loadedRating != nil || loadedDetailedRating != nil {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            // Star rating
+                            if let rating = loadedRating {
+                                HStack(spacing: 2) {
+                                    ForEach(0..<5, id: \.self) { index in
+                                        Image(systemName: starType(for: index, rating: rating))
+                                            .foregroundColor(starColor(for: rating))
+                                            .font(.system(size: 12, weight: .regular))
+                                    }
+                                }
+                            }
+
+                            // Detailed rating
+                            if let detailed = loadedDetailedRating {
+                                Text(String(format: "%.0f", detailed))
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundColor(detailed == 100.0 ? .yellow : .purple)
+                            }
+                        }
+                    }
+                }
+
+                Spacer()
+
+                // Plex availability icon
+                if plexService.isLibraryLoaded && plexService.isMovieAvailable(tmdbId: item.tmdbId) {
+                    Image("plex_transparent")
+                        .resizable()
+                        .frame(width: 20, height: 20)
+                }
+
+                // Watched checkmark indicator
+                if showWatchedFaded && hasWatchedEntries {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.blue.opacity(0.7))
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(12)
+        }
+        .buttonStyle(PlainButtonStyle())
+        #if os(iOS)
+        .sheet(isPresented: $showingMovieDetails) {
+            if let selectedMovie = selectedMovie {
+                MovieDetailsView(movie: selectedMovie)
+            }
+        }
+        #else
+        .onChange(of: showingMovieDetails) { _, showing in
+            if showing, let movie = selectedMovie {
+                navigationCoordinator.showMovieDetails(movie)
+                showingMovieDetails = false
+            }
+        }
+        #endif
+        .onAppear {
+            if !hasLoadedRatings {
+                Task {
+                    await loadLatestMovieRatings()
+                }
+            }
+        }
+    }
+
+    // MARK: - Helper Methods
+
+    private func starType(for index: Int, rating: Double?) -> String {
+        guard let rating = rating else { return "star" }
+        if rating >= Double(index + 1) {
+            return "star.fill"
+        } else if rating >= Double(index) + 0.5 {
+            return "star.leadinghalf.filled"
+        } else {
+            return "star"
+        }
+    }
+
+    private func starColor(for rating: Double?) -> Color {
+        guard let rating = rating else { return .blue }
+        return rating == 5.0 ? .yellow : .blue
+    }
+
+    @MainActor
+    private func loadLatestMovieRatings() async {
+        do {
+            let movies = try await dataManager.getMoviesByTmdbId(tmdbId: item.tmdbId)
+            let latest = movies.max { movie1, movie2 in
+                let date1 = movie1.watch_date ?? movie1.created_at ?? ""
+                let date2 = movie2.watch_date ?? movie2.created_at ?? ""
+                return date1 < date2
+            }
+            loadedRating = latest?.rating
+            loadedDetailedRating = latest?.detailed_rating
+            hasLoadedRatings = true
+        } catch {
+            hasLoadedRatings = true
+        }
+    }
+
+    private func loadLatestMovieEntry() async {
+        isLoadingMovie = true
+
+        do {
+            let movies = try await dataManager.getMoviesByTmdbId(tmdbId: item.tmdbId)
+
+            if movies.isEmpty {
+                // No entries exist, fetch movie details from TMDB and create a placeholder movie
+                let tmdbService = TMDBService.shared
+                let movieDetails = try await tmdbService.getMovieDetails(movieId: item.tmdbId)
+
+                let placeholderMovie = Movie(
+                    id: -1,
+                    title: item.movieTitle,
+                    release_year: item.movieYear,
+                    release_date: movieDetails.releaseDate,
+                    rating: nil,
+                    detailed_rating: nil,
+                    review: nil,
+                    tags: nil,
+                    watch_date: nil,
+                    is_rewatch: nil,
+                    tmdb_id: item.tmdbId,
+                    overview: movieDetails.overview,
+                    poster_url: item.moviePosterUrl,
+                    backdrop_path: item.movieBackdropPath,
+                    director: nil,
+                    runtime: movieDetails.runtime,
+                    vote_average: movieDetails.voteAverage,
+                    vote_count: movieDetails.voteCount,
+                    popularity: movieDetails.popularity,
+                    original_language: movieDetails.originalLanguage,
+                    original_title: movieDetails.originalTitle,
+                    tagline: movieDetails.tagline,
+                    status: movieDetails.status,
+                    budget: movieDetails.budget,
+                    revenue: movieDetails.revenue,
+                    imdb_id: movieDetails.imdbId,
+                    homepage: movieDetails.homepage,
+                    genres: movieDetails.genreNames,
+                    created_at: nil,
+                    updated_at: nil,
+                    favorited: nil
+                )
+
+                await MainActor.run {
+                    selectedMovie = placeholderMovie
+                    showingMovieDetails = true
+                    isLoadingMovie = false
+                }
+            } else {
+                // Find the latest entry
+                let latestMovie = movies.max { movie1, movie2 in
+                    let date1 = movie1.watch_date ?? movie1.created_at ?? ""
+                    let date2 = movie2.watch_date ?? movie2.created_at ?? ""
+                    return date1 < date2
+                }
+
+                await MainActor.run {
+                    selectedMovie = latestMovie
+                    if latestMovie != nil {
+                        showingMovieDetails = true
+                    }
+                    isLoadingMovie = false
+                }
+            }
+        } catch {
+            await MainActor.run {
+                isLoadingMovie = false
+            }
+        }
+    }
+}
+
 // Add Movies to List View with TMDB Search
 struct AddMoviesToListView: View {
     let list: MovieList
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var tmdbService = TMDBService.shared
+    @ObservedObject private var dataManager = DataManager.shared
+    @ObservedObject private var tmdbService = TMDBService.shared
     
     @State private var searchText = ""
     @State private var searchResults: [TMDBMovie] = []
@@ -1375,11 +1705,17 @@ struct AddMoviesToListView: View {
                 
                 Spacer()
             }
-            .background(Color(.systemBackground))
+            #if os(macOS)
+            .background(Color(NSColor.windowBackgroundColor))
+            #else
+            .background(Color(.systemGroupedBackground))
+            #endif
             .navigationTitle("Add Movies")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
@@ -1497,7 +1833,7 @@ struct MovieSearchResultView: View {
     var body: some View {
         HStack(spacing: 12) {
             // Movie poster
-            AsyncImage(url: movie.posterURL) { image in
+            WebImage(url: movie.posterURL) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -1563,6 +1899,7 @@ struct MovieSearchResultView: View {
 struct EditListView: View {
     let list: MovieList
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var dataManager = DataManager.shared
     @State private var listName: String
     @State private var listDescription: String
@@ -1611,12 +1948,12 @@ struct EditListView: View {
                         Text("List Details")
                             .font(.title2)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         VStack(alignment: .leading, spacing: 8) {
                             Text("List Name")
                                 .font(.headline)
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             
                             TextField("Enter list name", text: $listName)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -1628,7 +1965,7 @@ struct EditListView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Description (Optional)")
                                 .font(.headline)
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             
                             TextField("Enter description", text: $listDescription, axis: .vertical)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -1642,7 +1979,7 @@ struct EditListView: View {
                             HStack {
                                 Text("Ranked List")
                                     .font(.headline)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                 
                                 Spacer()
                                 
@@ -1660,7 +1997,7 @@ struct EditListView: View {
                             HStack {
                                 Text("Tags")
                                     .font(.headline)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                 
                                 Spacer()
                                 
@@ -1683,21 +2020,21 @@ struct EditListView: View {
                                             HStack(spacing: 4) {
                                                 Text(tag)
                                                     .font(.caption)
-                                                    .foregroundColor(.white)
-                                                
+                                                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
                                                 Button(action: {
                                                     selectedTags.removeAll { $0 == tag }
                                                 }) {
                                                     Image(systemName: "xmark.circle.fill")
                                                         .font(.caption)
-                                                        .foregroundColor(.white.opacity(0.7))
+                                                        .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                                                 }
                                             }
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 4)
                                             .background(
                                                 Capsule()
-                                                    .fill(tagColor(for: tag))
+                                                    .fill(AppColorHelpers.tagColor(for: tag))
                                             )
                                         }
                                     }
@@ -1716,7 +2053,7 @@ struct EditListView: View {
                             HStack {
                                 Text("Themed Movie Months")
                                     .font(.headline)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                 
                                 Spacer()
                                 
@@ -1764,7 +2101,7 @@ struct EditListView: View {
                             Text("Movies")
                                 .font(.title2)
                                 .fontWeight(.semibold)
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             Spacer()
                             Button(isReordering ? "Done" : "Reorder") {
                                 withAnimation {
@@ -1797,19 +2134,23 @@ struct EditListView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
-            .preferredColorScheme(.dark)
+            .background(Color.adaptiveBackground(scheme: colorScheme))
+            // .preferredColorScheme(.dark) removed
+            #if !os(macOS)
             .environment(\.editMode, isReordering ? .constant(.active) : .constant(.inactive))
+            #endif
             .navigationTitle("Edit List")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save", systemImage: "checkmark") {
                         Task {
                             await saveAllChanges()
@@ -1912,24 +2253,6 @@ struct EditListView: View {
             isRanked = true
         }
     }
-    
-    private func tagColor(for tag: String) -> Color {
-        // Generate consistent colors based on tag name (same as in ListDetailsView)
-        let tagHash = tag.lowercased().hash
-        let colors: [Color] = [
-            .blue.opacity(0.8),
-            .green.opacity(0.8),
-            .orange.opacity(0.8),
-            .purple.opacity(0.8),
-            .red.opacity(0.8),
-            .yellow.opacity(0.8),
-            .pink.opacity(0.8),
-            .cyan.opacity(0.8),
-            .indigo.opacity(0.8),
-            .mint.opacity(0.8)
-        ]
-        return colors[abs(tagHash) % colors.count]
-    }
 }
 
 struct TagSelectorView: View {
@@ -1937,6 +2260,7 @@ struct TagSelectorView: View {
     let predefinedTags: [String]
     @Binding var newTagName: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var searchText = ""
     
     private var filteredTags: [String] {
@@ -1959,7 +2283,7 @@ struct TagSelectorView: View {
                     
                     TextField("Search tags or create new...", text: $searchText)
                         .textFieldStyle(PlainTextFieldStyle())
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     if !searchText.isEmpty {
                         Button(action: {
@@ -1971,7 +2295,7 @@ struct TagSelectorView: View {
                     }
                 }
                 .padding()
-                .background(Color(.secondarySystemFill))
+                .background(Color.adaptiveCardBackground(scheme: colorScheme))
                 .cornerRadius(12)
                 .padding(.horizontal)
                 .padding(.top)
@@ -1989,11 +2313,15 @@ struct TagSelectorView: View {
                             Image(systemName: "plus.circle.fill")
                                 .foregroundColor(.green)
                             Text("Create \"\(searchText)\"")
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             Spacer()
                         }
                         .padding()
+                        #if canImport(UIKit)
                         .background(Color(.tertiarySystemFill))
+                        #else
+                        .background(Color(.controlBackgroundColor))
+                        #endif
                         .cornerRadius(12)
                     }
                     .padding(.horizontal)
@@ -2007,7 +2335,7 @@ struct TagSelectorView: View {
                             ForEach(selectedTags, id: \.self) { tag in
                                 HStack {
                                     Text(tag)
-                                        .foregroundColor(.white)
+                                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                     Spacer()
                                     Button(action: {
                                         selectedTags.removeAll { $0 == tag }
@@ -2016,7 +2344,7 @@ struct TagSelectorView: View {
                                             .foregroundColor(.red)
                                     }
                                 }
-                                .listRowBackground(Color(.secondarySystemFill))
+                                .listRowBackground(Color.adaptiveCardBackground(scheme: colorScheme))
                             }
                         }
                     }
@@ -2030,43 +2358,45 @@ struct TagSelectorView: View {
                             }) {
                                 HStack {
                                     Text(tag)
-                                        .foregroundColor(.white)
+                                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                     Spacer()
                                     Image(systemName: "plus.circle")
                                         .foregroundColor(.blue)
                                 }
                             }
-                            .listRowBackground(Color(.secondarySystemFill))
+                            .listRowBackground(Color.adaptiveCardBackground(scheme: colorScheme))
                         }
                         
                         if filteredTags.isEmpty && searchText.isEmpty {
                             Text("All tags are already selected")
                                 .foregroundColor(.gray)
                                 .italic()
-                                .listRowBackground(Color(.secondarySystemFill))
+                                .listRowBackground(Color.adaptiveCardBackground(scheme: colorScheme))
                         } else if filteredTags.isEmpty && !searchText.isEmpty {
                             Text("No matching tags found")
                                 .foregroundColor(.gray)
                                 .italic()
-                                .listRowBackground(Color(.secondarySystemFill))
+                                .listRowBackground(Color.adaptiveCardBackground(scheme: colorScheme))
                         }
                     }
                 }
                 .scrollContentBackground(.hidden)
                 .background(Color.black)
             }
-            .background(Color.black)
+            .background(Color.adaptiveBackground(scheme: colorScheme))
             .navigationTitle("Select Tags")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        // .preferredColorScheme(.dark) removed
     }
 }
 
@@ -2084,7 +2414,7 @@ struct EditableListItemView: View {
         HStack(spacing: 12) {
             
             // Movie poster
-            AsyncImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
+            WebImage(url: URL(string: item.moviePosterUrl ?? "")) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)

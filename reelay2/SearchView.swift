@@ -31,8 +31,12 @@ struct SearchView: View {
     
     var body: some View {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
-            
+            #if canImport(UIKit)
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            #else
+            Color(.windowBackgroundColor).ignoresSafeArea()
+            #endif
+
             VStack(spacing: 0) {
                 // Filter summary bar
                 if viewModel.hasActiveFilters {
@@ -64,11 +68,15 @@ struct SearchView: View {
             }
         }
         .navigationTitle("Search")
+        #if canImport(UIKit)
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $viewModel.searchText, placement: .navigationBarDrawer, prompt: "Search movies")
-        
+        #else
+        .searchable(text: $viewModel.searchText, prompt: "Search movies")
+        #endif
+
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .automatic) {
                 HStack(spacing: 16) {
                     // View mode toggle
                     Button(action: {
@@ -181,9 +189,13 @@ struct SearchView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 8)
-        .background(Color(.secondarySystemFill))
+        #if canImport(UIKit)
+        .background(Color(.systemBackground))
+        #else
+        .background(Color(.textBackgroundColor))
+        #endif
     }
-    
+
     // MARK: - Empty Search State
     private var emptySearchState: some View {
         VStack(spacing: 24) {
@@ -498,7 +510,11 @@ struct StatChip: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color(.secondarySystemFill))
+                #if canImport(UIKit)
+                .fill(Color(.systemBackground))
+                #else
+                .fill(Color(.textBackgroundColor))
+                #endif
         )
     }
 }
@@ -630,20 +646,26 @@ struct SearchFiltersView: View {
                 }
                 .padding(.vertical, 20)
             }
-                        .background(Color(.systemBackground))
+                        #if canImport(UIKit)
+                        .background(Color(.systemGroupedBackground))
+                        #else
+                        .background(Color(.windowBackgroundColor))
+                        #endif
             .navigationTitle("Filters & Sort")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.large)
-            
+            #endif
+
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Clear All", systemImage: "xmark") {
                         viewModel.clearFilters()
                     }
                     .foregroundColor(.red)
                     .opacity(viewModel.hasActiveFilters ? 1 : 0)
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }

@@ -1,8 +1,9 @@
 import SwiftUI
 
 struct MonthHeaderView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let monthYear: String
-    @StateObject private var monthDescriptorService = MonthDescriptorService.shared
+    @ObservedObject private var monthDescriptorService = MonthDescriptorService.shared
     @State private var showingEditDescriptor = false
     
     private var displayMonthYear: String {
@@ -24,7 +25,7 @@ struct MonthHeaderView: View {
                 Text(displayMonthYear)
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .multilineTextAlignment(.leading)
             }
             .buttonStyle(PlainButtonStyle())

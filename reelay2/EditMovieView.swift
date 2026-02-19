@@ -10,8 +10,8 @@ import SDWebImageSwiftUI
 
 struct EditMovieView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var supabaseService = SupabaseMovieService.shared
-    
+    private let supabaseService = SupabaseMovieService.shared
+
     let movie: Movie
     let onSave: (Movie) -> Void
     
@@ -51,15 +51,17 @@ struct EditMovieView: View {
                 .padding()
             }
             .navigationTitle("Edit Movie")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save", systemImage: "checkmark") {
                         Task {
                             await updateMovie()
@@ -144,7 +146,9 @@ struct EditMovieView: View {
             TextField("Enter rating 0-100", text: $detailedRating)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .cornerRadius(24)
+                #if !os(macOS)
                 .keyboardType(.numberPad)
+                #endif
                 .onChange(of: detailedRating) { oldValue, newValue in
                     // Validate input
                     let filtered = newValue.filter { $0.isNumber }
@@ -177,7 +181,9 @@ struct EditMovieView: View {
             TextField("e.g., theater, family, IMAX", text: $tags)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .cornerRadius(24)
+                #if !os(macOS)
                 .autocapitalization(.none)
+                #endif
             
             Text("Separate tags with commas (e.g., theater, family, IMAX)")
                 .font(.caption)

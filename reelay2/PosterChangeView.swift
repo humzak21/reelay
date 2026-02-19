@@ -14,9 +14,10 @@ struct PosterChangeView: View {
     let onPosterSelected: (String) -> Void
     
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var tmdbService = TMDBService.shared
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var movieService = SupabaseMovieService.shared
+    @Environment(\.colorScheme) private var colorScheme
+    private let tmdbService = TMDBService.shared
+    private let dataManager = DataManager.shared
+    private let movieService = SupabaseMovieService.shared
     
     @State private var availablePosters: [TMDBImage] = []
     @State private var isLoading = false
@@ -62,7 +63,7 @@ struct PosterChangeView: View {
                         Text("No Alternate Posters")
                             .font(.title2)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text("This movie doesn't have alternate poster options available.")
                             .font(.body)
@@ -80,18 +81,20 @@ struct PosterChangeView: View {
                         .padding()
                 }
             }
-            .background(Color.black)
+            .background(Color.adaptiveBackground(scheme: colorScheme))
             .navigationTitle("Change Poster")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Update", systemImage: "checkmark") {
                         if let selectedPosterUrl = selectedPosterUrl {
                             Task {
@@ -137,7 +140,7 @@ struct PosterChangeView: View {
             Text(movieTitle)
                 .font(.headline)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
@@ -145,7 +148,10 @@ struct PosterChangeView: View {
         .padding(.vertical, 16)
         .background(
             LinearGradient(
-                colors: [Color.black.opacity(0.8), Color.black],
+                colors: [
+                    Color.adaptiveBackground(scheme: colorScheme).opacity(0.8), 
+                    Color.adaptiveBackground(scheme: colorScheme)
+                ],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -236,7 +242,10 @@ struct PosterChangeView: View {
     }
     
     private func updatePoster(_ newPosterUrl: String) async {
-        isUpdating = true
+        await MainActor.run {
+            isUpdating = true
+            errorMessage = nil
+        }
         
         do {
             // Update movie entries with this TMDB ID
@@ -246,7 +255,10 @@ struct PosterChangeView: View {
             try await dataManager.updatePosterForTmdbId(tmdbId: tmdbId, newPosterUrl: newPosterUrl)
             
             await MainActor.run {
+                // Call the callback to update the parent view
                 onPosterSelected(newPosterUrl)
+                isUpdating = false
+                // Dismiss the view
                 dismiss()
             }
         } catch {

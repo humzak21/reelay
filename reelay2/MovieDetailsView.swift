@@ -7,14 +7,17 @@
 
 import SwiftUI
 import SDWebImageSwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct MovieDetailsView: View {
     let movie: Movie
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @StateObject private var movieService = SupabaseMovieService.shared
-    @StateObject private var listService = SupabaseListService.shared
-    @StateObject private var streamingService = StreamingService.shared
+    @ObservedObject private var movieService = SupabaseMovieService.shared
+    @ObservedObject private var listService = SupabaseListService.shared
+    @ObservedObject private var streamingService = StreamingService.shared
     @State private var previousWatches: [Movie] = []
     @State private var showingPreviousWatches = false
     @State private var isEditingReview = false
@@ -39,6 +42,15 @@ struct MovieDetailsView: View {
     @State private var streamingData: StreamingAvailabilityResponse?
     @State private var isLoadingStreaming = false
     @State private var isStreamingExpanded = false
+    @State private var isLoadingColorData = true
+    @ObservedObject private var plexService = PlexService.shared
+    @State private var plexAvailability: PlexMovie?
+    @State private var isLoadingPlex = false
+    @State private var plexChecked = false
+    
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
     
     init(movie: Movie) {
         self.movie = movie
@@ -50,9 +62,13 @@ struct MovieDetailsView: View {
     }
     
     private var appBackground: Color {
-        colorScheme == .dark ? .black : Color(.systemBackground)
+        #if canImport(UIKit)
+        colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+        #else
+        colorScheme == .dark ? .black : Color(.windowBackgroundColor)
+        #endif
     }
-    
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -102,6 +118,11 @@ struct MovieDetailsView: View {
                             // Streaming Availability Section
                             streamingSection
                             
+                            // Plex Availability Section
+                            if plexService.isConfigured {
+                                plexSection
+                            }
+                            
                             // Movie Metadata
                             metadataSection
                         }
@@ -116,18 +137,24 @@ struct MovieDetailsView: View {
             .background(appBackground.ignoresSafeArea())
             .ignoresSafeArea(edges: .top)
             .navigationTitle("Movie Details")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button(action: {
+                        #if os(iOS)
                         dismiss()
+                        #else
+                        navigationCoordinator.clearDetail()
+                        #endif
                     }) {
                         Image(systemName: "xmark")
                     }
                 }
                 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button(action: {
                         Task {
                             await toggleMovieFavorite()
@@ -138,7 +165,7 @@ struct MovieDetailsView: View {
                     }
                 }
                 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Menu {
                         Button("Add to List", systemImage: "list.bullet") {
                             movieToAddToLists = currentMovie
@@ -162,23 +189,35 @@ struct MovieDetailsView: View {
             }
         }
         .task {
-            // Load data concurrently to avoid blocking the UI
-            async let previousWatchesTask = loadPreviousWatches()
-            async let allMoviesTask = loadAllMoviesForColorCalculation()
-            async let listSyncTask = listService.syncListsFromSupabase()
-            
-            // Wait for essential data first
-            await previousWatchesTask
-            await allMoviesTask
-            await listSyncTask
-            
-            // Load movie lists after list sync completes
-            await loadMovieLists()
+            // Load data in background without blocking UI
+            Task(priority: .userInitiated) {
+                // Load previous watches quickly (usually small dataset)
+                await loadPreviousWatches()
+
+                // Load movie lists in parallel
+                async let listSync = listService.syncListsFromSupabase()
+                await listSync
+                await loadMovieLists()
+            }
+
+            // Load heavy color calculation data with lower priority after view is interactive
+            Task(priority: .utility) {
+                await loadAllMoviesForColorCalculation()
+                await MainActor.run {
+                    isLoadingColorData = false
+                }
+            }
         }
         .onAppear {
             // Load streaming data separately and lazily to avoid initial blocking
             Task {
                 await loadStreamingData()
+            }
+            // Load Plex availability if configured
+            if plexService.isConfigured {
+                Task {
+                    await loadPlexData()
+                }
             }
         }
         .sheet(isPresented: $isEditingReview) {
@@ -312,14 +351,12 @@ struct MovieDetailsView: View {
                 .frame(width: 100, height: 150)
                 .cornerRadius(12)
                 .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                .contextMenu {
+                .onLongPressGesture {
                     if currentMovie.tmdb_id != nil {
-                        Button("Change Poster", systemImage: "photo") {
-                            showingPosterChange = true
-                        }
-                        Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
-                            showingBackdropChange = true
-                        }
+                        #if canImport(UIKit)
+                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                        #endif
+                        showingPosterChange = true
                     }
                 }
                 
@@ -328,7 +365,7 @@ struct MovieDetailsView: View {
                     Text(currentMovie.title)
                         .font(.title2)
                         .fontWeight(.bold)
-                        .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : .white)
+                        .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : Color.adaptiveText(scheme: colorScheme))
                         .shadow(color: shouldHighlightMustWatchTitle(currentMovie) ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 3 : 2, x: 0, y: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 0 : 1)
                         .multilineTextAlignment(.leading)
                         .lineLimit(2)
@@ -336,7 +373,7 @@ struct MovieDetailsView: View {
                     
                     Text(currentMovie.formattedReleaseYear)
                         .font(.title3)
-                        .foregroundColor(shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan : .white.opacity(0.8))
+                        .foregroundColor(shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan : Color.adaptiveText(scheme: colorScheme).opacity(0.8))
                         .shadow(color: shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightReleaseYearOnYear(currentMovie) ? 3 : 1, x: 0, y: shouldHighlightReleaseYearOnYear(currentMovie) ? 0 : 1)
                 }
                 
@@ -352,7 +389,7 @@ struct MovieDetailsView: View {
                 Text("You haven't logged this film yet")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .multilineTextAlignment(.center)
                 
                 Text("Add this movie to your diary to track your ratings, reviews, and watch history.")
@@ -416,17 +453,16 @@ struct MovieDetailsView: View {
         .clipped()
         .overlay(
             // Enhanced gradient overlay for recessed appearance
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.1), 
-                    Color.black.opacity(0.3),
-                    Color.black.opacity(0.6),
-                    Color.black.opacity(0.9)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            LinearGradient.adaptiveBackdropOverlay(scheme: colorScheme)
         )
+        .onLongPressGesture {
+            if currentMovie.tmdb_id != nil {
+                #if canImport(UIKit)
+                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                        #endif
+                showingBackdropChange = true
+            }
+        }
     }
     
     private var watchDateSection: some View {
@@ -434,24 +470,20 @@ struct MovieDetailsView: View {
             Text("WATCHED")
                 .font(.caption)
                 .fontWeight(.medium)
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme).opacity(0.7))
                 .textCase(.uppercase)
                 .tracking(1.2)
             
             Text(formattedWatchDate)
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
         }
         .padding(.top, 20)
         .padding(.bottom, 4)
         .frame(maxWidth: .infinity)
         .background(
-            LinearGradient(
-                colors: [Color.black.opacity(0.8), Color.black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            LinearGradient.adaptiveSectionBackground(scheme: colorScheme)
         )
     }
     
@@ -470,14 +502,12 @@ struct MovieDetailsView: View {
                 .frame(width: 100, height: 150)
                 .cornerRadius(12)
                 .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                .contextMenu {
+                .onLongPressGesture {
                     if currentMovie.tmdb_id != nil {
-                        Button("Change Poster", systemImage: "photo") {
-                            showingPosterChange = true
-                        }
-                        Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
-                            showingBackdropChange = true
-                        }
+                        #if canImport(UIKit)
+                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                        #endif
+                        showingPosterChange = true
                     }
                 }
                 
@@ -487,7 +517,7 @@ struct MovieDetailsView: View {
                         Text(currentMovie.title)
                             .font(.title2)
                             .fontWeight(.bold)
-                            .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : .white)
+                            .foregroundColor(shouldHighlightMustWatchTitle(currentMovie) ? .purple : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan : Color.adaptiveText(scheme: colorScheme))
                             .shadow(color: shouldHighlightMustWatchTitle(currentMovie) ? .purple.opacity(0.6) : shouldHighlightReleaseYearTitle(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 3 : 2, x: 0, y: shouldHighlightMustWatchTitle(currentMovie) || shouldHighlightReleaseYearTitle(currentMovie) ? 0 : 1)
                             .multilineTextAlignment(.leading)
                             .lineLimit(2)
@@ -504,7 +534,7 @@ struct MovieDetailsView: View {
                     
                     Text(currentMovie.formattedReleaseYear)
                         .font(.title3)
-                        .foregroundColor(shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan : .white.opacity(0.8))
+                        .foregroundColor(shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan : Color.adaptiveText(scheme: colorScheme).opacity(0.8))
                         .shadow(color: shouldHighlightReleaseYearOnYear(currentMovie) ? .cyan.opacity(0.6) : .black.opacity(0.5), radius: shouldHighlightReleaseYearOnYear(currentMovie) ? 3 : 1, x: 0, y: shouldHighlightReleaseYearOnYear(currentMovie) ? 0 : 1)
                     
                     if let director = currentMovie.director {
@@ -512,14 +542,14 @@ struct MovieDetailsView: View {
                             Text("DIRECTOR")
                                 .font(.caption)
                                 .fontWeight(.medium)
-                                .foregroundColor(.white.opacity(0.7))
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme).opacity(0.7))
                                 .textCase(.uppercase)
                                 .tracking(1)
                                 .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
                             
                             Text(director)
                                 .font(.body)
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                 .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
                         }
                     }
@@ -528,14 +558,14 @@ struct MovieDetailsView: View {
                         Text("RUNTIME")
                             .font(.caption)
                             .fontWeight(.medium)
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme).opacity(0.7))
                             .textCase(.uppercase)
                             .tracking(1)
                             .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
                         
                         Text(currentMovie.formattedRuntime)
                             .font(.body)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
                     }
                     
@@ -587,7 +617,7 @@ struct MovieDetailsView: View {
                 
                 Text(currentMovie.formattedDetailedRating)
                     .font(.system(size: 36, weight: .bold, design: .rounded))
-                    .foregroundColor(detailedRatingColor(for: currentMovie.detailed_rating))
+                    .foregroundColor(AppColorHelpers.detailedRatingColor(for: currentMovie.detailed_rating))
             }
             .frame(maxWidth: .infinity, minHeight: 80)
             .padding(.vertical, 25)
@@ -611,7 +641,7 @@ struct MovieDetailsView: View {
                         Text("Previously Watched")
                             .font(.headline)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text("\(previousWatches.count) previous entry found")
                             .font(.caption)
@@ -669,11 +699,18 @@ struct MovieDetailsView: View {
                 }
             }
             
-            Text(currentMovie.review ?? "No review yet")
-                .font(.body)
-                .foregroundColor(currentMovie.review != nil ? .white : .gray)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let review = currentMovie.review, !review.isEmpty {
+                Text(RichReviewCodec.toAttributedString(review))
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("No review yet")
+                    .font(.body)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(.vertical, 20)
         .padding(.horizontal, 16)
@@ -774,7 +811,7 @@ struct MovieDetailsView: View {
                 
                 Text(formattedReleaseDate)
                     .font(.body)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             }
             
             if let overview = currentMovie.overview, !overview.isEmpty {
@@ -789,7 +826,7 @@ struct MovieDetailsView: View {
                     
                     Text(overview)
                         .font(.body)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -805,7 +842,9 @@ struct MovieDetailsView: View {
                 Button("View on TMDB") {
                     if let tmdbId = currentMovie.tmdb_id {
                         if let url = URL(string: "https://www.themoviedb.org/movie/\(tmdbId)") {
+                            #if canImport(UIKit)
                             UIApplication.shared.open(url)
+                            #endif
                         }
                     }
                 }
@@ -910,6 +949,85 @@ struct MovieDetailsView: View {
         .glassEffect(in: .rect(cornerRadius: 24.0))
     }
     
+    private var plexSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image("plex")
+                    .resizable()
+                    .frame(width: 20, height: 20)
+                
+                Text("PLEX AVAILABILITY")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.gray)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+                
+                Spacer()
+                
+                if isLoadingPlex {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                }
+            }
+            
+            if plexChecked {
+                if let plexMovie = plexAvailability {
+                    // Movie found on Plex
+                    HStack(spacing: 12) {
+                        Image("plex")
+                            .resizable()
+                            .frame(width: 32, height: 32)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Available on Plex")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.green)
+                            
+                            Text(plexMovie.title + (plexMovie.year != nil ? " (\(plexMovie.year!))" : ""))
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.title3)
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    // Movie not found on Plex
+                    Text("Not found on your Plex server")
+                        .font(.body)
+                        .foregroundColor(.gray)
+                        .padding(.vertical, 8)
+                }
+            } else if !isLoadingPlex {
+                if !plexService.isConfigured {
+                    Text("Configure Plex in Settings")
+                        .font(.body)
+                        .foregroundColor(.gray)
+                        .padding(.vertical, 8)
+                } else {
+                    Text("Tap to check Plex availability")
+                        .font(.body)
+                        .foregroundColor(.blue)
+                        .padding(.vertical, 8)
+                        .onTapGesture {
+                            Task {
+                                await loadPlexData()
+                            }
+                        }
+                }
+            }
+        }
+        .padding(.vertical, 20)
+        .padding(.horizontal, 16)
+        .glassEffect(in: .rect(cornerRadius: 24.0))
+    }
+    
     private var centennialMilestoneSection: some View {
         let isUniqueFilm = isCentennialUniqueFilm(currentMovie)
         let isTotalLog = isCentennialTotalLog(currentMovie)
@@ -939,8 +1057,8 @@ struct MovieDetailsView: View {
                         if let totalPos = milestoneNumbers.totalPosition {
                             Text("🔥 **\(totalPos)th Total Film Logged**")
                                 .font(.body)
-                                .foregroundColor(.white)
-                            Text("This entry represents your \(totalPos)th film logged in your movie diary, including all rewatches and duplicate entries.")
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                            Text("This entry represents your \(totalPos)th all time film logged in your movie diary.")
                                 .font(.caption)
                                 .foregroundColor(.gray)
                         }
@@ -948,8 +1066,8 @@ struct MovieDetailsView: View {
                         if let uniquePos = milestoneNumbers.uniquePosition {
                             Text("**\(uniquePos)th Unique Film**")
                                 .font(.body)
-                                .foregroundColor(.white)
-                            Text("This film represents your \(uniquePos)th unique movie title logged in your diary.")
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                            Text("This film represents your \(uniquePos)th unique movie logged in your diary.")
                                 .font(.caption)
                                 .foregroundColor(.gray)
                         }
@@ -1019,15 +1137,7 @@ struct MovieDetailsView: View {
         }
     }
     
-    private func starColor(for rating: Double?) -> Color {
-        guard let rating = rating else { return .blue }
-        return rating == 5.0 ? .yellow : .blue
-    }
-    
-    private func detailedRatingColor(for rating: Double?) -> Color {
-        guard let rating = rating else { return .purple }
-        return rating == 100.0 ? .yellow : .purple
-    }
+    // Use AppColorHelpers.starColor() and AppColorHelpers.detailedRatingColor() instead
     
     private func loadPreviousWatches() async {
         guard let tmdbId = currentMovie.tmdb_id else { return }
@@ -1053,25 +1163,18 @@ struct MovieDetailsView: View {
     }
     
     private func toggleMovieFavorite() async {
-        print("🔥 DEBUG: toggleMovieFavorite called")
-        print("🔥 DEBUG: Current movie ID: \(currentMovie.id)")
-        print("🔥 DEBUG: Current favorite status: \(currentMovie.isFavorited)")
-        print("🔥 DEBUG: Current movie favorited field: \(currentMovie.favorited)")
+
         
         do {
             let updatedMovie = try await movieService.toggleMovieFavorite(movieId: currentMovie.id)
             
-            print("🔥 DEBUG: Received updated movie")
-            print("🔥 DEBUG: Updated favorite status: \(updatedMovie.isFavorited)")
-            print("🔥 DEBUG: Updated movie favorited field: \(updatedMovie.favorited)")
+
             
             await MainActor.run {
                 currentMovie = updatedMovie
-                print("🔥 DEBUG: UI updated with new movie state")
             }
         } catch {
-            print("🔥 DEBUG ERROR: Failed to toggle favorite status: \(error.localizedDescription)")
-            print("🔥 DEBUG ERROR: Full error: \(error)")
+
         }
     }
     
@@ -1145,7 +1248,17 @@ struct MovieDetailsView: View {
     private func copyReviewToClipboard() {
         guard let review = currentMovie.review, !review.isEmpty else { return }
         
-        UIPasteboard.general.string = review
+        var clipboardText = ""
+        
+        // Prepend detailed rating if it exists
+        if let detailedRating = currentMovie.detailed_rating, detailedRating > 0 {
+            clipboardText = "<i>\(Int(detailedRating)).</i>  \n\n"
+        }
+        
+        clipboardText += review
+        #if canImport(UIKit)
+        UIPasteboard.general.string = clipboardText
+        #endif
         
         // Trigger the animation
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -1190,32 +1303,36 @@ struct MovieDetailsView: View {
     }
     
     // MARK: - Rewatch Icon Color Logic
-    
+
     private func getRewatchIconColor(for movie: Movie) -> Color {
         guard movie.isRewatchMovie else { return .orange }
-        
+
+        // Use default orange color while loading color calculation data
+        guard !isLoadingColorData else { return .orange }
+
         // Grey: First entry in DB but marked as rewatch
         if isFirstEntryButMarkedAsRewatch(movie) {
             return .gray
         }
-        
+
         // Yellow: First watched and rewatched in same calendar year
         if wasFirstWatchedInSameYearAsRewatch(movie) {
             return .yellow
         }
-        
+
         // Orange: Movie was logged in a previous year
         if wasLoggedInPreviousYear(movie) {
             return .orange
         }
-        
+
         // Default orange for any other rewatch scenario
         return .orange
     }
     
     private func isFirstEntryButMarkedAsRewatch(_ movie: Movie) -> Bool {
         guard let tmdbId = movie.tmdb_id else { return false }
-        
+        guard !isLoadingColorData else { return false }
+
         // Find all entries for this TMDB ID
         let entriesForMovie = allMoviesForColorCalculation.filter { $0.tmdb_id == tmdbId }
         
@@ -1227,10 +1344,11 @@ struct MovieDetailsView: View {
         guard let watchDate = movie.watch_date,
               let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate),
               let tmdbId = movie.tmdb_id else { return false }
-        
+        guard !isLoadingColorData else { return false }
+
         let calendar = Calendar.current
         let movieYear = calendar.component(.year, from: movieWatchDate)
-        
+
         // Find all entries for this movie
         let entriesForMovie = allMoviesForColorCalculation.filter { $0.tmdb_id == tmdbId }
             .compactMap { movie -> (Movie, Date)? in
@@ -1258,10 +1376,11 @@ struct MovieDetailsView: View {
         guard let watchDate = movie.watch_date,
               let movieWatchDate = DateFormatter.detailsMovieDateFormatter.date(from: watchDate),
               let tmdbId = movie.tmdb_id else { return false }
-        
+        guard !isLoadingColorData else { return false }
+
         let calendar = Calendar.current
         let movieYear = calendar.component(.year, from: movieWatchDate)
-        
+
         // Find all entries for this movie
         let entriesForMovie = allMoviesForColorCalculation.filter { $0.tmdb_id == tmdbId }
             .compactMap { movie -> Date? in
@@ -1331,8 +1450,11 @@ struct MovieDetailsView: View {
     }
     
     // MARK: - Centennial Milestone Logic
-    
+
     private func isCentennialUniqueFilm(_ movie: Movie) -> Bool {
+        // Return false while loading data to avoid blocking UI
+        guard !isLoadingColorData else { return false }
+
         // Sort movies by watch date to get chronological order
         let sortedMovies = allMoviesForColorCalculation.sorted { movie1, movie2 in
             guard let date1 = movie1.watch_date, let date2 = movie2.watch_date else { return false }
@@ -1365,6 +1487,9 @@ struct MovieDetailsView: View {
     }
     
     private func isCentennialTotalLog(_ movie: Movie) -> Bool {
+        // Return false while loading data to avoid blocking UI
+        guard !isLoadingColorData else { return false }
+
         // Sort movies by watch date to get chronological order
         let sortedMovies = allMoviesForColorCalculation.sorted { movie1, movie2 in
             guard let date1 = movie1.watch_date, let date2 = movie2.watch_date else { return false }
@@ -1381,6 +1506,9 @@ struct MovieDetailsView: View {
     }
     
     private func getCentennialMilestoneNumber(_ movie: Movie) -> (uniquePosition: Int?, totalPosition: Int?) {
+        // Return nil while loading data to avoid blocking UI
+        guard !isLoadingColorData else { return (nil, nil) }
+
         // Sort movies by watch date to get chronological order
         let sortedMovies = allMoviesForColorCalculation.sorted { movie1, movie2 in
             guard let date1 = movie1.watch_date, let date2 = movie2.watch_date else { return false }
@@ -1427,11 +1555,10 @@ struct MovieDetailsView: View {
     
     private func loadStreamingData() async {
         guard let tmdbId = currentMovie.tmdb_id else { 
-            print("🎬 [MovieDetailsView] No TMDB ID available for movie: \(currentMovie.title)")
-            return 
+            return  
         }
         
-        print("🎬 [MovieDetailsView] Loading streaming data for movie: \(currentMovie.title) (TMDB: \(tmdbId))")
+
         
         await MainActor.run {
             isLoadingStreaming = true
@@ -1444,40 +1571,68 @@ struct MovieDetailsView: View {
                 isLoadingStreaming = false
                 
                 // Log successful result
-                if let title = streaming.title {
-                    print("✅ [MovieDetailsView] Successfully loaded streaming data for: \(title)")
-                    if let options = streaming.streamingOptions?["us"] {
-                        print("📺 [MovieDetailsView] Found \(options.count) streaming options")
-                        for option in options.prefix(3) {
-                            print("   - \(option.service.name): \(option.type)")
-                        }
-                    }
-                } else if let error = streaming.error ?? streaming.message {
-                    print("⚠️ [MovieDetailsView] API returned error: \(error)")
-                }
+
             }
         } catch {
             await MainActor.run {
                 streamingData = nil
                 isLoadingStreaming = false
-                print("❌ [MovieDetailsView] Failed to load streaming data for \(currentMovie.title): \(error.localizedDescription)")
-                
-                // Log specific error types for debugging
-                if let streamingError = error as? StreamingServiceError {
-                    switch streamingError {
-                    case .httpError(let code):
-                        print("❌ [MovieDetailsView] HTTP Error \(code) - Check API key and endpoint")
-                    case .decodingError(let decodingError):
-                        print("❌ [MovieDetailsView] Decoding Error - API response format may have changed: \(decodingError)")
-                    case .authenticationRequired:
-                        print("❌ [MovieDetailsView] Authentication Error - Check RapidAPI key configuration")
-                    case .networkError(let networkError):
-                        print("❌ [MovieDetailsView] Network Error - Check internet connection: \(networkError)")
-                    default:
-                        print("❌ [MovieDetailsView] Other streaming error: \(streamingError)")
-                    }
-                }
             }
+        }
+    }
+    
+    // MARK: - Plex Availability Functions
+    
+    private func loadPlexData() async {
+        guard plexService.isConfigured else { return }
+        guard let tmdbId = currentMovie.tmdb_id else {
+
+            // Try fallback by title + year
+            await MainActor.run { isLoadingPlex = true }
+            
+            // Ensure library is loaded
+            if !plexService.isLibraryLoaded {
+                _ = try? await plexService.refreshLibrary()
+            }
+            
+            let found = plexService.findMovie(title: currentMovie.title, year: currentMovie.release_year)
+            await MainActor.run {
+                plexAvailability = found
+                plexChecked = true
+                isLoadingPlex = false
+            }
+            return
+        }
+        
+
+        
+        await MainActor.run { isLoadingPlex = true }
+        
+        // Ensure library is loaded
+        if !plexService.isLibraryLoaded {
+            do {
+                _ = try await plexService.refreshLibrary()
+            } catch {
+
+                await MainActor.run {
+                    plexAvailability = nil
+                    plexChecked = true
+                    isLoadingPlex = false
+                }
+                return
+            }
+        }
+        
+        // Check by TMDB ID first, then fallback to title+year
+        let found = plexService.getMovie(byTmdbId: tmdbId)
+            ?? plexService.findMovie(title: currentMovie.title, year: currentMovie.release_year)
+        
+        await MainActor.run {
+            plexAvailability = found
+            plexChecked = true
+            isLoadingPlex = false
+            
+
         }
     }
 }
@@ -1508,78 +1663,43 @@ struct EditReviewSheet: View {
     
     var body: some View {
         NavigationView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Edit Review")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    
-                    Text("for \(movieTitle)")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                }
-                .padding(.horizontal)
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Review")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    TextEditor(text: $reviewText)
-                        .font(.body)
-                        .foregroundColor(.white)
-                        .scrollContentBackground(.hidden)
-        .background(Color(.secondarySystemFill))
-                        .cornerRadius(12)
-                        .frame(minHeight: 200)
-                }
-                .padding(.horizontal)
-                
-                Spacer()
-            }
-            .padding(.top)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(.systemBackground).ignoresSafeArea())
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel", systemImage: "xmark") {
-                        onCancel()
-                    }
-                    .foregroundColor(.blue)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save", systemImage: "checkmark") {
-                        Task {
-                            isSaving = true
-                            await onSave(reviewText)
-                            isSaving = false
-                            dismiss()
-                        }
-                    }
-                    .foregroundColor(.blue)
-                    .disabled(isSaving)
-                }
-            }
+            ReviewView(
+                title: "Edit Text",
+                placeholder: "Write your thoughts...",
+                initialHTML: reviewText,
+                onHTMLChange: { newHTML in
+                    reviewText = newHTML
+                },
+                onDone: { newHTML in
+                    isSaving = true
+                    await onSave(newHTML)
+                    isSaving = false
+                    dismiss()
+                },
+                showsCancelButton: true,
+                onCancel: {
+                    onCancel()
+                },
+                doneButtonTitle: isSaving ? "Saving..." : "Save",
+                isDoneDisabled: isSaving
+            )
         }
-            
     }
 }
 
 struct PreviousWatchRow: View {
     let movie: Movie
     let onTap: () -> Void
-    
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
                 // Rewatch indicator
-                Text("RE")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .frame(width: 24, height: 24)
                     .background(Color.orange)
                     .clipShape(Circle())
@@ -1588,17 +1708,17 @@ struct PreviousWatchRow: View {
                     Text(formattedWatchDate)
                         .font(.body)
                         .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     HStack(spacing: 8) {
                         // Star rating
                         CompactStarRatingView(rating: movie.rating, fontSize: 12)
                         
-                        if let rating = movie.rating {
-                            Text("(\(String(format: "%.1f", rating)))")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                        }
+                        // if let rating = movie.rating {
+                        //     Text("(\(String(format: "%.1f", rating)))")
+                        //         .font(.caption)
+                        //         .foregroundColor(.gray)
+                        // }
                         
                         // Detailed rating
                         if let detailedRating = movie.detailed_rating {
@@ -1609,7 +1729,7 @@ struct PreviousWatchRow: View {
                                 
                                 Text("\(String(format: "%.0f", detailedRating))/100")
                                     .font(.caption)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             }
                         }
                     }
@@ -1652,16 +1772,15 @@ struct PreviousWatchRow: View {
             return "star"
         }
     }
-    
-    private func starColor(for rating: Double?) -> Color {
-        guard let rating = rating else { return .blue }
-        return rating == 5.0 ? .yellow : .blue
-    }
+
+    // Use AppColorHelpers.starColor() instead
 }
 
 struct TagView: View {
     let tag: String
-    
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: iconForTag(tag))
@@ -1671,7 +1790,7 @@ struct TagView: View {
             Text(tag.uppercased())
                 .font(.caption)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 .tracking(0.5)
         }
         .padding(.horizontal, 12)
@@ -1702,11 +1821,12 @@ struct AddMovieFromListView: View {
     let releaseYear: Int?
     let posterUrl: String?
     let backdropUrl: String?
-    
+
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var tmdbService = TMDBService.shared
-    @StateObject private var supabaseService = SupabaseMovieService.shared
-    
+    @Environment(\.colorScheme) private var colorScheme
+    private let tmdbService = TMDBService.shared
+    private let supabaseService = SupabaseMovieService.shared
+
     // Movie details state
     @State private var movieDetails: TMDBMovieDetails?
     @State private var director: String?
@@ -1744,23 +1864,25 @@ struct AddMovieFromListView: View {
             .background(Color.black)
             
             .navigationTitle("Add Movie")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
                 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Add", systemImage: "checkmark") {
                         Task {
                             await addMovie()
                         }
                     }
                     .disabled(isAddingMovie)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
             }
             .onAppear {
@@ -1792,7 +1914,7 @@ struct AddMovieFromListView: View {
                 Text(title)
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 
                 if let year = releaseYear {
                     Text(String(year))
@@ -1827,7 +1949,7 @@ struct AddMovieFromListView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Star Rating")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             
             StarRatingView(rating: $starRating, size: 30)
             
@@ -1842,11 +1964,13 @@ struct AddMovieFromListView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Detailed Rating (out of 100)")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             
             TextField("Enter rating 0-100", text: $detailedRating)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
+                #if os(iOS)
                 .keyboardType(.numberPad)
+                #endif
                 .onChange(of: detailedRating) { oldValue, newValue in
                     let filtered = newValue.filter { $0.isNumber }
                     if filtered != newValue {
@@ -1861,7 +1985,7 @@ struct AddMovieFromListView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Review")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             
             TextField("Write your review...", text: $review, axis: .vertical)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -1874,11 +1998,13 @@ struct AddMovieFromListView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Tags")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             
             TextField("e.g., theater, family, IMAX", text: $tags)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
+                #if os(iOS)
                 .autocapitalization(.none)
+                #endif
             
             Text("Separate tags with commas (e.g., theater, family, IMAX)")
                 .font(.caption)
@@ -1891,7 +2017,7 @@ struct AddMovieFromListView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Watch Date")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             
             DatePicker("When did you watch this?", selection: $watchDate, displayedComponents: .date)
                 .datePickerStyle(CompactDatePickerStyle())
@@ -1903,7 +2029,7 @@ struct AddMovieFromListView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Rewatch")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             
             Toggle("This was a rewatch", isOn: $isRewatch)
         }
@@ -1975,7 +2101,9 @@ struct AddMovieFromListView: View {
             // Copy review to clipboard if it exists
             if !review.isEmpty {
                 await MainActor.run {
+                    #if canImport(UIKit)
                     UIPasteboard.general.string = review
+                    #endif
                 }
             }
             
@@ -1998,8 +2126,9 @@ struct AddMovieFromListView: View {
 struct ChangeFilmView: View {
     let currentMovie: Movie
     let onFilmChanged: (Movie) -> Void
-    
+
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var tmdbService = TMDBService.shared
     @StateObject private var movieService = SupabaseMovieService.shared
     @StateObject private var listService = SupabaseListService.shared
@@ -2037,14 +2166,16 @@ struct ChangeFilmView: View {
             }
             .background(Color.black)
             .navigationTitle("Change Film")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
             }
             .alert("Error", isPresented: $showingAlert) {
@@ -2083,7 +2214,7 @@ struct ChangeFilmView: View {
                     Text(currentMovie.title)
                         .font(.headline)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Text(currentMovie.formattedReleaseYear)
                         .font(.subheadline)
@@ -2119,7 +2250,7 @@ struct ChangeFilmView: View {
                 
                 TextField("Search movies...", text: $searchText)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .onSubmit {
                         performSearch()
                     }
@@ -2163,8 +2294,10 @@ struct ChangeFilmView: View {
                 
                 TextField("Enter TMDB ID...", text: $tmdbIdText)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .foregroundColor(.white)
-                    .keyboardType(.numberPad)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                    #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
                     .onSubmit {
                         searchByTmdbId()
                     }
@@ -2401,7 +2534,9 @@ struct ChangeFilmView: View {
 struct ChangeFilmSearchRow: View {
     let movie: TMDBMovie
     let onSelect: () -> Void
-    
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 12) {
@@ -2420,7 +2555,7 @@ struct ChangeFilmSearchRow: View {
                     Text(movie.title)
                         .font(.body)
                         .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .multilineTextAlignment(.leading)
                     
                     if let releaseDate = movie.releaseDate, !releaseDate.isEmpty {
@@ -2452,7 +2587,9 @@ struct ChangeFilmSearchRow: View {
 struct ListRow: View {
     let list: MovieList
     let onTap: () -> Void
-    
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
@@ -2470,7 +2607,7 @@ struct ListRow: View {
                     Text(list.name)
                         .font(.body)
                         .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .multilineTextAlignment(.leading)
                         .lineLimit(1)
                     
@@ -2499,7 +2636,7 @@ struct ListRow: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(.secondarySystemFill))
+            .background(Color.adaptiveCardBackground(scheme: colorScheme))
             .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())
@@ -2546,11 +2683,15 @@ struct ListRow: View {
 
 struct StreamingServiceRow: View {
     let streamingOption: StreamingOption
-    
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         Button(action: {
             if let url = URL(string: streamingOption.link) {
-                UIApplication.shared.open(url)
+                #if canImport(UIKit)
+                            UIApplication.shared.open(url)
+                            #endif
             }
         }) {
             HStack(spacing: 12) {
@@ -2583,7 +2724,7 @@ struct StreamingServiceRow: View {
                     Text(streamingOption.service.name)
                         .font(.body)
                         .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .multilineTextAlignment(.leading)
                         .lineLimit(1)
                     
@@ -2609,12 +2750,12 @@ struct StreamingServiceRow: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(.secondarySystemFill))
+            .background(Color.adaptiveCardBackground(scheme: colorScheme))
             .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())
     }
-    
+
     private var serviceIconName: String? {
         let serviceId = streamingOption.service.id.lowercased()
         let serviceName = streamingOption.service.name.lowercased()

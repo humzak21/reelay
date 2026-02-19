@@ -10,9 +10,9 @@ import Auth
 
 struct WatchlistEditView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var watchlistService = SupabaseWatchlistService.shared
-    @StateObject private var tmdbService = TMDBService.shared
+    private let dataManager = DataManager.shared
+    private let watchlistService = SupabaseWatchlistService.shared
+    private let tmdbService = TMDBService.shared
     
     @State private var searchText = ""
     @State private var isLoading = false
@@ -58,16 +58,18 @@ struct WatchlistEditView: View {
             }
             .background(Color.black)
             .navigationTitle("Edit Watchlist")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                     .foregroundColor(.white)
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done", systemImage: "checkmark") {
                         dismiss()
                     }
@@ -114,7 +116,7 @@ struct WatchlistEditView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color(.systemGray6))
+            .background(Color.gray.opacity(0.12))
             .cornerRadius(10)
             
             if let errorMessage = errorMessage {
@@ -145,7 +147,7 @@ struct WatchlistEditView: View {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(currentSortOption == option ? Color.blue : Color(.systemGray5))
+                            .background(currentSortOption == option ? Color.blue : Color.gray.opacity(0.2))
                             .foregroundColor(currentSortOption == option ? .white : .primary)
                             .cornerRadius(16)
                         }
@@ -342,7 +344,7 @@ struct WatchlistSearchResultRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color(.systemGray6))
+        .background(Color.gray.opacity(0.12))
         .cornerRadius(12)
     }
 }
@@ -396,7 +398,7 @@ struct WatchlistItemRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color(.systemGray6))
+        .background(Color.gray.opacity(0.12))
         .cornerRadius(12)
     }
 }

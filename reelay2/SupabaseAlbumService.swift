@@ -91,7 +91,7 @@ class SupabaseAlbumService: ObservableObject {
     
     /// Add a new album to the list
     nonisolated func addAlbum(_ albumData: AddAlbumRequest) async throws -> Album {
-        print("🗄️ Adding album: \(albumData.title) by \(albumData.artist)")
+
         
         do {
             let response = try await supabase
@@ -100,16 +100,16 @@ class SupabaseAlbumService: ObservableObject {
                 .select()
                 .execute()
             
-            print("🗄️ Album insert response received")
+
             let albums: [Album] = try JSONDecoder().decode([Album].self, from: response.data)
             guard let album = albums.first else {
                 throw SupabaseAlbumError.noAlbumReturned
             }
             
-            print("🗄️ Album created with ID: \(album.id), user_id: \(album.user_id ?? "nil")")
+
             return album
         } catch {
-            print("❌ Album creation error: \(error)")
+
             throw error
         }
     }
@@ -276,7 +276,7 @@ class SupabaseAlbumService: ObservableObject {
     
     /// Add tracks to an album
     nonisolated func addTracksToAlbum(albumId: Int, tracks: [Track]) async throws -> [Track] {
-        print("🗄️ SupabaseAlbumService: Adding \(tracks.count) tracks to album \(albumId)")
+
         
         // Convert tracks to insert format (without id, created_at, updated_at)
         let tracksToInsert = tracks.map { track in
@@ -293,7 +293,7 @@ class SupabaseAlbumService: ObservableObject {
             )
         }
         
-        print("🗄️ Inserting into 'album_tracks' table...")
+
         
         do {
             let response = try await supabase
@@ -302,17 +302,17 @@ class SupabaseAlbumService: ObservableObject {
                 .select()
                 .execute()
             
-            print("🗄️ Database response received, decoding...")
+
             let insertedTracks: [Track] = try JSONDecoder().decode([Track].self, from: response.data)
-            print("🗄️ Successfully decoded \(insertedTracks.count) tracks")
+
             return insertedTracks
         } catch {
-            print("❌ Database error: \(error)")
-            print("❌ Error type: \(type(of: error))")
+            // print("❌ Database error: \(error)")
+            // print("❌ Error type: \(type(of: error))")
             let supabaseError = error as NSError
-            print("❌ Error domain: \(supabaseError.domain)")
-            print("❌ Error code: \(supabaseError.code)")
-            print("❌ Error userInfo: \(supabaseError.userInfo)")
+            // print("❌ Error domain: \(supabaseError.domain)")
+            // print("❌ Error code: \(supabaseError.code)")
+            // print("❌ Error userInfo: \(supabaseError.userInfo)")
             throw error
         }
     }

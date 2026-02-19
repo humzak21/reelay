@@ -9,9 +9,10 @@ import SwiftUI
 import Auth
 
 struct ProfileView: View {
-    @StateObject private var authService = SupabaseMovieService.shared
+    @ObservedObject private var authService = SupabaseMovieService.shared
     
     var body: some View {
+        #if os(iOS)
         NavigationStack {
             if authService.isLoggedIn {
                 LoggedInProfileView()
@@ -19,12 +20,22 @@ struct ProfileView: View {
                 LoginView()
             }
         }
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
+        #else
+        Group {
+            if authService.isLoggedIn {
+                LoggedInProfileView()
+            } else {
+                LoginView()
+            }
+        }
+        .background(Color(.windowBackgroundColor))
+        #endif
     }
 }
 
 struct LoginView: View {
-    @StateObject private var authService = SupabaseMovieService.shared
+    @ObservedObject private var authService = SupabaseMovieService.shared
     @State private var email = ""
     @State private var password = ""
     @State private var isSignUp = false
@@ -57,8 +68,10 @@ struct LoginView: View {
             VStack(spacing: 16) {
                 TextField("Email", text: $email)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    #if os(iOS)
                     .keyboardType(.emailAddress)
                     .autocapitalization(.none)
+                    #endif
                 
                 SecureField("Password", text: $password)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -100,7 +113,9 @@ struct LoginView: View {
             Spacer()
         }
         .navigationTitle("Welcome")
+        #if os(iOS)
         .navigationBarHidden(true)
+        #endif
     }
     
     private func handleAuth() {
@@ -128,8 +143,8 @@ struct LoginView: View {
 }
 
 struct LoggedInProfileView: View {
-    @StateObject private var authService = SupabaseMovieService.shared
-    @StateObject private var profileService = SupabaseProfileService.shared
+    @ObservedObject private var authService = SupabaseMovieService.shared
+    @ObservedObject private var profileService = SupabaseProfileService.shared
     @State private var showingSettings = false
     @State private var backdropMovie: Movie?
     @State private var showingAddMovie = false
@@ -137,229 +152,240 @@ struct LoggedInProfileView: View {
     @State private var showingAddAlbum = false
     @State private var showingRandomizer = false
     @State private var isLoading = false
+    @State private var isInitialLoad = true
     @State private var lastDataLoadTime: Date?
     @State private var hasLoadedInitially = false
     @Environment(\.colorScheme) private var colorScheme
-    
+
     private let cacheRefreshInterval: TimeInterval = 300 // 5 minutes
     
     private var appBackground: Color {
-        colorScheme == .dark ? .black : Color(.systemBackground)
+        #if canImport(UIKit)
+        colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+        #else
+        colorScheme == .dark ? .black : Color(.windowBackgroundColor)
+        #endif
+    }
+    
+    // MARK: - Profile Content (extracted for platform-specific wrapping)
+    private var loggedInProfileContent: some View {
+        ZStack {
+            if isInitialLoad {
+                SkeletonProfileContent()
+            } else if isLoading {
+                loadingView
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        // Backdrop Section with overlaid profile info
+                        ZStack(alignment: .bottom) {
+                            backdropSection
+                            profileInfoSection
+                        }
+
+                        // Content Section
+                        VStack(spacing: 16) {
+                            // Navigation Options
+                            VStack(spacing: 0) {
+                                NavigationLink(destination: MoviesView()) {
+                                    HStack(spacing: 16) {
+                                        Image(systemName: "film")
+                                            .font(.title2)
+                                            .foregroundColor(.blue)
+                                            .frame(width: 30)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Diary")
+                                                .font(.headline)
+                                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
+                                            Text("View your movie diary")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
+
+                                        Spacer()
+
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 16)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+
+                                NavigationLink(destination: ListsView()) {
+                                    HStack(spacing: 16) {
+                                        Image(systemName: "list.bullet")
+                                            .font(.title2)
+                                            .foregroundColor(.blue)
+                                            .frame(width: 30)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Lists")
+                                                .font(.headline)
+                                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
+                                            Text("Manage your movie lists")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
+
+                                        Spacer()
+
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 16)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+
+                                NavigationLink(destination: StatisticsView()) {
+                                    HStack(spacing: 16) {
+                                        Image(systemName: "chart.bar")
+                                            .font(.title2)
+                                            .foregroundColor(.blue)
+                                            .frame(width: 30)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Statistics")
+                                                .font(.headline)
+                                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
+                                            Text("Your viewing stats")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
+
+                                        Spacer()
+
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 16)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+
+                                NavigationLink(destination: TelevisionView()) {
+                                    HStack(spacing: 16) {
+                                        Image(systemName: "tv")
+                                            .font(.title2)
+                                            .foregroundColor(.blue)
+                                            .frame(width: 30)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("TV Shows")
+                                                .font(.headline)
+                                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
+                                            Text("Track your television watchlist")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
+
+                                        Spacer()
+
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 16)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+
+                                NavigationLink(destination: AlbumsView()) {
+                                    HStack(spacing: 16) {
+                                        Image(systemName: "music.note")
+                                            .font(.title2)
+                                            .foregroundColor(.blue)
+                                            .frame(width: 30)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Music")
+                                                .font(.headline)
+                                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
+                                            Text("Manage your music collection")
+                                                .font(.caption)
+                                                .foregroundColor(.gray)
+                                        }
+
+                                        Spacer()
+
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 16)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                            .background(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
+                            .cornerRadius(12)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 20)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 4)
+                        .background(appBackground)
+                        
+                        Spacer(minLength: 100)
+                    }
+                }
+                .background(appBackground.ignoresSafeArea())
+                .ignoresSafeArea(edges: .top)
+            }
+        }
     }
     
     var body: some View {
-        NavigationStack {
-            ZStack {
-                if isLoading {
-                    loadingView
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            // Backdrop Section with overlaid profile info
-                            ZStack(alignment: .bottom) {
-                                backdropSection
-                                profileInfoSection
-                            }
-                            
-                            // Content Section
-                            VStack(spacing: 16) {
-                        // Navigation Options
-                        VStack(spacing: 0) {
-                            NavigationLink(destination: MoviesView()) {
-                                HStack(spacing: 16) {
-                                    Image(systemName: "film")
-                                        .font(.title2)
-                                        .foregroundColor(.blue)
-                                        .frame(width: 30)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Diary")
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                        
-                                        Text("View your movie diary")
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 16)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            
-                            NavigationLink(destination: ListsView()) {
-                                HStack(spacing: 16) {
-                                    Image(systemName: "list.bullet")
-                                        .font(.title2)
-                                        .foregroundColor(.blue)
-                                        .frame(width: 30)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Lists")
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                        
-                                        Text("Manage your movie lists")
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 16)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            
-                            NavigationLink(destination: StatisticsView()) {
-                                HStack(spacing: 16) {
-                                    Image(systemName: "chart.bar")
-                                        .font(.title2)
-                                        .foregroundColor(.blue)
-                                        .frame(width: 30)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Statistics")
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                        
-                                        Text("Your viewing stats")
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 16)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            
-                            NavigationLink(destination: TelevisionView()) {
-                                HStack(spacing: 16) {
-                                    Image(systemName: "tv")
-                                        .font(.title2)
-                                        .foregroundColor(.blue)
-                                        .frame(width: 30)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("TV Shows")
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                        
-                                        Text("Track your television watchlist")
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 16)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            
-                            NavigationLink(destination: AlbumsView()) {
-                                HStack(spacing: 16) {
-                                    Image(systemName: "music.note")
-                                        .font(.title2)
-                                        .foregroundColor(.blue)
-                                        .frame(width: 30)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Music")
-                                            .font(.headline)
-                                            .foregroundColor(.white)
-                                        
-                                        Text("Manage your music collection")
-                                            .font(.caption)
-                                            .foregroundColor(.gray)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                }
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 16)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        }
-                        .background(Color(.secondarySystemBackground).opacity(0.8))
-                        .cornerRadius(12)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 20)
-                        
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 4)
-                    .background(appBackground)
-                    
-                    Spacer(minLength: 100)
-                        }
-                    }
-                    .background(appBackground.ignoresSafeArea())
-                    .ignoresSafeArea(edges: .top)
-                }
-            }
-        }
+        loggedInProfileContent
         .navigationTitle("Profile")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItem(placement: .cancellationAction) {
                 HStack {
                     Button(action: {
                         showingSettings = true
                     }) {
                         Image(systemName: "gear")
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             .fontWeight(.medium)
                     }
-                    
+
                     Button(action: {
                         showingRandomizer = true
                     }) {
                         Image(systemName: "dice")
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             .fontWeight(.medium)
                     }
                 }
             }
-            
-            ToolbarItem(placement: .navigationBarTrailing) {
+
+            ToolbarItem(placement: .confirmationAction) {
                 Menu {
                     Button(action: {
                         showingAddMovie = true
                     }) {
                         Label("Add Movie", systemImage: "film")
                     }
-                    
+
                     Button(action: {
                         showingAddTelevision = true
                     }) {
                         Label("Add TV Show", systemImage: "tv")
                     }
-                    
+
                     Button(action: {
                         showingAddAlbum = true
                     }) {
@@ -367,7 +393,7 @@ struct LoggedInProfileView: View {
                     }
                 } label: {
                     Image(systemName: "plus")
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .fontWeight(.medium)
                 }
             }
@@ -447,16 +473,7 @@ struct LoggedInProfileView: View {
                 .clipped()
                 .overlay(
                     // Enhanced gradient overlay for readability
-                    LinearGradient(
-                        colors: [
-                            Color.black.opacity(0.1), 
-                            Color.black.opacity(0.3),
-                            Color.black.opacity(0.6),
-                            Color.black.opacity(0.8)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    LinearGradient.adaptiveBackdropOverlay(scheme: colorScheme)
                 )
             } else {
                 // Fallback gradient when no backdrop
@@ -467,16 +484,7 @@ struct LoggedInProfileView: View {
                 )
                 .frame(height: 400)
                 .overlay(
-                    LinearGradient(
-                        colors: [
-                            Color.black.opacity(0.1), 
-                            Color.black.opacity(0.3),
-                            Color.black.opacity(0.6),
-                            Color.black.opacity(0.8)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    LinearGradient.adaptiveBackdropOverlay(scheme: colorScheme)
                 )
             }
         }
@@ -523,12 +531,12 @@ struct LoggedInProfileView: View {
                 Text(profileService.currentUserProfile?.name ?? "Loading...")
                     .font(.title)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .shadow(color: .black, radius: 4, x: 0, y: 2)
-                
+
                 Text("I have no idea what I'm talking about.")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                     .shadow(color: .black, radius: 2, x: 0, y: 1)
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
@@ -544,11 +552,11 @@ struct LoggedInProfileView: View {
         VStack(spacing: 16) {
             Spacer()
             ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .progressViewStyle(CircularProgressViewStyle(tint: Color.adaptiveText(scheme: colorScheme)))
                 .scaleEffect(1.2)
             Text("Finishing a film...")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
         }
     }
@@ -562,11 +570,19 @@ struct LoggedInProfileView: View {
     
     private func loadProfileDataIfNeeded(force: Bool = false) async {
         if force || shouldRefreshData() {
-            isLoading = true
+            // Only show loading spinner on non-initial loads
+            if !isInitialLoad {
+                isLoading = true
+            }
+
             await loadProfileData()
             lastDataLoadTime = Date()
             hasLoadedInitially = true
-            isLoading = false
+
+            await MainActor.run {
+                isInitialLoad = false
+                isLoading = false
+            }
         }
     }
     
@@ -576,33 +592,31 @@ struct LoggedInProfileView: View {
             
             await MainActor.run {
                 Task {
-                    let backdropStart = Date()
                     do {
                         backdropMovie = try await profileService.getSelectedBackdropMovie()
-                        let backdropDuration = Date().timeIntervalSince(backdropStart)
-                        print("🎬 [PROFILEVIEW] Backdrop movie loaded in \(String(format: "%.3f", backdropDuration))s")
                     } catch {
                         backdropMovie = nil
-                        print("⚠️ [PROFILEVIEW] Failed to load backdrop movie: \(error)")
                     }
-                    
                 }
             }
         } catch {
-            print("❌ [PROFILEVIEW] Profile load failed: \(error)")
+
         }
     }
     
     private func openLetterboxd() {
         if let url = URL(string: "letterboxd://") {
+            #if canImport(UIKit)
             if UIApplication.shared.canOpenURL(url) {
                 UIApplication.shared.open(url)
             } else {
-                // Fallback to App Store if Letterboxd isn't installed
                 if let appStoreURL = URL(string: "https://apps.apple.com/app/letterboxd/id1054271011") {
                     UIApplication.shared.open(appStoreURL)
                 }
             }
+            #else
+            NSWorkspace.shared.open(url)
+            #endif
         }
     }
     

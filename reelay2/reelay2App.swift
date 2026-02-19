@@ -21,5 +21,8 @@ struct reelay2App: App {
                 .preferredColorScheme(selectedAppearanceMode.colorScheme)
         }
         .modelContainer(ModelContainerManager.shared.modelContainer)
+        #if os(macOS)
+        .defaultSize(width: 1200, height: 800)
+        #endif
     }
 }

@@ -31,12 +31,14 @@ private struct SelectionInfoRow: View {
 }
 
 struct StatisticsView: View {
-    @StateObject private var statisticsService = SupabaseStatisticsService.shared
-    @StateObject private var movieService = SupabaseMovieService.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var statisticsService = SupabaseStatisticsService.shared
+    @ObservedObject private var movieService = SupabaseMovieService.shared
     
     @State private var dashboardStats: DashboardStats?
     @State private var ratingDistribution: [RatingDistribution] = []
     @State private var filmsByDecade: [FilmsByDecade] = []
+    @State private var filmsByReleaseYear: [FilmsByReleaseYear] = []
     @State private var filmsPerYear: [FilmsPerYear] = []
     @State private var filmsPerMonth: [FilmsPerMonth] = []
     @State private var weeklyFilmsData: [WeeklyFilmsData] = []
@@ -47,12 +49,15 @@ struct StatisticsView: View {
     @State private var resolvedAverageRating: Double?
     @State private var rewatchStats: RewatchStats?
     @State private var streakStats: StreakStats?
+    @State private var weeklyStreakStats: WeeklyStreakStats?
     @State private var yearReleaseStats: YearReleaseStats?
     @State private var topWatchedFilms: [TopWatchedFilm] = []
     @State private var advancedJourneyStats: AdvancedFilmJourneyStats?
     @State private var yearFilteredAdvancedStats: YearFilteredAdvancedJourneyStats?
     @State private var averageStarRatingsPerYear: [AverageStarRatingPerYear] = []
     @State private var averageDetailedRatingsPerYear: [AverageDetailedRatingPerYear] = []
+    @State private var yearlyPaceStats: YearlyPaceStats?
+    @State private var allFilmsPerMonth: [FilmsPerMonth] = []
     
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -75,6 +80,7 @@ struct StatisticsView: View {
         let dashboardStats: DashboardStats?
         let ratingDistribution: [RatingDistribution]
         let filmsByDecade: [FilmsByDecade]
+        let filmsByReleaseYear: [FilmsByReleaseYear]
         let filmsPerYear: [FilmsPerYear]
         let filmsPerMonth: [FilmsPerMonth]
         let weeklyFilmsData: [WeeklyFilmsData]
@@ -91,6 +97,8 @@ struct StatisticsView: View {
         let averageStarRatingsPerYear: [AverageStarRatingPerYear]
         let averageDetailedRatingsPerYear: [AverageDetailedRatingPerYear]
         let resolvedAverageRating: Double?
+        let yearlyPaceStats: YearlyPaceStats?
+        let allFilmsPerMonth: [FilmsPerMonth]
         let cachedAt: Date
     }
     
@@ -111,115 +119,9 @@ struct StatisticsView: View {
     }
     
     var body: some View {
+        #if os(iOS)
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    if isLoading {
-                        VStack {
-                            Spacer()
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            Spacer()
-                        }
-                    } else if let errorMessage = errorMessage {
-                        ErrorView(message: errorMessage) {
-                            Task {
-                                await loadStatistics()
-                            }
-                        }
-                    } else {
-                        // Main Statistics Content
-                        LazyVStack(spacing: 24) {
-                            // Your Film Journey Section
-                            FilmJourneySection(
-                                dashboardStats: dashboardStats,
-                                uniqueFilmsCount: uniqueFilmsCount,
-                                averageRatingResolved: resolvedAverageRating,
-                                watchSpan: watchSpan,
-                                selectedYear: selectedYear,
-                                filmsPerMonth: filmsPerMonth
-                            )
-                            
-                            // Advanced Film Journey Section - only show for all-time view
-                            if selectedYear == nil && advancedJourneyStats != nil {
-                                AdvancedFilmJourneySection(advancedStats: advancedJourneyStats!)
-                            }
-                            
-                            // Year-Filtered Advanced Film Journey Section - only show for year-filtered views
-                            if let year = selectedYear, let yearFilteredStats = yearFilteredAdvancedStats {
-                                YearFilteredAdvancedJourneySection(yearFilteredStats: yearFilteredStats, selectedYear: year)
-                            }
-                            
-                            // Top Watched Films Section - only show for all-time view
-                            if selectedYear == nil && !topWatchedFilms.isEmpty {
-                                TopWatchedFilmsSection(topWatchedFilms: topWatchedFilms)
-                            }
-                            
-                            // Rewatch Pie Chart
-                            if let rewatchStats = rewatchStats {
-                                RewatchPieChart(rewatchStats: rewatchStats)
-                            }
-                            
-                            // Total Runtime Section
-                            TimeSinceFirstFilmSection(watchSpan: watchSpan, runtimeStats: runtimeStats)
-                            
-                            // Streak Statistics Section - only show for all-time view
-                            if selectedYear == nil {
-                                StreakSection(streakStats: streakStats, selectedYear: selectedYear)
-                            }
-                            
-                            // Year Release Date Pie Chart - only show for year-filtered views
-                            if let year = selectedYear, let yearReleaseStats = yearReleaseStats {
-                                YearReleasePieChart(yearReleaseStats: yearReleaseStats, selectedYear: year)
-                            }
-                            
-                            // Rating Distribution Chart
-                            RatingDistributionChart(distribution: ratingDistribution)
-                            
-                            // Films Per Year Chart (all-time) or Films Per Month Chart (year-filtered)
-                            if selectedYear != nil {
-                                FilmsPerMonthChart(filmsPerMonth: filmsPerMonth)
-                            } else {
-                                FilmsPerYearChart(filmsPerYear: filmsPerYear)
-                            }
-                            
-                            // Weekly Films Chart - only show for year-filtered views
-                            if let year = selectedYear, !weeklyFilmsData.isEmpty {
-                                WeeklyFilmsChart(weeklyData: weeklyFilmsData, selectedYear: year)
-                            }
-                            
-                            // Day of Week Chart
-                            DayOfWeekChart(dayOfWeekPatterns: dayOfWeekPatterns)
-                            
-                            // Average Rating Per Year Charts - only show for all-time view
-                            if selectedYear == nil && !averageStarRatingsPerYear.isEmpty {
-                                AverageStarRatingPerYearChart(averageStarRatings: averageStarRatingsPerYear)
-                            }
-                            
-                            if selectedYear == nil && !averageDetailedRatingsPerYear.isEmpty {
-                                AverageDetailedRatingPerYearChart(averageDetailedRatings: averageDetailedRatingsPerYear)
-                            }
-                            
-                            // Films by Decade Chart - moved to bottom
-                            FilmsByDecadeChart(filmsByDecade: filmsByDecade)
-                        }
-                        .padding(.horizontal)
-                    }
-                }
-            }
-            .navigationTitle(navigationTitle)
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    yearPickerButton
-                }
-            }
-            .refreshable {
-                await refreshStatistics()
-            }
-            .sheet(isPresented: $showingYearPicker) {
-                yearPickerSheet
-            }
+            statisticsContent
         }
         .task {
             if !hasLoadedInitially {
@@ -241,6 +143,162 @@ struct StatisticsView: View {
                 await loadStatisticsIfNeeded(force: false)
             }
         }
+        #else
+        statisticsContent
+        .task {
+            if !hasLoadedInitially {
+                await loadAvailableYears()
+                await loadStatisticsIfNeeded(force: true)
+                hasLoadedInitially = true
+            }
+        }
+        .onAppear {
+            // Only load if we haven't loaded initially or data is stale
+            if shouldRefreshData() {
+                Task {
+                    await loadStatisticsIfNeeded(force: false)
+                }
+            }
+        }
+        .onChange(of: selectedYear) {
+            Task {
+                await loadStatisticsIfNeeded(force: false)
+            }
+        }
+        #endif
+    }
+    
+    // MARK: - Statistics Content (extracted for platform-specific wrapping)
+    private var statisticsContent: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                if isLoading {
+                    VStack {
+                        Spacer()
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Spacer()
+                    }
+                } else if let errorMessage = errorMessage {
+                    ErrorView(message: errorMessage) {
+                        Task {
+                            await loadStatistics()
+                        }
+                    }
+                } else {
+                    // Main Statistics Content
+                    LazyVStack(spacing: 24) {
+                        // Your Film Journey Section
+                        FilmJourneySection(
+                            dashboardStats: dashboardStats,
+                            uniqueFilmsCount: uniqueFilmsCount,
+                            averageRatingResolved: resolvedAverageRating,
+                            watchSpan: watchSpan,
+                            selectedYear: selectedYear,
+                            filmsPerMonth: filmsPerMonth
+                        )
+                        
+                        // Advanced Film Journey Section - only show for all-time view
+                        if selectedYear == nil && advancedJourneyStats != nil {
+                            AdvancedFilmJourneySection(advancedStats: advancedJourneyStats!)
+                        }
+                        
+                        // Year-Filtered Advanced Film Journey Section - only show for year-filtered views
+                        if let year = selectedYear, let yearFilteredStats = yearFilteredAdvancedStats {
+                            YearFilteredAdvancedJourneySection(yearFilteredStats: yearFilteredStats, selectedYear: year)
+                        }
+                        
+                        // Top Watched Films Section - only show for all-time view
+                        if selectedYear == nil && !topWatchedFilms.isEmpty {
+                            TopWatchedFilmsSection(topWatchedFilms: topWatchedFilms)
+                        }
+                        
+                        // Rewatch Pie Chart
+                        if let rewatchStats = rewatchStats {
+                            RewatchPieChart(rewatchStats: rewatchStats)
+                        }
+                        
+                        // Total Runtime Section
+                        TimeSinceFirstFilmSection(watchSpan: watchSpan, runtimeStats: runtimeStats)
+                        
+                        // Streak Statistics Section - only show for all-time view
+                        if selectedYear == nil {
+                            StreakSection(streakStats: streakStats, selectedYear: selectedYear)
+                            
+                            // Weekly Streak Chart - only show for all-time view
+                            if let weeklyStats = weeklyStreakStats {
+                                WeeklyStreakChart(weeklyStreakStats: weeklyStats)
+                            }
+                        }
+                        
+                        // Year Release Date Pie Chart - only show for year-filtered views
+                        if let year = selectedYear, let yearReleaseStats = yearReleaseStats {
+                            YearReleasePieChart(yearReleaseStats: yearReleaseStats, selectedYear: year)
+                        }
+                        
+                        // Rating Distribution Chart
+                        RatingDistributionChart(distribution: ratingDistribution)
+                        
+                        // Films Per Year Chart (all-time) or Films Per Month Chart (year-filtered)
+                        if selectedYear != nil {
+                            // On Pace Chart - for year-filtered views
+                            if let paceStats = yearlyPaceStats {
+                                OnPaceChart(yearlyPaceStats: paceStats)
+                            }
+                            
+                            FilmsPerMonthChart(filmsPerMonth: filmsPerMonth)
+                        } else {
+                            FilmsPerYearChart(filmsPerYear: filmsPerYear)
+                        }
+                        
+                        // Weekly Films Chart - only show for year-filtered views
+                        if let year = selectedYear, !weeklyFilmsData.isEmpty {
+                            WeeklyFilmsChart(weeklyData: weeklyFilmsData, selectedYear: year)
+                        }
+                        
+                        // Day of Week Chart
+                        DayOfWeekChart(dayOfWeekPatterns: dayOfWeekPatterns)
+                        
+                        // Average Rating Per Year Charts - only show for all-time view
+                        if selectedYear == nil && !averageStarRatingsPerYear.isEmpty {
+                            AverageStarRatingPerYearChart(averageStarRatings: averageStarRatingsPerYear)
+                        }
+                        
+                        if selectedYear == nil && !averageDetailedRatingsPerYear.isEmpty {
+                            AverageDetailedRatingPerYearChart(averageDetailedRatings: averageDetailedRatingsPerYear)
+                        }
+                        
+                        // Films by Release Year Chart - all-time or year-filtered
+                        if !filmsByReleaseYear.isEmpty {
+                            if let year = selectedYear {
+                                FilmsByReleaseYearChart(filmsByReleaseYear: filmsByReleaseYear, filteredYear: year)
+                            } else {
+                                FilmsByReleaseYearChart(filmsByReleaseYear: filmsByReleaseYear)
+                            }
+                        }
+                        
+                        // Films by Decade Chart - moved to bottom
+                        FilmsByDecadeChart(filmsByDecade: filmsByDecade)
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
+        .navigationTitle(navigationTitle)
+        #if canImport(UIKit)
+        .toolbarTitleDisplayMode(.inlineLarge)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                yearPickerButton
+            }
+        }
+        .refreshable {
+            await refreshStatistics()
+        }
+        .sheet(isPresented: $showingYearPicker) {
+            yearPickerSheet
+        }
     }
     
     // MARK: - Year Picker UI Components
@@ -256,7 +314,7 @@ struct StatisticsView: View {
                 
                 Text(yearSelectionLabel)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .bold))
@@ -264,22 +322,6 @@ struct StatisticsView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(
-                Capsule()
-                    .fill(.regularMaterial)
-                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(
-                        LinearGradient(
-                            colors: [.blue.opacity(0.3), .blue.opacity(0.1)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
         }
         .buttonStyle(.plain)
         .scaleEffect(showingYearPicker ? 0.95 : 1.0)
@@ -357,11 +399,15 @@ struct StatisticsView: View {
                     }
                 }
             }
+            #if os(iOS)
             .listStyle(.insetGrouped)
+            #endif
             .navigationTitle("Select Year")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
                         showingYearPicker = false
                     }
@@ -425,6 +471,7 @@ struct StatisticsView: View {
             self.dashboardStats = cachedData.dashboardStats
             self.ratingDistribution = cachedData.ratingDistribution
             self.filmsByDecade = cachedData.filmsByDecade
+            self.filmsByReleaseYear = cachedData.filmsByReleaseYear
             self.filmsPerYear = cachedData.filmsPerYear
             self.filmsPerMonth = cachedData.filmsPerMonth
             self.weeklyFilmsData = cachedData.weeklyFilmsData
@@ -441,6 +488,8 @@ struct StatisticsView: View {
             self.averageStarRatingsPerYear = cachedData.averageStarRatingsPerYear
             self.averageDetailedRatingsPerYear = cachedData.averageDetailedRatingsPerYear
             self.resolvedAverageRating = cachedData.resolvedAverageRating
+            self.yearlyPaceStats = cachedData.yearlyPaceStats
+            self.allFilmsPerMonth = cachedData.allFilmsPerMonth
             self.isLoading = false
         }
     }
@@ -451,6 +500,7 @@ struct StatisticsView: View {
             dashboardStats: dashboardStats,
             ratingDistribution: ratingDistribution,
             filmsByDecade: filmsByDecade,
+            filmsByReleaseYear: filmsByReleaseYear,
             filmsPerYear: filmsPerYear,
             filmsPerMonth: filmsPerMonth,
             weeklyFilmsData: weeklyFilmsData,
@@ -467,6 +517,8 @@ struct StatisticsView: View {
             averageStarRatingsPerYear: averageStarRatingsPerYear,
             averageDetailedRatingsPerYear: averageDetailedRatingsPerYear,
             resolvedAverageRating: resolvedAverageRating,
+            yearlyPaceStats: yearlyPaceStats,
+            allFilmsPerMonth: allFilmsPerMonth,
             cachedAt: Date()
         )
         
@@ -513,6 +565,7 @@ struct StatisticsView: View {
             async let dashboardTask = statisticsService.getDashboardStats(year: selectedYear)
             async let ratingTask = statisticsService.getRatingDistribution(year: selectedYear)
             async let decadeTask = statisticsService.getFilmsByDecade(year: selectedYear)
+            async let releaseYearTask = statisticsService.getFilmsByReleaseYear(year: selectedYear)
             async let yearTask = statisticsService.getFilmsPerYear(year: selectedYear)
             async let monthTask = statisticsService.getFilmsPerMonth(year: selectedYear)
             async let weeklyTask = selectedYear != nil ? statisticsService.getWeeklyFilmsData(year: selectedYear!) : nil
@@ -524,6 +577,8 @@ struct StatisticsView: View {
             async let rewatchTask = statisticsService.getRewatchStats(year: selectedYear)
             // Always use all-time streak stats (no year parameter)
             async let streakTask = statisticsService.getStreakStats(year: nil)
+            // Get weekly streak stats only for all-time view
+            async let weeklyStreakTask = selectedYear == nil ? statisticsService.getWeeklyStreakStats(year: nil) : nil
             // Get year release stats only for year-filtered views
             async let yearReleaseTask = selectedYear != nil ? statisticsService.getYearReleaseStats(year: selectedYear!) : nil
             // Get top watched films only for all-time view
@@ -535,11 +590,14 @@ struct StatisticsView: View {
             // Get average rating per year charts only for all-time view
             async let averageStarRatingsTask = selectedYear == nil ? statisticsService.getAverageStarRatingPerYear() : nil
             async let averageDetailedRatingsTask = selectedYear == nil ? statisticsService.getAverageDetailedRatingPerYear() : nil
+            // Get all films per month (for historical pace calculation) only for year-filtered views
+            async let allFilmsPerMonthTask = selectedYear != nil ? statisticsService.getFilmsPerMonth(year: nil) : nil
             
             let results = try await (
                 dashboard: dashboardTask,
                 rating: ratingTask,
                 decade: decadeTask,
+                releaseYear: releaseYearTask,
                 year: yearTask,
                 month: monthTask,
                 weekly: weeklyTask,
@@ -550,18 +608,21 @@ struct StatisticsView: View {
                 dayOfWeek: dayOfWeekTask,
                 rewatch: rewatchTask,
                 streak: streakTask,
+                weeklyStreak: weeklyStreakTask,
                 yearRelease: yearReleaseTask,
                 topWatched: topWatchedTask,
                 advancedJourney: advancedJourneyTask,
                 yearFilteredAdvancedJourney: yearFilteredAdvancedJourneyTask,
                 averageStarRatings: averageStarRatingsTask,
-                averageDetailedRatings: averageDetailedRatingsTask
+                averageDetailedRatings: averageDetailedRatingsTask,
+                allFilmsPerMonth: allFilmsPerMonthTask
             )
             
             await MainActor.run {
                 self.dashboardStats = results.dashboard
                 self.ratingDistribution = results.rating
                 self.filmsByDecade = results.decade
+                self.filmsByReleaseYear = results.releaseYear
                 self.filmsPerYear = results.year
                 self.filmsPerMonth = results.month
                 self.weeklyFilmsData = results.weekly ?? []
@@ -571,6 +632,7 @@ struct StatisticsView: View {
                 self.watchSpan = results.span
                 self.rewatchStats = results.rewatch
                 self.streakStats = results.streak
+                self.weeklyStreakStats = results.weeklyStreak
                 self.yearReleaseStats = results.yearRelease
                 self.topWatchedFilms = results.topWatched ?? []
                 self.advancedJourneyStats = results.advancedJourney
@@ -578,6 +640,21 @@ struct StatisticsView: View {
                 self.averageStarRatingsPerYear = results.averageStarRatings ?? []
                 self.averageDetailedRatingsPerYear = results.averageDetailedRatings ?? []
                 self.resolvedAverageRating = results.dashboard.averageRating ?? results.ratingStats.averageRating
+                
+                // Calculate pace stats for year-filtered views
+                if let year = self.selectedYear {
+                    let allMonthData = results.allFilmsPerMonth ?? []
+                    self.allFilmsPerMonth = allMonthData
+                    self.yearlyPaceStats = self.statisticsService.calculateYearlyPaceStats(
+                        targetYear: year,
+                        allFilmsPerMonth: allMonthData,
+                        allFilmsPerYear: results.year
+                    )
+                } else {
+                    self.allFilmsPerMonth = []
+                    self.yearlyPaceStats = nil
+                }
+                
                 self.isLoading = false
                 
                 // Cache the loaded data
@@ -606,6 +683,7 @@ struct StatisticsView: View {
             async let dashboardTask = statisticsService.getDashboardStats(year: selectedYear)
             async let ratingTask = statisticsService.getRatingDistribution(year: selectedYear)
             async let decadeTask = statisticsService.getFilmsByDecade(year: selectedYear)
+            async let releaseYearRefreshTask = statisticsService.getFilmsByReleaseYear(year: selectedYear)
             async let yearTask = statisticsService.getFilmsPerYear(year: selectedYear)
             async let monthTask = statisticsService.getFilmsPerMonth(year: selectedYear)
             async let weeklyTask = selectedYear != nil ? statisticsService.getWeeklyFilmsData(year: selectedYear!) : nil
@@ -628,11 +706,14 @@ struct StatisticsView: View {
             // Get average rating per year charts only for all-time view
             async let averageStarRatingsTask = selectedYear == nil ? statisticsService.getAverageStarRatingPerYear() : nil
             async let averageDetailedRatingsTask = selectedYear == nil ? statisticsService.getAverageDetailedRatingPerYear() : nil
+            // Get all films per month (for historical pace calculation) only for year-filtered views
+            async let allFilmsPerMonthTask = selectedYear != nil ? statisticsService.getFilmsPerMonth(year: nil) : nil
             
             let results = try await (
                 dashboard: dashboardTask,
                 rating: ratingTask,
                 decade: decadeTask,
+                releaseYear: releaseYearRefreshTask,
                 year: yearTask,
                 month: monthTask,
                 weekly: weeklyTask,
@@ -648,13 +729,15 @@ struct StatisticsView: View {
                 advancedJourney: advancedJourneyTask,
                 yearFilteredAdvancedJourney: yearFilteredAdvancedJourneyTask,
                 averageStarRatings: averageStarRatingsTask,
-                averageDetailedRatings: averageDetailedRatingsTask
+                averageDetailedRatings: averageDetailedRatingsTask,
+                allFilmsPerMonth: allFilmsPerMonthTask
             )
             
             await MainActor.run {
                 self.dashboardStats = results.dashboard
                 self.ratingDistribution = results.rating
                 self.filmsByDecade = results.decade
+                self.filmsByReleaseYear = results.releaseYear
                 self.filmsPerYear = results.year
                 self.filmsPerMonth = results.month
                 self.weeklyFilmsData = results.weekly ?? []
@@ -671,6 +754,20 @@ struct StatisticsView: View {
                 self.averageStarRatingsPerYear = results.averageStarRatings ?? []
                 self.averageDetailedRatingsPerYear = results.averageDetailedRatings ?? []
                 self.resolvedAverageRating = results.dashboard.averageRating ?? results.ratingStats.averageRating
+                
+                // Calculate pace stats for year-filtered views
+                if let year = self.selectedYear {
+                    let allMonthData = results.allFilmsPerMonth ?? []
+                    self.allFilmsPerMonth = allMonthData
+                    self.yearlyPaceStats = self.statisticsService.calculateYearlyPaceStats(
+                        targetYear: year,
+                        allFilmsPerMonth: allMonthData,
+                        allFilmsPerYear: results.year
+                    )
+                } else {
+                    self.allFilmsPerMonth = []
+                    self.yearlyPaceStats = nil
+                }
                 // Note: Don't set isLoading = false here during refresh
                 
                 // Cache the loaded data
@@ -733,6 +830,7 @@ struct StatisticsView: View {
 // MARK: - Time Since First Film Section
 
 struct TimeSinceFirstFilmSection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let watchSpan: WatchSpan?
     let runtimeStats: RuntimeStats?
     
@@ -798,7 +896,7 @@ struct TimeSinceFirstFilmSection: View {
                 Text("Total Runtime")
                     .font(.title3)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             
@@ -879,6 +977,7 @@ struct TimeSinceFirstFilmSection: View {
 // MARK: - Film Journey Section
 
 struct FilmJourneySection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let dashboardStats: DashboardStats?
     let uniqueFilmsCount: Int
     let averageRatingResolved: Double?
@@ -917,7 +1016,7 @@ struct FilmJourneySection: View {
                     Text("Your Film Journey")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
                 HStack(spacing: 4) {
                     Text(watchSpanText)
@@ -1012,11 +1111,13 @@ struct FilmJourneySection: View {
 // MARK: - Stat Card
 
 struct StatCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let title: String
     let value: String
     let icon: String
     let color: Color
-    
+
     private var borderGradient: [Color] {
         switch color {
         case .blue:   return [Color.blue, Color.cyan]
@@ -1060,7 +1161,7 @@ struct StatCard: View {
         .padding(18)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial.opacity(0.4))
+                .fill(Color.adaptiveCardBackground(scheme: colorScheme))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -1079,6 +1180,7 @@ struct StatCard: View {
 // MARK: - Streak Components
 
 struct StreakDetailCard: View {
+    @Environment(\.colorScheme) private var colorScheme
     let title: String
     let streakStats: StreakStats?
     let streakType: StreakType
@@ -1243,7 +1345,7 @@ struct StreakDetailCard: View {
                 Text(title)
                     .font(.headline)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 
                 // Status line
                 Text(streakType == .current ?
@@ -1368,7 +1470,7 @@ struct StreakDetailCard: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial.opacity(0.4))
+                .fill(Color.adaptiveCardBackground(scheme: colorScheme))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -1391,6 +1493,7 @@ struct StreakDetailCard: View {
 }
 
 struct StreakSection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let streakStats: StreakStats?
     let selectedYear: Int?
     
@@ -1408,7 +1511,7 @@ struct StreakSection: View {
                     Text("Watch Streaks")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
                 Text("Consecutive days with at least one film")
                     .font(.subheadline)
@@ -1467,9 +1570,198 @@ struct StreakSection: View {
     }
 }
 
+// MARK: - Weekly Streak Chart
+
+struct WeeklyStreakChart: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let weeklyStreakStats: WeeklyStreakStats
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Section Header
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "calendar.badge.checkmark")
+                        .font(.title2)
+                        .gradientForeground([
+                            .blue,
+                            .cyan
+                        ], start: .topLeading, end: .bottomTrailing)
+                    Text("Weekly Streaks")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                }
+                Text("Consecutive weeks with at least one film logged")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 16)
+            
+            // Streak Cards
+            VStack(spacing: 16) {
+                // Current Weekly Streak
+                WeeklyStreakCard(
+                    title: "Current Weekly Streak",
+                    weeks: weeklyStreakStats.currentStreak,
+                    startDate: weeklyStreakStats.currentStartDate,
+                    endDate: weeklyStreakStats.currentEndDate,
+                    isActive: weeklyStreakStats.isActive,
+                    accentColor: .blue
+                )
+                
+                // Longest Weekly Streak
+                WeeklyStreakCard(
+                    title: "Longest Weekly Streak",
+                    weeks: weeklyStreakStats.longestStreak,
+                    startDate: weeklyStreakStats.longestStartDate,
+                    endDate: weeklyStreakStats.longestEndDate,
+                    isActive: false,
+                    accentColor: .cyan
+                )
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.blue.opacity(0.05),
+                            Color.cyan.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.blue.opacity(0.5),
+                            Color.cyan.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
+        )
+    }
+}
+
+// MARK: - Weekly Streak Card
+
+private struct WeeklyStreakCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String
+    let weeks: Int
+    let startDate: String
+    let endDate: String
+    let isActive: Bool
+    let accentColor: Color
+    
+    private static let inputFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+    
+    private static let outputFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }()
+    
+    private static let outputFormatterWithYear: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, yyyy"
+        return formatter
+    }()
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                Spacer()
+                if isActive {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 8, height: 8)
+                        Text("Active")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.green)
+                    }
+                }
+            }
+            
+            HStack(alignment: .bottom, spacing: 8) {
+                Text("\(weeks)")
+                    .font(.system(size: 48, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [accentColor, accentColor.opacity(0.7)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Text(weeks == 1 ? "week" : "weeks")
+                    .font(.title3)
+                    .fontWeight(.medium)
+                    .foregroundColor(.secondary)
+                    .padding(.bottom, 10)
+            }
+            
+            if !startDate.isEmpty && !endDate.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "calendar")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                    Text("\(formatDate(startDate)) → \(formatDate(endDate))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.adaptiveCardBackground(scheme: colorScheme))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(accentColor.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+    
+    private func formatDate(_ dateString: String) -> String {
+        // Format from "2024-01-27" to "Jan 27" or "Jan 27, 2024" for different years
+        guard let date = Self.inputFormatter.date(from: dateString) else {
+            return dateString
+        }
+        
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let dateYear = Calendar.current.component(.year, from: date)
+        
+        if dateYear == currentYear {
+            return Self.outputFormatter.string(from: date)
+        } else {
+            return Self.outputFormatterWithYear.string(from: date)
+        }
+    }
+}
+
 // MARK: - Total Runtime Section
 
 struct TotalRuntimeSection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let runtimeStats: RuntimeStats
     
     var totalHours: Int {
@@ -1489,7 +1781,7 @@ struct TotalRuntimeSection: View {
                 Text("Total Runtime")
                     .font(.title3)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             
@@ -1562,6 +1854,7 @@ struct TotalRuntimeSection: View {
 // MARK: - Rewatch Pie Chart
 
 struct RewatchPieChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let rewatchStats: RewatchStats
     @State private var selectedSlice: String?
     @State private var chartProxy: ChartProxy?
@@ -1683,7 +1976,7 @@ struct RewatchPieChart: View {
             Text("Rewatches")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
             Text("\(totalFilms) total")
                 .font(.subheadline)
@@ -1953,9 +2246,6 @@ struct RewatchPieChart: View {
                 showTooltip = true
                 longPressLocation = location
                 
-                // Trigger haptic feedback
-                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-                impactFeedback.impactOccurred()
                 return
             }
         }
@@ -1967,14 +2257,18 @@ struct RewatchPieChart: View {
 // MARK: - Rating Distribution Chart
 
 struct RatingDistributionChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let distribution: [RatingDistribution]
-    @State private var selectedBar: RatingDistribution?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedRating: Double?
+
     private var totalFilms: Int {
         distribution.reduce(0) { $0 + $1.count }
     }
     
+    private var maxCount: Int {
+        distribution.map { $0.count }.max() ?? 0
+    }
+
     // Create a complete range from 0.5 to 5.0 in 0.5 increments
     private var completeDistribution: [RatingDistribution] {
         let ratings: [Double] = stride(from: 0.5, through: 5.0, by: 0.5).map { Double($0) }
@@ -1987,7 +2281,17 @@ struct RatingDistributionChart: View {
             }
         }
     }
-    
+
+    private var selectedItem: RatingDistribution? {
+        guard let rating = snappedSelectedRating else { return nil }
+        return completeDistribution.first { abs($0.ratingValue - rating) < 0.001 }
+    }
+
+    private var snappedSelectedRating: Double? {
+        guard let rating = selectedRating else { return nil }
+        return (rating * 2).rounded() / 2
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -1996,14 +2300,14 @@ struct RatingDistributionChart: View {
                 Text("Rating Distribution")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
                 Text("\(totalFilms) films")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
             .padding(.horizontal, 12)
-            
+
             Chart(completeDistribution, id: \.ratingValue) { item in
                 BarMark(
                     x: .value("Rating", item.ratingValue),
@@ -2017,7 +2321,20 @@ struct RatingDistributionChart: View {
                     )
                 )
                 .cornerRadius(4)
-                .opacity(((selectedBar?.ratingValue) ?? -1) == item.ratingValue ? 0.8 : 1.0)
+                .opacity(snappedSelectedRating == item.ratingValue ? 0.7 : 1.0)
+
+                // Add visual indicator on selected bar
+                if let selectedRating = snappedSelectedRating, abs(item.ratingValue - selectedRating) < 0.001 {
+                    RuleMark(x: .value("Selected", item.ratingValue))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.blue.opacity(0.5))
+                        .annotation(position: .top, spacing: 1) {
+                            Text("\(item.count)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                        }
+                }
             }
             .frame(height: 200)
             .chartXAxis {
@@ -2046,24 +2363,10 @@ struct RatingDistributionChart: View {
                         .font(.system(size: 10, design: .rounded))
                 }
             }
-            .chartBackground { proxy in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let plotFrame = proxy.plotFrame {
-                                handleRatingTap(at: location, in: geometry, plotFrame: plotFrame)
-                            }
-                        }
-                        .onAppear {
-                            chartProxy = proxy
-                        }
-                }
-            }
-            .chartLongPress(data: completeDistribution, color: .blue, chartProxy: chartProxy)
+            .chartYScale(domain: 0...(maxCount + 50))
+            .chartXSelection(value: $selectedRating)
             .padding(.horizontal, 12)
-            
+
             // Highest rating indicator
             if let highestRating = completeDistribution.max(by: { $0.count < $1.count }) {
                 HStack {
@@ -2088,11 +2391,7 @@ struct RatingDistributionChart: View {
                 }
                 .padding(.horizontal, 12)
             }
-            
-            if let selectedBar = selectedBar {
-                let labelText = "\(String(format: "%.1f", selectedBar.ratingValue))★: \(selectedBar.count) films"
-                SelectionInfoRow(text: labelText, color: .blue)
-            }
+
         }
         .padding(12)
         .background(
@@ -2123,29 +2422,19 @@ struct RatingDistributionChart: View {
                 )
         )
     }
-    
-    private func handleRatingTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, completeDistribution.count > 0 else { return }
-        
-        let step = frame.width / CGFloat(completeDistribution.count)
-        let index = Int(floor(relativeX / max(step, 1)))
-        
-        guard index >= 0, index < completeDistribution.count else { return }
-        let tappedItem = completeDistribution[index]
-        let same = (selectedBar?.ratingValue ?? -1) == tappedItem.ratingValue
-        selectedBar = same ? nil : tappedItem
-    }
 }
 
 // MARK: - Films by Decade Chart
 
 struct FilmsByDecadeChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let filmsByDecade: [FilmsByDecade]
-    @State private var selectedBar: FilmsByDecade?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedDecade: Double?
+
+    private var maxCount: Int {
+        filmsByDecade.map { $0.count }.max() ?? 0
+    }
+
     // Create complete decade range from 1920s to 2020s
     private var completeDecadeRange: [FilmsByDecade] {
         let decades = Array(stride(from: 1920, through: 2020, by: 10))
@@ -2157,7 +2446,12 @@ struct FilmsByDecadeChart: View {
             }
         }
     }
-    
+
+    private var selectedItem: FilmsByDecade? {
+        guard let decade = selectedDecade else { return nil }
+        return completeDecadeRange.first { $0.decade == Int(decade) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -2166,11 +2460,11 @@ struct FilmsByDecadeChart: View {
                 Text("Films by Decade")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             .padding(.horizontal, 12)
-            
+
             Chart(completeDecadeRange, id: \.decade) { item in
                 BarMark(
                     x: .value("Decade", item.decade),
@@ -2184,7 +2478,20 @@ struct FilmsByDecadeChart: View {
                     )
                 )
                 .cornerRadius(4)
-                .opacity(((selectedBar?.decade) ?? -1) == item.decade ? 0.8 : 1.0)
+                .opacity(selectedDecade == Double(item.decade) ? 0.7 : 1.0)
+
+                // Add visual indicator on selected bar
+                if let selectedDecade = selectedDecade, Int(selectedDecade) == item.decade {
+                    RuleMark(x: .value("Selected", item.decade))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.orange.opacity(0.5))
+                        .annotation(position: .top, spacing: 1) {
+                            Text("\(item.count)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.orange)
+                        }
+                }
             }
             .frame(height: 200)
             .chartXAxis {
@@ -2208,24 +2515,10 @@ struct FilmsByDecadeChart: View {
                         .font(.system(size: 10, design: .rounded))
                 }
             }
-            .chartBackground { proxy in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let plotFrame = proxy.plotFrame {
-                                handleDecadeTap(at: location, in: geometry, plotFrame: plotFrame)
-                            }
-                        }
-                        .onAppear {
-                            chartProxy = proxy
-                        }
-                }
-            }
-            .chartLongPress(data: completeDecadeRange, color: .orange, chartProxy: chartProxy)
+            .chartYScale(domain: 0...(maxCount + 50))
+            .chartXSelection(value: $selectedDecade)
             .padding(.horizontal, 12)
-            
+
             // Highest decade indicator
             if let highestDecade = completeDecadeRange.max(by: { $0.count < $1.count }) {
                 HStack {
@@ -2250,11 +2543,7 @@ struct FilmsByDecadeChart: View {
                 }
                 .padding(.horizontal, 12)
             }
-            
-            if let selectedBar = selectedBar {
-                let labelText = "\(selectedBar.decade)s: \(selectedBar.count) films"
-                SelectionInfoRow(text: labelText, color: .orange)
-            }
+
         }
         .padding(12)
         .background(
@@ -2285,40 +2574,30 @@ struct FilmsByDecadeChart: View {
                 )
         )
     }
-    
-    private func handleDecadeTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, completeDecadeRange.count > 0 else { return }
-        
-        let step = frame.width / CGFloat(completeDecadeRange.count)
-        let index = Int(floor(relativeX / max(step, 1)))
-        
-        guard index >= 0, index < completeDecadeRange.count else { return }
-        let tappedItem = completeDecadeRange[index]
-        let same = (selectedBar?.decade ?? -1) == tappedItem.decade
-        selectedBar = same ? nil : tappedItem
-    }
 }
 
 // MARK: - Day of Week Chart
 
 struct DayOfWeekChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let dayOfWeekPatterns: [DayOfWeekPattern]
-    @State private var selectedBar: DayOfWeekPattern?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedDay: Double?
+
     private var totalFilms: Int {
         dayOfWeekPatterns.reduce(0) { $0 + $1.count }
     }
     
+    private var maxCount: Int {
+        dayOfWeekPatterns.map { $0.count }.max() ?? 0
+    }
+
     // Create complete day range ordered from Monday to Sunday with day initials
     // Backend uses 0-6 (0=Sunday, 6=Saturday), frontend uses 1-7 (1=Monday, 7=Sunday)
     private var completeDayRange: [DayOfWeekPattern] {
         let dayMappings = [
             (1, "MON", 1), (2, "TUE", 2), (3, "WED", 3), (4, "THU", 4), (5, "FRI", 5), (6, "SAT", 6), (7, "SUN", 0)
         ]
-        
+
         return dayMappings.map { frontendDayNumber, initial, backendDayNumber in
             if let existing = dayOfWeekPatterns.first(where: { $0.dayNumber == backendDayNumber }) {
                 // Create new pattern with day initial for display and frontend day number
@@ -2328,7 +2607,12 @@ struct DayOfWeekChart: View {
             }
         }
     }
-    
+
+    private var selectedItem: DayOfWeekPattern? {
+        guard let day = selectedDay else { return nil }
+        return completeDayRange.first { $0.dayNumber == Int(day) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -2337,14 +2621,14 @@ struct DayOfWeekChart: View {
                 Text("Films by Day of Week")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
                 Text("\(totalFilms) films")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
             .padding(.horizontal, 12)
-            
+
             Chart(completeDayRange, id: \.dayNumber) { item in
                 BarMark(
                     x: .value("Day", item.dayNumber),
@@ -2358,7 +2642,20 @@ struct DayOfWeekChart: View {
                     )
                 )
                 .cornerRadius(4)
-                .opacity(((selectedBar?.dayNumber) ?? -1) == item.dayNumber ? 0.8 : 1.0)
+                .opacity(selectedDay == Double(item.dayNumber) ? 0.7 : 1.0)
+
+                // Add visual indicator on selected bar
+                if let selectedDay = selectedDay, Int(selectedDay) == item.dayNumber {
+                    RuleMark(x: .value("Selected", item.dayNumber))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.yellow.opacity(0.5))
+                        .annotation(position: .top, spacing: 1) {
+                            Text("\(item.count)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.yellow)
+                        }
+                }
             }
             .frame(height: 200)
             .chartXAxis {
@@ -2383,24 +2680,10 @@ struct DayOfWeekChart: View {
                         .font(.system(size: 10, design: .rounded))
                 }
             }
-            .chartBackground { proxy in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let plotFrame = proxy.plotFrame {
-                                handleDayTap(at: location, in: geometry, plotFrame: plotFrame)
-                            }
-                        }
-                        .onAppear {
-                            chartProxy = proxy
-                        }
-                }
-            }
-            .chartLongPress(data: completeDayRange, color: .yellow, chartProxy: chartProxy)
+            .chartYScale(domain: 0...(maxCount + 50))
+            .chartXSelection(value: $selectedDay)
             .padding(.horizontal, 12)
-            
+
             // Highest day indicator
             if let highestDay = completeDayRange.max(by: { $0.count < $1.count }) {
                 HStack {
@@ -2425,11 +2708,7 @@ struct DayOfWeekChart: View {
                 }
                 .padding(.horizontal, 12)
             }
-            
-            if let selectedBar = selectedBar {
-                let labelText = "\(selectedBar.dayOfWeek): \(selectedBar.count) films"
-                SelectionInfoRow(text: labelText, color: .yellow)
-            }
+
         }
         .padding(12)
         .background(
@@ -2460,44 +2739,34 @@ struct DayOfWeekChart: View {
                 )
         )
     }
-    
-    private func handleDayTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, completeDayRange.count > 0 else { return }
-        
-        let step = frame.width / CGFloat(completeDayRange.count)
-        let index = Int(floor(relativeX / max(step, 1)))
-        
-        guard index >= 0, index < completeDayRange.count else { return }
-        let tappedItem = completeDayRange[index]
-        let same = (selectedBar?.dayNumber ?? -1) == tappedItem.dayNumber
-        selectedBar = same ? nil : tappedItem
-    }
 }
 
 // MARK: - Films Per Year Chart
 
 struct FilmsPerYearChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let filmsPerYear: [FilmsPerYear]
-    @State private var selectedBar: FilmsPerYear?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedYear: Double?
+
     private var totalFilms: Int {
         let counts: [Int] = filmsPerYear.map { $0.count }
         return counts.reduce(0, +)
     }
     
+    private var maxCount: Int {
+        filmsPerYear.map { $0.count }.max() ?? 0
+    }
+
     private var yearRange: (min: Int, max: Int) {
         guard !filmsPerYear.isEmpty else { return (2020, 2025) }
         let years = filmsPerYear.map { $0.year }
         return (years.min() ?? 2020, years.max() ?? 2025)
     }
-    
+
     private var yearAxisValues: [Int] {
         let range = yearRange
         let span = range.max - range.min
-        
+
         // Determine appropriate interval based on span
         let interval: Int
         if span <= 3 {
@@ -2511,7 +2780,7 @@ struct FilmsPerYearChart: View {
         } else {
             interval = 10  // Show every 10 years for large spans
         }
-        
+
         // Generate values starting from the minimum year
         var values: [Int] = []
         var currentYear = range.min
@@ -2519,13 +2788,18 @@ struct FilmsPerYearChart: View {
             values.append(currentYear)
             currentYear += interval
         }
-        
+
         // Always include the max year if it's not already included
         if let lastValue = values.last, lastValue < range.max {
             values.append(range.max)
         }
-        
+
         return values
+    }
+
+    private var selectedItem: FilmsPerYear? {
+        guard let year = selectedYear else { return nil }
+        return filmsPerYear.first { $0.year == Int(year) }
     }
     
     var body: some View {
@@ -2536,7 +2810,7 @@ struct FilmsPerYearChart: View {
                 Text("Films Per Year")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
                 Text("\(totalFilms) films")
                     .font(.subheadline)
@@ -2557,7 +2831,20 @@ struct FilmsPerYearChart: View {
                     )
                 )
                 .cornerRadius(4)
-                .opacity(((selectedBar?.year) ?? -1) == item.year ? 0.8 : 1.0)
+                .opacity(selectedYear == Double(item.year) ? 0.7 : 1.0)
+
+                // Add visual indicator on selected bar
+                if let selectedYear = selectedYear, Int(selectedYear) == item.year {
+                    RuleMark(x: .value("Selected", item.year))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.green.opacity(0.5))
+                        .annotation(position: .top, spacing: 1) {
+                            Text("\(item.count)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.green)
+                        }
+                }
             }
             .frame(height: 200)
             .chartXAxis {
@@ -2581,22 +2868,8 @@ struct FilmsPerYearChart: View {
                         .font(.system(size: 10, design: .rounded))
                 }
             }
-            .chartBackground { proxy in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let plotFrame = proxy.plotFrame {
-                                handleYearTap(at: location, in: geometry, plotFrame: plotFrame)
-                            }
-                        }
-                        .onAppear {
-                            chartProxy = proxy
-                        }
-                }
-            }
-            .chartLongPress(data: filmsPerYear, color: .green, chartProxy: chartProxy)
+            .chartYScale(domain: 0...(maxCount + 50))
+            .chartXSelection(value: $selectedYear)
             .padding(.horizontal, 12)
             
             // Highest year indicator
@@ -2624,10 +2897,6 @@ struct FilmsPerYearChart: View {
                 .padding(.horizontal, 12)
             }
             
-            if let selectedBar = selectedBar {
-                let labelText = "\(selectedBar.year): \(selectedBar.count) films"
-                SelectionInfoRow(text: labelText, color: .green)
-            }
         }
         .padding(12)
         .background(
@@ -2658,43 +2927,324 @@ struct FilmsPerYearChart: View {
                 )
         )
     }
+}
+
+// MARK: - On Pace Chart
+
+struct OnPaceChart: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let yearlyPaceStats: YearlyPaceStats
     
-    private func handleYearTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, filmsPerYear.count > 0 else { return }
-        
-        let step = frame.width / CGFloat(filmsPerYear.count)
-        let index = Int(floor(relativeX / max(step, 1)))
-        
-        guard index >= 0, index < filmsPerYear.count else { return }
-        let tappedItem = filmsPerYear[index]
-        let same = (selectedBar?.year ?? -1) == tappedItem.year
-        selectedBar = same ? nil : tappedItem
+    @State private var projectionMethod: PaceProjectionMethod = .linear
+    @State private var selectedMonth: Double?
+    
+    private var chartData: [MonthlyPaceData] {
+        if yearlyPaceStats.isCurrentYear {
+            return projectionMethod == .linear 
+                ? (yearlyPaceStats.projectedLinear ?? yearlyPaceStats.monthlyData)
+                : (yearlyPaceStats.projectedSeasonal ?? yearlyPaceStats.monthlyData)
+        }
+        return yearlyPaceStats.monthlyData
+    }
+    
+    private var projectedEndOfYear: Int? {
+        if yearlyPaceStats.isCurrentYear {
+            return projectionMethod == .linear
+                ? yearlyPaceStats.projectedEndOfYearLinear
+                : yearlyPaceStats.projectedEndOfYearSeasonal
+        }
+        return nil
+    }
+    
+    private var maxCount: Int {
+        let actualMax = chartData.map { $0.cumulativeCount }.max() ?? 0
+        let historicalMax = yearlyPaceStats.historicalAverage.map { $0.cumulativeCount }.max() ?? 0
+        return max(actualMax, historicalMax)
+    }
+    
+    private var currentMonthCutoff: Int {
+        if yearlyPaceStats.isCurrentYear {
+            let calendar = Calendar.current
+            return calendar.component(.month, from: Date())
+        }
+        return 12
+    }
+    
+    private var selectedItem: (actual: MonthlyPaceData?, historical: MonthlyPaceData?)? {
+        guard let month = selectedMonth else { return nil }
+        let monthInt = Int(month)
+        let actual = chartData.first { $0.month == monthInt }
+        let historical = yearlyPaceStats.historicalAverage.first { $0.month == monthInt }
+        return (actual, historical)
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header with algorithm toggle
+            HStack {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .foregroundColor(.orange)
+                Text("On Pace")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                Spacer()
+                
+                if yearlyPaceStats.isCurrentYear {
+                    Picker("Method", selection: $projectionMethod) {
+                        ForEach(PaceProjectionMethod.allCases) { method in
+                            Text(method.rawValue).tag(method)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 140)
+                }
+            }
+            .padding(.horizontal, 12)
+            
+            // Chart
+            Chart {
+                // Historical average line (dashed)
+                ForEach(yearlyPaceStats.historicalAverage) { item in
+                    LineMark(
+                        x: .value("Month", item.month),
+                        y: .value("Cumulative", item.cumulativeCount),
+                        series: .value("Series", "Historical")
+                    )
+                    .foregroundStyle(.gray.opacity(0.7))
+                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                    .interpolationMethod(.catmullRom)
+                }
+                
+                // Actual data line
+                ForEach(yearlyPaceStats.monthlyData) { item in
+                    LineMark(
+                        x: .value("Month", item.month),
+                        y: .value("Cumulative", item.cumulativeCount),
+                        series: .value("Series", "Actual")
+                    )
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue, .cyan],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 3))
+                    .interpolationMethod(.catmullRom)
+                    
+                    // Area under actual line
+                    AreaMark(
+                        x: .value("Month", item.month),
+                        y: .value("Cumulative", item.cumulativeCount),
+                        series: .value("Series", "Actual")
+                    )
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue.opacity(0.3), .blue.opacity(0.05)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .interpolationMethod(.catmullRom)
+                }
+                
+                // Projection line (current year only)
+                if yearlyPaceStats.isCurrentYear {
+                    let projectionData = projectionMethod == .linear
+                        ? yearlyPaceStats.projectedLinear
+                        : yearlyPaceStats.projectedSeasonal
+                    
+                    if let projection = projectionData {
+                        ForEach(projection.filter { $0.month > currentMonthCutoff }) { item in
+                            LineMark(
+                                x: .value("Month", item.month),
+                                y: .value("Cumulative", item.cumulativeCount),
+                                series: .value("Series", "Projected")
+                            )
+                            .foregroundStyle(.orange.opacity(0.8))
+                            .lineStyle(StrokeStyle(lineWidth: 2, dash: [3, 3]))
+                            .interpolationMethod(.catmullRom)
+                        }
+                    }
+                }
+                
+                // Selection indicator
+                if let month = selectedMonth {
+                    RuleMark(x: .value("Selected", month))
+                        .lineStyle(StrokeStyle(lineWidth: 1.5))
+                        .foregroundStyle(.gray.opacity(0.5))
+                }
+            }
+            .frame(height: 220)
+            .chartXAxis {
+                AxisMarks(values: Array(1...12)) { value in
+                    AxisValueLabel {
+                        if let month = value.as(Int.self) {
+                            Text(monthShort(month))
+                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                .foregroundColor(.primary)
+                        }
+                    }
+                }
+            }
+            .chartXScale(domain: 0.5...12.5)
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                        .foregroundStyle(.gray.opacity(0.2))
+                    AxisValueLabel()
+                        .font(.system(size: 10, design: .rounded))
+                }
+            }
+            .chartYScale(domain: 0...(maxCount + 20))
+            .chartXSelection(value: $selectedMonth)
+            .sensoryFeedback(.selection, trigger: selectedMonth)
+            .padding(.horizontal, 12)
+            
+            // Legend
+            HStack(spacing: 16) {
+                LegendItem(color: .blue, label: yearlyPaceStats.isCurrentYear ? "Actual" : String(yearlyPaceStats.year))
+                LegendItem(color: .gray, label: "Historical Avg", isDashed: true)
+                if yearlyPaceStats.isCurrentYear {
+                    LegendItem(color: .orange, label: "Projected", isDashed: true)
+                }
+            }
+            .font(.caption2)
+            .padding(.horizontal, 12)
+            
+            // Projection summary (current year only)
+            if let projectedEnd = projectedEndOfYear {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 2) {
+                        Text("Projected Year End")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("\(projectedEnd) films")
+                            .font(.headline)
+                            .fontWeight(.bold)
+                            .foregroundColor(.orange)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.orange.opacity(0.1))
+                    )
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
+            
+            // Selection info
+            if let selection = selectedItem, let actual = selection.actual {
+                let historicalText = selection.historical.map { " | Hist: \($0.cumulativeCount)" } ?? ""
+                let labelText = "\(actual.monthName): \(actual.cumulativeCount) films\(historicalText)"
+                SelectionInfoRow(text: labelText, color: .blue)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 22)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.orange.opacity(0.05),
+                            Color.blue.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.orange.opacity(0.5),
+                            Color.blue.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.5
+                )
+        )
+    }
+    
+    private func monthShort(_ month: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        return String(formatter.shortMonthSymbols[month - 1].prefix(1))
+    }
+}
+
+// Helper view for chart legend
+private struct LegendItem: View {
+    let color: Color
+    let label: String
+    var isDashed: Bool = false
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            if isDashed {
+                DashedLine()
+                    .stroke(style: StrokeStyle(lineWidth: 2, dash: [3, 3]))
+                    .foregroundColor(color)
+                    .frame(width: 16, height: 2)
+            } else {
+                Rectangle()
+                    .fill(color)
+                    .frame(width: 16, height: 3)
+                    .cornerRadius(1.5)
+            }
+            Text(label)
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+private struct DashedLine: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return path
     }
 }
 
 // MARK: - Films per Month Chart
 
 struct FilmsPerMonthChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let filmsPerMonth: [FilmsPerMonth]
-    @State private var selectedBar: FilmsPerMonth?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedMonth: Double?
+
     private var totalFilms: Int {
         let counts: [Int] = filmsPerMonth.map { $0.count }
         return counts.reduce(0, +)
     }
     
+    private var maxCount: Int {
+        filmsPerMonth.map { $0.count }.max() ?? 0
+    }
+
     private var monthAxisValues: [Int] {
         guard !filmsPerMonth.isEmpty else { return Array(1...12) }
         return filmsPerMonth.map { $0.month }.sorted()
     }
-    
+
     private func monthName(for monthNumber: Int) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US")
         return formatter.shortMonthSymbols[monthNumber - 1]
+    }
+
+    private var selectedItem: FilmsPerMonth? {
+        guard let month = selectedMonth else { return nil }
+        return filmsPerMonth.first { $0.month == Int(month) }
     }
     
     var body: some View {
@@ -2705,7 +3255,7 @@ struct FilmsPerMonthChart: View {
                 Text("Films Per Month")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
                 Text("\(totalFilms) films")
                     .font(.subheadline)
@@ -2726,7 +3276,20 @@ struct FilmsPerMonthChart: View {
                     )
                 )
                 .cornerRadius(4)
-                .opacity(((selectedBar?.month) ?? -1) == item.month ? 0.8 : 1.0)
+                .opacity(selectedMonth == Double(item.month) ? 0.7 : 1.0)
+
+                // Add visual indicator on selected bar
+                if let selectedMonth = selectedMonth, Int(selectedMonth) == item.month {
+                    RuleMark(x: .value("Selected", item.month))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.blue.opacity(0.5))
+                        .annotation(position: .top, spacing: 4) {
+                            Text("\(item.count)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                        }
+                }
             }
             .frame(height: 200)
             .chartXAxis(.hidden)
@@ -2739,22 +3302,8 @@ struct FilmsPerMonthChart: View {
                         .font(.system(size: 10, design: .rounded))
                 }
             }
-            .chartBackground { proxy in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let plotFrame = proxy.plotFrame {
-                                handleMonthTap(at: location, in: geometry, plotFrame: plotFrame)
-                            }
-                        }
-                        .onAppear {
-                            chartProxy = proxy
-                        }
-                }
-            }
-            .chartLongPress(data: filmsPerMonth, color: .blue, chartProxy: chartProxy)
+            .chartYScale(domain: 0...(maxCount + 50))
+            .chartXSelection(value: $selectedMonth)
             .padding(.horizontal, 12)
             
             // Highest month indicator
@@ -2782,8 +3331,8 @@ struct FilmsPerMonthChart: View {
                 .padding(.horizontal, 12)
             }
             
-            if let selectedBar = selectedBar {
-                let labelText = "\(monthName(for: selectedBar.month)): \(selectedBar.count) films"
+            if let selectedItem = selectedItem {
+                let labelText = "\(monthName(for: selectedItem.month)): \(selectedItem.count) films"
                 SelectionInfoRow(text: labelText, color: .blue)
             }
         }
@@ -2816,35 +3365,24 @@ struct FilmsPerMonthChart: View {
                 )
         )
     }
-    
-    private func handleMonthTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, filmsPerMonth.count > 0 else { return }
-        
-        let step = frame.width / 12.0  // 12 months
-        let month = Int(round(relativeX / step)) + 1
-        
-        guard month >= 1, month <= 12 else { return }
-        guard let tappedItem = filmsPerMonth.first(where: { $0.month == month }) else { return }
-        
-        let same = (selectedBar?.month ?? -1) == tappedItem.month
-        selectedBar = same ? nil : tappedItem
-    }
 }
 
 // MARK: - Weekly Films Chart
 
 struct WeeklyFilmsChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let weeklyData: [WeeklyFilmsData]
     let selectedYear: Int
-    @State private var selectedBar: WeeklyFilmsData?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedWeek: Double?
+
     private var totalFilms: Int {
         weeklyData.reduce(0) { $0 + $1.count }
     }
     
+    private var maxCount: Int {
+        weeklyData.map { $0.count }.max() ?? 0
+    }
+
     private var chartXDomain: ClosedRange<Double> {
         let weekNumbers: [Int] = weeklyData.map { $0.weekNumber }
         let maxWeek: Int = weekNumbers.max() ?? 52
@@ -2852,6 +3390,11 @@ struct WeeklyFilmsChart: View {
         let upperBound: Double = Double(maxWeekPlusOne)
         let lowerBound: Double = 0
         return lowerBound...upperBound
+    }
+
+    private var selectedItem: WeeklyFilmsData? {
+        guard let week = selectedWeek else { return nil }
+        return weeklyData.first { $0.weekNumber == Int(week) || abs(Double($0.weekNumber) + 0.5 - week) < 0.6 }
     }
     
     var body: some View {
@@ -2903,7 +3446,7 @@ struct WeeklyFilmsChart: View {
             Text("Weekly Film Activity")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
             Text("\(totalFilms) films")
                 .font(.subheadline)
@@ -2916,6 +3459,20 @@ struct WeeklyFilmsChart: View {
         VStack(spacing: 8) {
             Chart(weeklyData, id: \.weekNumber) { item in
                 weeklyBarMark(for: item)
+
+                // Add visual indicator on selected bar
+                if let selectedWeek = selectedWeek,
+                   abs(Double(item.weekNumber) + 0.5 - selectedWeek) < 0.6 {
+                    RuleMark(x: .value("Selected", Double(item.weekNumber) + 0.5))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.purple.opacity(0.5))
+                        .annotation(position: .top, spacing: 4) {
+                            Text("\(item.count)")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.purple)
+                        }
+                }
             }
             .chartXScale(domain: chartXDomain)
             .frame(height: 200)
@@ -2925,10 +3482,8 @@ struct WeeklyFilmsChart: View {
             .chartYAxis {
                 weeklyYAxis
             }
-            .chartBackground { proxy in
-                weeklyChartBackground(proxy: proxy)
-            }
-            .chartLongPress(data: weeklyData, color: .purple, chartProxy: chartProxy)
+            .chartYScale(domain: 0...(maxCount + 50))
+            .chartXSelection(value: $selectedWeek)
             .padding(.horizontal, 12)
             
             // Highest week indicator
@@ -2962,10 +3517,10 @@ struct WeeklyFilmsChart: View {
         BarMark(
             x: .value("Week", Double(item.weekNumber) + 0.5),
             y: .value("Count", item.count),
-            width: .fixed(8)
+            width: .fixed(3)
         )
         .foregroundStyle(weeklyBarGradient)
-        .cornerRadius(4)
+        .cornerRadius(1)
         .opacity(weeklyBarOpacity(for: item))
     }
     
@@ -2978,8 +3533,9 @@ struct WeeklyFilmsChart: View {
     }
     
     private func weeklyBarOpacity(for item: WeeklyFilmsData) -> Double {
-        let isSelected = (selectedBar?.weekNumber ?? -1) == item.weekNumber
-        return isSelected ? 0.8 : 1.0
+        guard let selectedWeek = selectedWeek else { return 1.0 }
+        let isSelected = abs(Double(item.weekNumber) + 0.5 - selectedWeek) < 0.6
+        return isSelected ? 0.7 : 1.0
     }
     
     private var weeklyXAxis: some AxisContent {
@@ -2999,64 +3555,30 @@ struct WeeklyFilmsChart: View {
         }
     }
     
-    private func weeklyChartBackground(proxy: ChartProxy) -> some View {
-        GeometryReader { geometry in
-            Rectangle()
-                .fill(Color.clear)
-                .contentShape(Rectangle())
-                .onTapGesture { location in
-                    handleWeeklyTap(at: location, in: geometry, proxy: proxy)
-                }
-                .onAppear {
-                    chartProxy = proxy
-                }
-        }
-    }
-    
-    private func handleWeeklyTap(at location: CGPoint, in geometry: GeometryProxy, proxy: ChartProxy) {
-        if let plotFrame = proxy.plotFrame {
-            handleWeekTap(at: location, in: geometry, plotFrame: plotFrame)
-        }
-    }
-    
     @ViewBuilder
     private var weeklySelectionInfo: some View {
-        if let selectedBar = selectedBar {
-            let labelText = "\(selectedBar.weekLabel): \(selectedBar.count) films"
+        if let selectedItem = selectedItem {
+            let labelText = "\(selectedItem.weekLabel): \(selectedItem.count) films"
             SelectionInfoRow(text: labelText, color: .purple)
         }
     }
-    
+
     private var weeklyChartBackground: some View {
         RoundedRectangle(cornerRadius: 16)
             .fill(Color.black.opacity(0.85))
     }
-    
+
     private var weeklyChartOverlay: some View {
         RoundedRectangle(cornerRadius: 16)
             .stroke(weeklyOverlayGradient, lineWidth: 0.5)
     }
-    
+
     private var weeklyOverlayGradient: LinearGradient {
         LinearGradient(
             colors: [.white.opacity(0.1), .white.opacity(0.05)],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
-    }
-    
-    private func handleWeekTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, weeklyData.count > 0 else { return }
-        
-        let step = frame.width / CGFloat(weeklyData.count)
-        let index = Int(floor(relativeX / max(step, 1)))
-        
-        guard index >= 0, index < weeklyData.count else { return }
-        let tappedItem = weeklyData[index]
-        let same = (selectedBar?.weekNumber ?? -1) == tappedItem.weekNumber
-        selectedBar = same ? nil : tappedItem
     }
 }
 
@@ -3090,6 +3612,7 @@ struct ErrorView: View {
 // MARK: - Year Release Pie Chart
 
 struct YearReleasePieChart: View {
+    @Environment(\.colorScheme) private var colorScheme
     let yearReleaseStats: YearReleaseStats
     let selectedYear: Int
     @State private var selectedSlice: String?
@@ -3211,7 +3734,7 @@ struct YearReleasePieChart: View {
             Text("Release Year Distribution")
                 .font(.title2)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
             Text("\(totalFilms) total")
                 .font(.subheadline)
@@ -3480,9 +4003,6 @@ struct YearReleasePieChart: View {
                 showTooltip = true
                 longPressLocation = location
                 
-                // Trigger haptic feedback
-                let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-                impactFeedback.impactOccurred()
                 return
             }
         }
@@ -3494,6 +4014,7 @@ struct YearReleasePieChart: View {
 // MARK: - Top Watched Films Section
 
 struct TopWatchedFilmsSection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let topWatchedFilms: [TopWatchedFilm]
     
     var body: some View {
@@ -3510,7 +4031,7 @@ struct TopWatchedFilmsSection: View {
                     Text("Most Watched Films")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
                 Text("Your top 6 most logged films of all time")
                     .font(.subheadline)
@@ -3574,7 +4095,7 @@ struct TopWatchedFilmCard: View {
     let rank: Int
     @State private var selectedMovie: Movie?
     @State private var showingMovieDetails = false
-    @StateObject private var movieService = SupabaseMovieService.shared
+    @ObservedObject private var movieService = SupabaseMovieService.shared
     
     private var rankColor: Color {
         switch rank {
@@ -3664,6 +4185,7 @@ struct TopWatchedFilmCard: View {
 // MARK: - Advanced Film Journey Section
 
 struct AdvancedFilmJourneySection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let advancedStats: AdvancedFilmJourneyStats
     
     var body: some View {
@@ -3680,7 +4202,7 @@ struct AdvancedFilmJourneySection: View {
                     Text("More Statistics")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
                 Text("Additional insights into your viewing patterns")
                     .font(.subheadline)
@@ -3778,6 +4300,7 @@ struct AdvancedFilmJourneySection: View {
 // MARK: - Year-Filtered Advanced Film Journey Section
 
 struct YearFilteredAdvancedJourneySection: View {
+    @Environment(\.colorScheme) private var colorScheme
     let yearFilteredStats: YearFilteredAdvancedJourneyStats
     let selectedYear: Int
     
@@ -3795,7 +4318,7 @@ struct YearFilteredAdvancedJourneySection: View {
                     Text("More Statistics")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
                 Text("Additional insights into your viewing patterns")
                     .font(.subheadline)
@@ -3904,12 +4427,14 @@ struct YearFilteredAdvancedJourneySection: View {
 // MARK: - Uniform Stat Card
 
 struct UniformStatCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let title: String
     let value: String
     let subtitle: String?
     let icon: String
     let color: Color
-    
+
     private var borderGradient: [Color] {
         switch color {
         case .orange:  return [Color.orange, Color.red]
@@ -3970,7 +4495,7 @@ struct UniformStatCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial.opacity(0.4))
+                .fill(Color.adaptiveCardBackground(scheme: colorScheme))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -3991,17 +4516,21 @@ struct UniformStatCard: View {
 
 struct AverageStarRatingPerYearChart: View {
     let averageStarRatings: [AverageStarRatingPerYear]
-    @State private var selectedBar: AverageStarRatingPerYear?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedYear: Double?
+
     private var totalFilms: Int {
         averageStarRatings.reduce(0) { $0 + $1.count }
     }
-    
+
     private var yearRange: (min: Int, max: Int) {
         guard !averageStarRatings.isEmpty else { return (2020, 2025) }
         let years = averageStarRatings.map { $0.year }
         return (years.min() ?? 2020, years.max() ?? 2025)
+    }
+
+    private var selectedItem: AverageStarRatingPerYear? {
+        guard let year = selectedYear else { return nil }
+        return averageStarRatings.first { $0.year == Int(year) }
     }
     
     var body: some View {
@@ -4033,7 +4562,20 @@ struct AverageStarRatingPerYearChart: View {
                     )
                 )
                 .cornerRadius(4)
-                .opacity(((selectedBar?.year) ?? -1) == item.year ? 0.8 : 1.0)
+                .opacity(selectedYear == Double(item.year) ? 0.7 : 1.0)
+
+                // Add visual indicator on selected bar
+                if let selectedYear = selectedYear, Int(selectedYear) == item.year {
+                    RuleMark(x: .value("Selected", item.year))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.yellow.opacity(0.5))
+                        .annotation(position: .top, spacing: 1) {
+                            Text("\(String(format: "%.2f", item.averageRating))★")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.yellow)
+                        }
+                }
             }
             .frame(height: 200)
             .chartXAxis {
@@ -4058,22 +4600,8 @@ struct AverageStarRatingPerYearChart: View {
                 }
             }
             .chartYScale(domain: 0...5)
-            .chartBackground { proxy in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let plotFrame = proxy.plotFrame {
-                                handleYearTap(at: location, in: geometry, plotFrame: plotFrame)
-                            }
-                        }
-                        .onAppear {
-                            chartProxy = proxy
-                        }
-                }
-            }
-            .chartLongPress(data: averageStarRatings, color: .yellow, chartProxy: chartProxy)
+            .chartXSelection(value: $selectedYear)
+            .sensoryFeedback(.selection, trigger: selectedYear)
             .padding(.horizontal, 12)
             
             // Highest average rating year indicator
@@ -4101,10 +4629,6 @@ struct AverageStarRatingPerYearChart: View {
                 .padding(.horizontal, 12)
             }
             
-            if let selectedBar = selectedBar {
-                let labelText = "\(selectedBar.year): \(String(format: "%.2f", selectedBar.averageRating))★ (\(selectedBar.count) films)"
-                SelectionInfoRow(text: labelText, color: .yellow)
-            }
         }
         .padding(12)
         .background(
@@ -4135,37 +4659,27 @@ struct AverageStarRatingPerYearChart: View {
                 )
         )
     }
-    
-    private func handleYearTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, averageStarRatings.count > 0 else { return }
-        
-        let step = frame.width / CGFloat(averageStarRatings.count)
-        let index = Int(floor(relativeX / max(step, 1)))
-        
-        guard index >= 0, index < averageStarRatings.count else { return }
-        let tappedItem = averageStarRatings[index]
-        let same = (selectedBar?.year ?? -1) == tappedItem.year
-        selectedBar = same ? nil : tappedItem
-    }
 }
 
 // MARK: - Average Detailed Rating Per Year Chart
 
 struct AverageDetailedRatingPerYearChart: View {
     let averageDetailedRatings: [AverageDetailedRatingPerYear]
-    @State private var selectedBar: AverageDetailedRatingPerYear?
-    @State private var chartProxy: ChartProxy?
-    
+    @State private var selectedYear: Double?
+
     private var totalFilms: Int {
         averageDetailedRatings.reduce(0) { $0 + $1.count }
     }
-    
+
     private var yearRange: (min: Int, max: Int) {
         guard !averageDetailedRatings.isEmpty else { return (2020, 2025) }
         let years = averageDetailedRatings.map { $0.year }
         return (years.min() ?? 2020, years.max() ?? 2025)
+    }
+
+    private var selectedItem: AverageDetailedRatingPerYear? {
+        guard let year = selectedYear else { return nil }
+        return averageDetailedRatings.first { $0.year == Int(year) }
     }
     
     var body: some View {
@@ -4197,7 +4711,20 @@ struct AverageDetailedRatingPerYearChart: View {
                     )
                 )
                 .cornerRadius(4)
-                .opacity(((selectedBar?.year) ?? -1) == item.year ? 0.8 : 1.0)
+                .opacity(selectedYear == Double(item.year) ? 0.7 : 1.0)
+
+                // Add visual indicator on selected bar
+                if let selectedYear = selectedYear, Int(selectedYear) == item.year {
+                    RuleMark(x: .value("Selected", item.year))
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                        .foregroundStyle(.cyan.opacity(0.5))
+                        .annotation(position: .top, spacing: 1) {
+                            Text("\(String(format: "%.1f", item.averageRating))/100")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(.cyan)
+                        }
+                }
             }
             .frame(height: 200)
             .chartXAxis {
@@ -4222,22 +4749,8 @@ struct AverageDetailedRatingPerYearChart: View {
                 }
             }
             .chartYScale(domain: 0...100)
-            .chartBackground { proxy in
-                GeometryReader { geometry in
-                    Rectangle()
-                        .fill(Color.clear)
-                        .contentShape(Rectangle())
-                        .onTapGesture { location in
-                            if let plotFrame = proxy.plotFrame {
-                                handleYearTap(at: location, in: geometry, plotFrame: plotFrame)
-                            }
-                        }
-                        .onAppear {
-                            chartProxy = proxy
-                        }
-                }
-            }
-            .chartLongPress(data: averageDetailedRatings, color: .cyan, chartProxy: chartProxy)
+            .chartXSelection(value: $selectedYear)
+            .sensoryFeedback(.selection, trigger: selectedYear)
             .padding(.horizontal, 12)
             
             // Highest average detailed rating year indicator
@@ -4265,10 +4778,6 @@ struct AverageDetailedRatingPerYearChart: View {
                 .padding(.horizontal, 12)
             }
             
-            if let selectedBar = selectedBar {
-                let labelText = "\(selectedBar.year): \(String(format: "%.1f", selectedBar.averageRating))/100 (\(selectedBar.count) films)"
-                SelectionInfoRow(text: labelText, color: .cyan)
-            }
         }
         .padding(12)
         .background(
@@ -4298,20 +4807,6 @@ struct AverageDetailedRatingPerYearChart: View {
                     lineWidth: 0.5
                 )
         )
-    }
-    
-    private func handleYearTap(at location: CGPoint, in geometry: GeometryProxy, plotFrame: Anchor<CGRect>) {
-        let frame = geometry[plotFrame]
-        let relativeX = location.x - frame.origin.x
-        guard relativeX >= 0, relativeX <= frame.width, averageDetailedRatings.count > 0 else { return }
-        
-        let step = frame.width / CGFloat(averageDetailedRatings.count)
-        let index = Int(floor(relativeX / max(step, 1)))
-        
-        guard index >= 0, index < averageDetailedRatings.count else { return }
-        let tappedItem = averageDetailedRatings[index]
-        let same = (selectedBar?.year ?? -1) == tappedItem.year
-        selectedBar = same ? nil : tappedItem
     }
 }
 

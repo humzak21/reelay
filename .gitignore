@@ -4,10 +4,15 @@
 
 ## User settings
 xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
 
 ## macOS
 .DS_Store
 **/.DS_Store
+*.dmg
+*.pkg
 
 ## Obj-C/Swift specific
 *.hmap

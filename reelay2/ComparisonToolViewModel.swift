@@ -7,6 +7,67 @@
 
 import Foundation
 import Combine
+import SwiftUI
+
+// MARK: - Sentiment Enum
+
+/// Sentiment options for the sentiment-based comparison mode.
+/// Used when user doesn't provide a star rating upfront.
+enum Sentiment: CaseIterable {
+    case hate
+    case like
+    case love
+    
+    var displayName: String {
+        switch self {
+        case .hate: return "Hate"
+        case .like: return "Like"
+        case .love: return "Love"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .hate: return Color(red: 0.90, green: 0.22, blue: 0.21)   // Material Red 600
+        case .like: return Color(red: 0.98, green: 0.75, blue: 0.18)   // Material Yellow 700
+        case .love: return Color(red: 0.26, green: 0.63, blue: 0.28)   // Material Green 600
+        }
+    }
+    
+    var initialRating: Int {
+        switch self {
+        case .hate: return 39   // Top of 2-star range
+        case .like: return 54   // Middle of like range
+        case .love: return 70   // Bottom of 4+ star range
+        }
+    }
+    
+    var rangeMin: Int {
+        switch self {
+        case .hate: return 0
+        case .like: return 40
+        case .love: return 70
+        }
+    }
+    
+    var rangeMax: Int {
+        switch self {
+        case .hate: return 39
+        case .like: return 69
+        case .love: return 100
+        }
+    }
+    
+    var earlyExitMessage: String {
+        switch self {
+        case .hate: return "You don't dislike this film"
+        case .like: return "You might not just like this film"
+        case .love: return "You might not love this film"
+        }
+    }
+}
+
+// MARK: - ViewModel
 
 /// ViewModel for the interactive film comparison tool.
 /// Manages the comparison algorithm and state using a binary ladder approach.
@@ -18,7 +79,7 @@ final class ComparisonToolViewModel: ObservableObject {
     /// The current movie being shown for comparison
     @Published private(set) var currentPromptedMovie: Movie?
     
-    /// Current comparison number (1-5)
+    /// Current comparison number (1-5 for standard, 1-10 for sentiment)
     @Published private(set) var currentComparisonNumber: Int = 1
     
     /// The target rating we're narrowing in on
@@ -39,13 +100,33 @@ final class ComparisonToolViewModel: ObservableObject {
     /// Whether there are enough movies to perform comparison
     @Published private(set) var hasEnoughMovies: Bool = true
     
+    // MARK: - Sentiment Mode Properties
+    
+    /// Whether we're in sentiment mode (no star rating provided)
+    @Published private(set) var isSentimentMode: Bool = false
+    
+    /// The selected sentiment (Hate/Like/Love)
+    @Published private(set) var selectedSentiment: Sentiment?
+    
+    /// Whether to show the sentiment selection screen
+    @Published private(set) var showSentimentSelection: Bool = false
+    
+    /// Whether an early exit was triggered (user preferred prompted film on first comparison)
+    @Published private(set) var earlyExitTriggered: Bool = false
+    
+    /// Message to show on early exit
+    @Published private(set) var earlyExitMessage: String?
+    
     // MARK: - Private Properties
     
-    /// Total number of comparisons
-    private let totalComparisons = 5
+    /// Total number of comparisons (5 for standard, 10 for sentiment)
+    private var totalComparisons: Int = 5
     
     /// All movies available in the rating range
     private var moviesInRange: [Movie]
+    
+    /// All movies pool (for sentiment mode filtering)
+    private var allMoviesPool: [Movie] = []
     
     /// Movies grouped by their detailed rating
     private var moviesByRating: [Int: [Movie]] = [:]
@@ -57,8 +138,8 @@ final class ComparisonToolViewModel: ObservableObject {
     private var usedMovieIds: Set<Int> = []
     
     /// The rating range boundaries
-    private let minRating: Int
-    private let maxRating: Int
+    private var minRating: Int
+    private var maxRating: Int
     
     // MARK: - Types
     
@@ -72,12 +153,13 @@ final class ComparisonToolViewModel: ObservableObject {
     
     // MARK: - Initialization
     
-    /// Initialize the comparison tool with a star rating and available movies
+    /// Initialize the comparison tool with a star rating and available movies (standard mode)
     /// - Parameters:
     ///   - starRating: The user's star rating (0.5 - 5.0)
     ///   - moviesInRange: All movies within the appropriate detailed rating range
     init(starRating: Double, moviesInRange: [Movie]) {
         self.moviesInRange = moviesInRange
+        self.isSentimentMode = false
         
         // Determine rating range based on star rating
         let range = Self.getRatingRange(for: starRating)
@@ -99,6 +181,64 @@ final class ComparisonToolViewModel: ObservableObject {
         }
     }
     
+    /// Initialize for sentiment mode (no star rating provided)
+    /// - Parameter moviesPool: All rated movies to filter from when sentiment is selected
+    init(moviesPool: [Movie]) {
+        self.moviesInRange = []
+        self.allMoviesPool = moviesPool
+        self.minRating = 0
+        self.maxRating = 100
+        self.targetRating = 0
+        self.isSentimentMode = true
+        self.showSentimentSelection = true
+        self.totalComparisons = 10
+    }
+    
+    // MARK: - Sentiment Mode Methods
+    
+    /// User selected a sentiment (Hate/Like/Love)
+    func selectSentiment(_ sentiment: Sentiment) {
+        selectedSentiment = sentiment
+        showSentimentSelection = false
+        
+        // Set range based on sentiment
+        minRating = sentiment.rangeMin
+        maxRating = sentiment.rangeMax
+        targetRating = sentiment.initialRating
+        totalComparisons = 10
+        
+        // Filter movies to the selected range
+        moviesInRange = allMoviesPool.filter { movie in
+            guard let rating = movie.detailed_rating else { return false }
+            let ratingInt = Int(rating)
+            return ratingInt >= sentiment.rangeMin && ratingInt <= sentiment.rangeMax
+        }
+        
+        // Regroup movies by rating
+        groupMoviesByRating()
+        
+        // Check if we have enough movies
+        hasEnoughMovies = !moviesInRange.isEmpty
+        
+        if hasEnoughMovies {
+            selectNextMovie()
+        }
+    }
+    
+    /// Return to sentiment selection after early exit
+    func returnToSentimentSelection() {
+        showSentimentSelection = true
+        selectedSentiment = nil
+        earlyExitTriggered = false
+        earlyExitMessage = nil
+        currentComparisonNumber = 1
+        isComplete = false
+        finalRating = nil
+        historyStack.removeAll()
+        usedMovieIds.removeAll()
+        currentPromptedMovie = nil
+    }
+    
     // MARK: - Public Methods
     
     /// User selected their film as better (new film > prompted film)
@@ -107,6 +247,17 @@ final class ComparisonToolViewModel: ObservableObject {
         
         // Save current state for undo
         saveState()
+        
+        // First prompt special case for Hate sentiment
+        // If user prefers their film over a hate-range film, they don't actually hate it
+        if currentComparisonNumber == 1 {
+            if isSentimentMode, let sentiment = selectedSentiment, sentiment == .hate {
+                // Hate mode: picking their film means they don't hate it - trigger early exit
+                earlyExitTriggered = true
+                earlyExitMessage = sentiment.earlyExitMessage
+                return
+            }
+        }
         
         // Increment the target rating (move up the ladder)
         let step = calculateStep()
@@ -123,15 +274,26 @@ final class ComparisonToolViewModel: ObservableObject {
         // Save current state for undo
         saveState()
         
-        // Special case: On the FIRST prompt, if prompted film is better,
-        // the user's film is at the bottom of the range - complete immediately
+        // First prompt special case
         if currentComparisonNumber == 1 {
-            finalRating = minRating
-            isComplete = true
-            return
+            if isSentimentMode, let sentiment = selectedSentiment {
+                // For Hate: picking prompted film means theirs is worse - continue normally (go down)
+                // For Like/Love: picking prompted film means they don't truly like/love it - early exit
+                if sentiment != .hate {
+                    earlyExitTriggered = true
+                    earlyExitMessage = sentiment.earlyExitMessage
+                    return
+                }
+                // Hate continues below to decrement rating
+            } else {
+                // Standard mode: complete immediately at minimum
+                finalRating = minRating
+                isComplete = true
+                return
+            }
         }
         
-        // For subsequent prompts (2-5), decrement the rating and continue
+        // For subsequent prompts, decrement the rating and continue
         let step = calculateStep()
         targetRating = max(targetRating - step, minRating)
         
@@ -184,6 +346,10 @@ final class ComparisonToolViewModel: ObservableObject {
         // Reset completion if we were complete
         isComplete = false
         finalRating = nil
+        
+        // Reset early exit if triggered
+        earlyExitTriggered = false
+        earlyExitMessage = nil
     }
     
     /// Check if undo is available
@@ -220,35 +386,95 @@ final class ComparisonToolViewModel: ObservableObject {
     
     /// Select the next movie to compare against
     private func selectNextMovie() {
-        // Try to find a movie at the target rating
-        if let movie = findMovieAtRating(targetRating) {
-            currentPromptedMovie = movie
-            return
-        }
-        
-        // If no movie at exact rating, search nearby ratings
-        for offset in 1...5 {
-            // Try higher rating first
-            if let movie = findMovieAtRating(targetRating + offset) {
+        if isSentimentMode {
+            // Sentiment mode: pick from across the entire range for variety
+            // Try to find a movie in a wider search area
+            let searchOrder = generateRandomSearchOrder()
+            
+            for offset in searchOrder {
+                if let movie = findMovieAtRating(targetRating + offset) {
+                    currentPromptedMovie = movie
+                    return
+                }
+            }
+            
+            // If still no movie found, try any unused movie in range
+            let shuffledMovies = moviesInRange.shuffled()
+            if let movie = shuffledMovies.first(where: { !usedMovieIds.contains($0.id) }) {
                 currentPromptedMovie = movie
                 return
             }
-            // Then try lower rating
-            if let movie = findMovieAtRating(targetRating - offset) {
+        } else {
+            // Standard mode: search near target rating
+            if let movie = findMovieAtRating(targetRating) {
                 currentPromptedMovie = movie
                 return
             }
-        }
-        
-        // If still no movie found, try any unused movie
-        if let movie = moviesInRange.first(where: { !usedMovieIds.contains($0.id) }) {
-            currentPromptedMovie = movie
-            return
+            
+            // If no movie at exact rating, search nearby ratings
+            for offset in 1...5 {
+                if let movie = findMovieAtRating(targetRating + offset) {
+                    currentPromptedMovie = movie
+                    return
+                }
+                if let movie = findMovieAtRating(targetRating - offset) {
+                    currentPromptedMovie = movie
+                    return
+                }
+            }
+            
+            // If still no movie found, try any unused movie
+            if let movie = moviesInRange.first(where: { !usedMovieIds.contains($0.id) }) {
+                currentPromptedMovie = movie
+                return
+            }
         }
         
         // No more movies available - complete with current rating
         finalRating = targetRating
         isComplete = true
+    }
+    
+    /// Generate a randomized search order for finding movies in sentiment mode
+    /// Prioritizes ratings closer to target but includes variety
+    private func generateRandomSearchOrder() -> [Int] {
+        var offsets: [Int] = [0]  // Always try exact match first
+        
+        // Add offsets in both directions, shuffled to add variety
+        let maxOffset = min(10, max(targetRating - minRating, maxRating - targetRating))
+        var positiveOffsets: [Int] = []
+        var negativeOffsets: [Int] = []
+        
+        for i in 1...maxOffset {
+            if targetRating + i <= maxRating {
+                positiveOffsets.append(i)
+            }
+            if targetRating - i >= minRating {
+                negativeOffsets.append(-i)
+            }
+        }
+        
+        // Shuffle and interleave for variety
+        positiveOffsets.shuffle()
+        negativeOffsets.shuffle()
+        
+        while !positiveOffsets.isEmpty || !negativeOffsets.isEmpty {
+            if Bool.random() {
+                if let offset = positiveOffsets.popLast() {
+                    offsets.append(offset)
+                } else if let offset = negativeOffsets.popLast() {
+                    offsets.append(offset)
+                }
+            } else {
+                if let offset = negativeOffsets.popLast() {
+                    offsets.append(offset)
+                } else if let offset = positiveOffsets.popLast() {
+                    offsets.append(offset)
+                }
+            }
+        }
+        
+        return offsets
     }
     
     /// Find a random unused movie at a specific rating
@@ -298,15 +524,36 @@ final class ComparisonToolViewModel: ObservableObject {
     }
     
     /// Calculate the step size for rating increment
-    /// Uses smaller steps as we get more comparisons to narrow down
+    /// Uses randomized steps that get smaller as comparisons progress for fine-tuning
     private func calculateStep() -> Int {
-        // Start with larger steps, reduce as we progress
-        switch currentComparisonNumber {
-        case 1: return 3
-        case 2: return 2
-        case 3: return 2
-        case 4: return 1
-        default: return 1
+        if isSentimentMode {
+            // Sentiment mode: 10 comparisons with randomized steps
+            // Early: large random steps to explore range
+            // Middle: medium steps to narrow down  
+            // Late: small steps to fine-tune
+            
+            switch currentComparisonNumber {
+            case 1, 2, 3:
+                // Early comparisons: large random steps (4-8)
+                return Int.random(in: 4...8)
+            case 4, 5, 6:
+                // Middle comparisons: medium random steps (2-5)
+                return Int.random(in: 2...5)
+            case 7, 8:
+                // Late comparisons: smaller random steps (1-3)
+                return Int.random(in: 1...3)
+            default:
+                // Final comparisons: fine-tuning (1-2)
+                return Int.random(in: 1...2)
+            }
+        } else {
+            // Standard mode: 5 comparisons with slight randomness
+            switch currentComparisonNumber {
+            case 1: return Int.random(in: 2...4)
+            case 2: return Int.random(in: 2...3)
+            case 3: return Int.random(in: 1...2)
+            default: return 1
+            }
         }
     }
     

@@ -12,8 +12,8 @@ struct AlbumDetailsView: View {
     let album: Album
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @StateObject private var albumService = SupabaseAlbumService.shared
-    @StateObject private var spotifyService = SpotifyService.shared
+    @ObservedObject private var albumService = SupabaseAlbumService.shared
+    @ObservedObject private var spotifyService = SpotifyService.shared
     @State private var currentAlbum: Album
     @State private var showingDeleteAlert = false
     @State private var isDeletingAlbum = false
@@ -27,8 +27,16 @@ struct AlbumDetailsView: View {
         self._currentAlbum = State(initialValue: album)
     }
     
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
+    
     private var appBackground: Color {
-        colorScheme == .dark ? .black : Color(.systemBackground)
+        #if canImport(UIKit)
+        colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+        #else
+        colorScheme == .dark ? .black : Color(.windowBackgroundColor)
+        #endif
     }
     
     var body: some View {
@@ -73,18 +81,24 @@ struct AlbumDetailsView: View {
             .background(appBackground.ignoresSafeArea())
             .ignoresSafeArea(edges: .top)
             .navigationTitle("Album Details")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
-            
+            #endif
+
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button(action: {
+                        #if os(iOS)
                         dismiss()
+                        #else
+                        navigationCoordinator.clearDetail()
+                        #endif
                     }) {
                         Image(systemName: "xmark")
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     HStack(spacing: 16) {
                         Button(action: {
                             Task {
@@ -219,13 +233,13 @@ struct AlbumDetailsView: View {
                 if let year = currentAlbum.release_year {
                     Text(String(year))
                         .font(.subheadline)
-                        .foregroundColor(Color(.tertiaryLabel))
+                        .foregroundColor(.secondary.opacity(0.7))
                 }
                 
                 if !currentAlbum.genreArray.isEmpty {
                     Text(currentAlbum.formattedGenres)
                         .font(.caption)
-                        .foregroundColor(Color(.tertiaryLabel))
+                        .foregroundColor(.secondary.opacity(0.7))
                         .lineLimit(2)
                 }
             }
@@ -318,7 +332,7 @@ struct AlbumDetailsView: View {
             }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(Color.gray.opacity(0.12))
         .cornerRadius(12)
     }
     
@@ -339,7 +353,7 @@ struct AlbumDetailsView: View {
                     }
                 }
             }
-            .background(Color(.systemGray6))
+            .background(Color.gray.opacity(0.12))
             .cornerRadius(12)
         }
     }
@@ -764,15 +778,17 @@ struct ChangeAlbumStatusSheet: View {
                 Spacer()
             }
             .navigationTitle("Change Status")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save", systemImage: "checkmark") {
                         onSave(selectedStatus, selectedStatus == .listened ? listenedDate : nil)
                     }

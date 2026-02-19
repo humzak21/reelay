@@ -87,6 +87,23 @@ struct FilmsPerYear: Codable, Sendable {
     }
 }
 
+// MARK: - Films by Release Year
+struct FilmsByReleaseYear: Codable, Sendable {
+    let releaseYear: Int
+    let filmCount: Int
+    let percentage: Double
+    
+    enum CodingKeys: String, CodingKey {
+        case releaseYear = "release_year"
+        case filmCount = "film_count"
+        case percentage
+    }
+    
+    // Computed properties for chart display
+    var year: Int { releaseYear }
+    var count: Int { filmCount }
+}
+
 // MARK: - Simple Films by Decade
 struct FilmsByDecade: Codable, Sendable {
     let decade: Int
@@ -407,6 +424,36 @@ struct StreakStats: Codable, Sendable {
     var isActive: Bool { isCurrentStreakActive }
 }
 
+// MARK: - Weekly Streak Statistics
+struct WeeklyStreakStats: Codable, Sendable {
+    let longestWeeklyStreakWeeks: Int
+    let longestWeeklyStreakStartDate: String?
+    let longestWeeklyStreakEndDate: String?
+    let currentWeeklyStreakWeeks: Int
+    let currentWeeklyStreakStartDate: String?
+    let currentWeeklyStreakEndDate: String?
+    let isCurrentWeeklyStreakActive: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case longestWeeklyStreakWeeks = "longest_weekly_streak_weeks"
+        case longestWeeklyStreakStartDate = "longest_weekly_streak_start_date"
+        case longestWeeklyStreakEndDate = "longest_weekly_streak_end_date"
+        case currentWeeklyStreakWeeks = "current_weekly_streak_weeks"
+        case currentWeeklyStreakStartDate = "current_weekly_streak_start_date"
+        case currentWeeklyStreakEndDate = "current_weekly_streak_end_date"
+        case isCurrentWeeklyStreakActive = "is_current_weekly_streak_active"
+    }
+    
+    // Computed properties for UI display
+    var longestStreak: Int { longestWeeklyStreakWeeks }
+    var currentStreak: Int { currentWeeklyStreakWeeks }
+    var longestStartDate: String { longestWeeklyStreakStartDate ?? "" }
+    var longestEndDate: String { longestWeeklyStreakEndDate ?? "" }
+    var currentStartDate: String { currentWeeklyStreakStartDate ?? "" }
+    var currentEndDate: String { currentWeeklyStreakEndDate ?? "" }
+    var isActive: Bool { isCurrentWeeklyStreakActive }
+}
+
 // MARK: - Weekly Films Data
 struct WeeklyFilmsData: Codable, Sendable {
     let year: Int
@@ -542,12 +589,6 @@ struct AverageStarRatingPerYear: Codable, Sendable {
     var count: Int { filmCount }
 }
 
-extension AverageStarRatingPerYear: ChartDataItem {
-    var displayLabel: String { String(year) }
-    var displayValue: String { String(format: "%.2f★", averageStarRating) }
-    var xValue: Double { Double(year) }
-}
-
 struct AverageDetailedRatingPerYear: Codable, Sendable {
     let year: Int
     let averageDetailedRating: Double
@@ -563,8 +604,61 @@ struct AverageDetailedRatingPerYear: Codable, Sendable {
     var count: Int { filmCount }
 }
 
-extension AverageDetailedRatingPerYear: ChartDataItem {
-    var displayLabel: String { String(year) }
-    var displayValue: String { String(format: "%.1f/100", averageDetailedRating) }
-    var xValue: Double { Double(year) }
+// MARK: - On Pace Chart Models
+
+/// Projection method for current year pace estimation
+enum PaceProjectionMethod: String, CaseIterable, Identifiable {
+    case linear = "Linear"
+    case seasonal = "Seasonal"
+    
+    var id: String { rawValue }
+    
+    var description: String {
+        switch self {
+        case .linear:
+            return "Projects based on daily average"
+        case .seasonal:
+            return "Adjusts for monthly patterns"
+        }
+    }
+}
+
+/// Monthly cumulative film count for tracking pace
+struct MonthlyPaceData: Codable, Sendable, Identifiable {
+    let month: Int              // 1-12
+    let monthName: String
+    let filmCount: Int          // Films watched in this month
+    let cumulativeCount: Int    // Total films from Jan through this month
+    
+    var id: Int { month }
+    
+    enum CodingKeys: String, CodingKey {
+        case month
+        case monthName = "month_name"
+        case filmCount = "film_count"
+        case cumulativeCount = "cumulative_count"
+    }
+}
+
+/// Complete pace statistics for a year with projections
+struct YearlyPaceStats: Codable, Sendable {
+    let year: Int
+    let isCurrentYear: Bool
+    let monthlyData: [MonthlyPaceData]              // Actual monthly data
+    let projectedLinear: [MonthlyPaceData]?         // Linear projection (current year only)
+    let projectedSeasonal: [MonthlyPaceData]?       // Seasonal projection (current year only)
+    let historicalAverage: [MonthlyPaceData]        // Historical average cumulative per month
+    let projectedEndOfYearLinear: Int?              // Projected films by Dec 31 (linear)
+    let projectedEndOfYearSeasonal: Int?            // Projected films by Dec 31 (seasonal)
+    
+    enum CodingKeys: String, CodingKey {
+        case year
+        case isCurrentYear = "is_current_year"
+        case monthlyData = "monthly_data"
+        case projectedLinear = "projected_linear"
+        case projectedSeasonal = "projected_seasonal"
+        case historicalAverage = "historical_average"
+        case projectedEndOfYearLinear = "projected_end_of_year_linear"
+        case projectedEndOfYearSeasonal = "projected_end_of_year_seasonal"
+    }
 }

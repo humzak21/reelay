@@ -17,8 +17,8 @@ struct ComparisonToolView: View {
     /// The movie the user is trying to rate
     let movieToRate: TMDBMovie
     
-    /// The star rating the user has already set
-    let starRating: Double
+    /// The star rating the user has already set (nil for sentiment mode)
+    let starRating: Double?
     
     /// Movies in the appropriate rating range for comparison
     let moviesInRange: [Movie]
@@ -38,7 +38,7 @@ struct ComparisonToolView: View {
     
     init(
         movieToRate: TMDBMovie,
-        starRating: Double,
+        starRating: Double?,
         moviesInRange: [Movie],
         onComplete: @escaping (Int) -> Void,
         onDismiss: @escaping () -> Void
@@ -49,11 +49,19 @@ struct ComparisonToolView: View {
         self.onComplete = onComplete
         self.onDismiss = onDismiss
         
-        // Initialize ViewModel
-        _viewModel = StateObject(wrappedValue: ComparisonToolViewModel(
-            starRating: starRating,
-            moviesInRange: moviesInRange
-        ))
+        // Initialize ViewModel based on mode
+        if let starRating = starRating, starRating > 0 {
+            // Standard mode: use star rating to determine range
+            _viewModel = StateObject(wrappedValue: ComparisonToolViewModel(
+                starRating: starRating,
+                moviesInRange: moviesInRange
+            ))
+        } else {
+            // Sentiment mode: show sentiment selection first
+            _viewModel = StateObject(wrappedValue: ComparisonToolViewModel(
+                moviesPool: moviesInRange
+            ))
+        }
     }
     
     // MARK: - Body
@@ -65,7 +73,12 @@ struct ComparisonToolView: View {
                 backgroundColor
                     .ignoresSafeArea()
                 
-                if !viewModel.hasEnoughMovies {
+                // Content based on current state
+                if viewModel.showSentimentSelection {
+                    sentimentSelectionView
+                } else if viewModel.earlyExitTriggered {
+                    earlyExitView
+                } else if !viewModel.hasEnoughMovies {
                     noMoviesView
                 } else if viewModel.isComplete {
                     completionView
@@ -73,32 +86,147 @@ struct ComparisonToolView: View {
                     comparisonContent
                 }
             }
-            .navigationTitle("Compare")
+            .navigationTitle(navigationTitle)
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button(action: onDismiss) {
                         Image(systemName: "xmark")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundColor(.primary)
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Text(viewModel.progressText)
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
+
+                // Only show progress when in comparison mode
+                if !viewModel.showSentimentSelection && !viewModel.earlyExitTriggered && !viewModel.isComplete && viewModel.hasEnoughMovies {
+                    ToolbarItem(placement: .automatic) {
+                        Text(viewModel.progressText)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
+        }
+    }
+    
+    // MARK: - Computed Properties
+    
+    private var navigationTitle: String {
+        if viewModel.showSentimentSelection {
+            return "How do you feel?"
+        } else {
+            return "Compare"
         }
     }
     
     // MARK: - Subviews
     
     private var backgroundColor: Color {
-        colorScheme == .dark ? Color.black : Color(.systemBackground)
+        #if os(macOS)
+        colorScheme == .dark ? Color.black : Color(NSColor.windowBackgroundColor)
+        #else
+        colorScheme == .dark ? Color.black : Color(.systemGroupedBackground)
+        #endif
     }
+    
+    // MARK: - Sentiment Selection View
+    
+    private var sentimentSelectionView: some View {
+        VStack(spacing: 0) {
+            Spacer()
+            
+            // Title
+            VStack(spacing: 8) {
+                Text("How do you feel about")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+                
+                Text(movieToRate.title)
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, 24)
+            }
+            
+            Spacer()
+            
+            // Sentiment buttons
+            VStack(spacing: 16) {
+                ForEach(Sentiment.allCases, id: \.self) { sentiment in
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            viewModel.selectSentiment(sentiment)
+                        }
+                    }) {
+                        Text(sentiment.displayName)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 72)
+                            .background(sentiment.color)
+                            .cornerRadius(16)
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            
+            Spacer()
+        }
+    }
+    
+    // MARK: - Early Exit View
+    
+    private var earlyExitView: some View {
+        VStack(spacing: 32) {
+            Spacer()
+            
+            // Info icon
+            Image(systemName: "info.circle.fill")
+                .font(.system(size: 80))
+                .foregroundColor(.blue)
+            
+            // Message
+            Text(viewModel.earlyExitMessage ?? "")
+                .font(.title2)
+                .fontWeight(.medium)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            
+            Spacer()
+            
+            // Buttons
+            VStack(spacing: 16) {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        viewModel.returnToSentimentSelection()
+                    }
+                }) {
+                    Text("Try a different feeling")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 56)
+                        .background(Color.purple)
+                        .cornerRadius(16)
+                }
+                
+                Button(action: onDismiss) {
+                    Text("Cancel")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 32)
+        }
+    }
+    
+    // MARK: - Comparison Content
     
     private var comparisonContent: some View {
         VStack(spacing: 0) {
@@ -322,22 +450,41 @@ struct ComparisonToolView: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.primary)
             
-            Text("You need to rate more films in this star range before using the comparison tool.")
+            Text(viewModel.isSentimentMode 
+                 ? "You need to rate more films in this feeling range before using the comparison tool."
+                 : "You need to rate more films in this star range before using the comparison tool.")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
             
+            if viewModel.isSentimentMode {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        viewModel.returnToSentimentSelection()
+                    }
+                }) {
+                    Text("Try a different feeling")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 40)
+                        .padding(.vertical, 12)
+                        .background(Color.purple)
+                        .cornerRadius(25)
+                }
+                .padding(.top, 12)
+            }
+            
             Button(action: onDismiss) {
-                Text("Got it")
+                Text(viewModel.isSentimentMode ? "Cancel" : "Got it")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(viewModel.isSentimentMode ? .secondary : .white)
                     .padding(.horizontal, 40)
                     .padding(.vertical, 12)
-                    .background(Color.purple)
+                    .background(viewModel.isSentimentMode ? Color.clear : Color.purple)
                     .cornerRadius(25)
             }
-            .padding(.top, 12)
+            .padding(.top, viewModel.isSentimentMode ? 0 : 12)
         }
     }
     
@@ -402,7 +549,7 @@ struct ComparisonToolView: View {
             adult: nil,
             video: nil
         ),
-        starRating: 4.0,
+        starRating: nil, // Sentiment mode
         moviesInRange: [],
         onComplete: { _ in },
         onDismiss: { }

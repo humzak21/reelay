@@ -10,13 +10,21 @@ import SDWebImageSwiftUI
 
 struct AddMoviesView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var tmdbService = TMDBService.shared
-    @StateObject private var supabaseService = SupabaseMovieService.shared
-    @StateObject private var watchlistService = SupabaseWatchlistService.shared
-    @StateObject private var dataManager = DataManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    // Use direct references to singletons instead of @StateObject
+    private let tmdbService = TMDBService.shared
+    private let supabaseService = SupabaseMovieService.shared
+    private let watchlistService = SupabaseWatchlistService.shared
+    private let dataManager = DataManager.shared
+    private let draftManager = DraftManager.shared
     
     // Optional pre-selected movie for "Log Again" functionality
     let preSelectedMovie: TMDBMovie?
+    
+    // Optional preset values for watch date and tags (e.g., from Theater Planner "Complete & Log")
+    let presetWatchDate: Date?
+    let presetTags: String?
     
     // Search state
     @State private var searchText = ""
@@ -25,8 +33,10 @@ struct AddMoviesView: View {
     @State private var selectedMovie: TMDBMovie?
     @State private var searchTask: Task<Void, Never>?
     
-    init(preSelectedMovie: TMDBMovie? = nil) {
+    init(preSelectedMovie: TMDBMovie? = nil, presetWatchDate: Date? = nil, presetTags: String? = nil) {
         self.preSelectedMovie = preSelectedMovie
+        self.presetWatchDate = presetWatchDate
+        self.presetTags = presetTags
     }
     
     // Movie details state
@@ -50,6 +60,7 @@ struct AddMoviesView: View {
     @State private var isLoadingMoreMovies = false
     @State private var previousWatches: [Movie] = []
     @State private var showingPreviousWatches = false
+    @State private var showingReviewEditor = false
     @State private var isAddingMovie = false
     @State private var showingAlert = false
     @State private var alertMessage = ""
@@ -71,6 +82,17 @@ struct AddMoviesView: View {
     @State private var comparisonMoviesPool: [Movie] = []
     @State private var isLoadingComparisonMovies = false
     
+    // Drafts state
+    @State private var showResumeDraftDialog = false
+    @State private var pendingDraft: MovieDraft?
+    @State private var showDraftsSheet = false
+    @State private var drafts: [MovieDraft] = []
+    @State private var draftCount = 0
+    @State private var showDiscardDraftDialog = false
+    @State private var autoSaveTask: Task<Void, Never>?
+    @State private var currentDraftTmdbId: Int?
+    @State private var isShortFilm = false
+    
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -81,17 +103,21 @@ struct AddMoviesView: View {
                 }
             }
             .navigationTitle(preSelectedMovie != nil ? "Log Again" : "Add Movie")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
-            .background(Color(.systemBackground))
+            .background(Color(.systemGroupedBackground))
+            #else
+            .background(Color(.windowBackgroundColor))
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
-                        dismiss()
+                        handleCancelTapped()
                     }
                 }
-                
+
                 if selectedMovie != nil {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItem(placement: .confirmationAction) {
                         Button("Add", systemImage: "checkmark") {
                             Task {
                                 await addMovie()
@@ -120,10 +146,16 @@ struct AddMoviesView: View {
                 if let movie = selectedMovie {
                     ComparisonToolView(
                         movieToRate: movie,
-                        starRating: starRating,
+                        starRating: starRating > 0 ? starRating : nil,
                         moviesInRange: comparisonMoviesPool,
                         onComplete: { rating in
                             detailedRating = String(rating)
+                            // Calculate star rating from detailed rating if in sentiment mode
+                            if starRating == 0 {
+                                starRating = calculateStarRating(from: rating)
+                            }
+                            // Populate similar ratings view
+                            checkSimilarRatings(rating: Double(rating))
                             showingComparisonTool = false
                         },
                         onDismiss: {
@@ -133,8 +165,20 @@ struct AddMoviesView: View {
                 }
             }
             .onAppear {
+                // Load drafts count
+                draftCount = draftManager.getDraftCount()
+                drafts = draftManager.getAllDrafts()
+                
                 if let preSelected = preSelectedMovie {
                     selectedMovie = preSelected
+                    currentDraftTmdbId = preSelected.id
+                    
+                    // Check for existing draft
+                    if let existingDraft = draftManager.getDraftByTmdbId(preSelected.id) {
+                        pendingDraft = existingDraft
+                        showResumeDraftDialog = true
+                    }
+                    
                     // Load movie details and check for existing entries to prefill form
                     loadMovieDetails(movieId: preSelected.id)
                     Task {
@@ -142,9 +186,64 @@ struct AddMoviesView: View {
                         await checkForMovieLists(tmdbId: preSelected.id)
                     }
                 }
+                
+                // Apply preset watch date and tags (e.g., from Theater Planner "Complete & Log")
+                if let date = presetWatchDate {
+                    watchDate = date
+                }
+                if let presetTagsValue = presetTags, !presetTagsValue.isEmpty {
+                    tags = presetTagsValue
+                }
             }
             .onDisappear {
                 searchTask?.cancel()
+                autoSaveTask?.cancel()
+            }
+            // Resume Draft Dialog
+            .alert("Resume Draft?", isPresented: $showResumeDraftDialog) {
+                Button("Resume") {
+                    if let draft = pendingDraft {
+                        resumeDraft(draft)
+                    }
+                }
+                Button("Start Fresh", role: .cancel) {
+                    pendingDraft = nil
+                }
+            } message: {
+                if let draft = pendingDraft {
+                    Text("You have an unsaved draft for this movie from \(draft.editedAgo).")
+                }
+            }
+            // Discard Draft Dialog
+            .alert("Keep or Discard Draft?", isPresented: $showDiscardDraftDialog) {
+                Button("Keep Draft") {
+                    // Draft is already auto-saved, just dismiss
+                    dismiss()
+                }
+                Button("Discard", role: .destructive) {
+                    if let tmdbId = currentDraftTmdbId {
+                        draftManager.deleteDraftByTmdbId(tmdbId)
+                    }
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Your changes have been auto-saved as a draft.")
+            }
+            // Drafts Bottom Sheet
+            .sheet(isPresented: $showDraftsSheet) {
+                DraftsBottomSheet(
+                    drafts: drafts,
+                    onSelectDraft: { draft in
+                        selectDraftMovie(draft)
+                    },
+                    onDeleteDraft: { draft in
+                        draftManager.deleteDraft(draft)
+                        drafts = draftManager.getAllDrafts()
+                        draftCount = draftManager.getDraftCount()
+                    }
+                )
+                .presentationDetents([.medium, .large])
             }
         }
     }
@@ -159,7 +258,7 @@ struct AddMoviesView: View {
                 
                 TextField("Search movies...", text: $searchText)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .onSubmit {
                         performSearch()
                     }
@@ -191,7 +290,7 @@ struct AddMoviesView: View {
                 
                 if isSearching {
                     ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .progressViewStyle(CircularProgressViewStyle(tint: Color.adaptiveText(scheme: colorScheme)))
                         .scaleEffect(0.8)
                 }
             }
@@ -210,7 +309,7 @@ struct AddMoviesView: View {
                     Text("No Results")
                         .font(.title2)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Text("Try searching with different keywords.")
                         .font(.body)
@@ -227,12 +326,37 @@ struct AddMoviesView: View {
                     Text("Search Movies")
                         .font(.title2)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Text("Search for movies to add to your diary.")
                         .font(.body)
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.center)
+                    
+                    // Your Drafts button
+                    if draftCount > 0 {
+                        Button(action: {
+                            drafts = draftManager.getAllDrafts()
+                            showDraftsSheet = true
+                        }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "doc.text")
+                                Text("Your Drafts")
+                                
+                                Text("\(draftCount)")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(Color.blue)
+                                    .clipShape(Capsule())
+                            }
+                            .font(.headline)
+                            .foregroundColor(.blue)
+                        }
+                        .padding(.top, 8)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -241,9 +365,13 @@ struct AddMoviesView: View {
             
             Spacer()
         }
-        .background(Color(.systemBackground))
+        #if canImport(UIKit)
+        .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(.windowBackgroundColor))
+        #endif
     }
-    
+
     private var searchResultsList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
@@ -268,16 +396,20 @@ struct AddMoviesView: View {
     // MARK: - Add Movie View
     private var addMovieView: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 16) {
                 movieHeader
                 
-                watchDateSection
+                shortFilmSection
+                    .sectionCard()
                 
-                ratingSection
+                watchDateSection
+                    .sectionCard()
                 
                 comparisonToolSection
+                    .sectionCard()
                 
-                favoriteSection
+                ratingSection
+                    .sectionCard()
                 
                 // Previous entries section
                 if !previousWatches.isEmpty {
@@ -290,16 +422,21 @@ struct AddMoviesView: View {
                 }
                 
                 detailedRatingSection
+                    .sectionCard()
                 
                 rewatchSection
+                    .sectionCard()
                 
                 reviewSection
+                    .sectionCard()
                 
                 tagsSection
+                    .sectionCard()
                 
                 Spacer(minLength: 100)
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.top, 8)
         }
         .background(Color.black)
         .onAppear {
@@ -375,7 +512,26 @@ struct AddMoviesView: View {
             Text("Star Rating")
                 .font(.headline)
             
-            StarRatingView(rating: $starRating, size: 30)
+            HStack(alignment: .center, spacing: 16) {
+                StarRatingView(rating: $starRating, size: 30)
+                    .onChange(of: starRating) { _, _ in
+                        scheduleDraftSave()
+                    }
+                
+                Spacer()
+                
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isFavorited.toggle()
+                        scheduleDraftSave()
+                    }
+                }) {
+                    Image(systemName: isFavorited ? "heart.fill" : "heart")
+                        .font(.system(size: 28))
+                        .foregroundColor(isFavorited ? .orange : .gray)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
             
             Text("Tap stars to rate (tap twice for half stars)")
                 .font(.caption)
@@ -396,7 +552,7 @@ struct AddMoviesView: View {
                     Image(systemName: "arrow.left.arrow.right")
                         .font(.system(size: 16, weight: .medium))
                     
-                    Text("Use Comparison Tool")
+                    Text(starRating > 0 ? "Use Comparison Tool" : "Find Your Rating")
                         .font(.headline)
                     
                     Spacer()
@@ -411,42 +567,20 @@ struct AddMoviesView: View {
                     }
                 }
                 .padding()
-                .background(starRating > 0 ? Color.purple.opacity(0.2) : Color.gray.opacity(0.15))
-                .foregroundColor(starRating > 0 ? .purple : .gray)
+                .background(starRating > 0 ? Color.purple.opacity(0.2) : Color.blue.opacity(0.2))
+                .foregroundColor(starRating > 0 ? .purple : .blue)
                 .cornerRadius(12)
             }
-            .disabled(starRating == 0 || isLoadingComparisonMovies)
+            .disabled(isLoadingComparisonMovies)
             
-            Text("Compare against films you've rated to find the perfect detailed rating")
+            Text(starRating > 0 
+                 ? "Compare against films you've rated to find the perfect detailed rating"
+                 : "Discover your rating by comparing this film against others")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
     }
     
-    // MARK: - Favorite Section
-    private var favoriteSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Favorite")
-                .font(.headline)
-            
-            Button(action: {
-                isFavorited.toggle()
-            }) {
-                HStack {
-                    Image(systemName: isFavorited ? "heart.fill" : "heart")
-                        .foregroundColor(isFavorited ? .orange : .secondary)
-                        .font(.title2)
-                    
-                    Text(isFavorited ? "Remove from favorites" : "Mark as favorite")
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                }
-                .padding(.vertical, 8)
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
-    }
     
     // MARK: - Detailed Rating Section
     private var detailedRatingSection: some View {
@@ -457,7 +591,9 @@ struct AddMoviesView: View {
             TextField("Enter rating 0-100", text: $detailedRating)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .cornerRadius(24)
+                #if canImport(UIKit)
                 .keyboardType(.numberPad)
+                #endif
                 .onChange(of: detailedRating) { oldValue, newValue in
                     // Validate input
                     let filtered = newValue.filter { $0.isNumber }
@@ -469,6 +605,9 @@ struct AddMoviesView: View {
                     if let rating = Double(filtered), rating > 0 {
                         checkSimilarRatings(rating: rating)
                     }
+                    
+                    // Auto-save draft
+                    scheduleDraftSave()
                 }
             
             if showingSimilarRatings && !similarRatingMovies.isEmpty {
@@ -487,7 +626,9 @@ struct AddMoviesView: View {
             HStack {
                 TextField("Filter by specific rating", text: $ratingSearchText)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    #if canImport(UIKit)
                     .keyboardType(.numberPad)
+                    #endif
                     .onChange(of: ratingSearchText) { oldValue, newValue in
                         // Validate input - only allow numbers
                         let filtered = newValue.filter { $0.isNumber }
@@ -577,7 +718,7 @@ struct AddMoviesView: View {
                         Text("Previous Entries")
                             .font(.headline)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text("\(previousWatches.count) previous \(previousWatches.count == 1 ? "entry" : "entries") found")
                             .font(.caption)
@@ -668,11 +809,48 @@ struct AddMoviesView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Review")
                 .font(.headline)
-            
-            TextField("Write your review...", text: $review, axis: .vertical)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .cornerRadius(24)
-                .lineLimit(5...10)
+
+            NavigationLink(isActive: $showingReviewEditor) {
+                ReviewView(
+                    title: "Edit Text",
+                    placeholder: "Write your thoughts...",
+                    initialHTML: review,
+                    onHTMLChange: { newHTML in
+                        if review != newHTML {
+                            review = newHTML
+                            scheduleDraftSave()
+                        }
+                    }
+                )
+            } label: {
+                EmptyView()
+            }
+            .hidden()
+
+            Button(action: {
+                showingReviewEditor = true
+            }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if review.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Write your thoughts...")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(RichReviewCodec.toAttributedString(review))
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+                .background(Color.gray.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.gray.opacity(0.35), lineWidth: 1)
+                )
+                .cornerRadius(12)
+            }
+            .buttonStyle(PlainButtonStyle())
         }
     }
     
@@ -685,9 +863,59 @@ struct AddMoviesView: View {
             TextField("e.g., theater, family, IMAX", text: $tags)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .cornerRadius(24)
+                #if canImport(UIKit)
                 .autocapitalization(.none)
+                #endif
+                .onChange(of: tags) { _, _ in
+                    scheduleDraftSave()
+                }
             
             Text("Separate tags with commas (e.g., theater, family, IMAX)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Short Film Section
+    private var shortFilmSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: $isShortFilm) {
+                HStack(spacing: 8) {
+                    Image(systemName: "film")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.purple)
+                    Text("Short Film")
+                        .font(.headline)
+                }
+            }
+            .tint(.purple)
+            .onChange(of: isShortFilm) { _, newValue in
+                if newValue {
+                    // Prefill tags with "short" if not already present
+                    let currentTags = tags
+                        .components(separatedBy: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                    if !currentTags.contains(where: { $0.lowercased() == "short" }) {
+                        if tags.trimmingCharacters(in: .whitespaces).isEmpty {
+                            tags = "short"
+                        } else {
+                            tags = "short, " + tags
+                        }
+                    }
+                } else {
+                    // Remove "short" tag when toggled off
+                    var currentTags = tags
+                        .components(separatedBy: ",")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                    currentTags.removeAll { $0.lowercased() == "short" }
+                    tags = currentTags.joined(separator: ", ")
+                }
+                scheduleDraftSave()
+            }
+            
+            Text("Enable to compare only against other short films")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -701,6 +929,9 @@ struct AddMoviesView: View {
             
             DatePicker("When did you watch this?", selection: $watchDate, displayedComponents: .date)
                 .datePickerStyle(CompactDatePickerStyle())
+                .onChange(of: watchDate) { _, _ in
+                    scheduleDraftSave()
+                }
         }
     }
     
@@ -711,6 +942,9 @@ struct AddMoviesView: View {
                 .font(.headline)
             
             Toggle("This was a rewatch", isOn: $isRewatch)
+                .onChange(of: isRewatch) { _, _ in
+                    scheduleDraftSave()
+                }
         }
     }
     
@@ -753,7 +987,14 @@ struct AddMoviesView: View {
     
     private func selectMovie(_ movie: TMDBMovie) {
         selectedMovie = movie
+        currentDraftTmdbId = movie.id
         resetForm()
+        
+        // Check for existing draft
+        if let existingDraft = draftManager.getDraftByTmdbId(movie.id) {
+            pendingDraft = existingDraft
+            showResumeDraftDialog = true
+        }
         
         // Check if this movie has been watched before and is in any lists
         Task {
@@ -823,16 +1064,30 @@ struct AddMoviesView: View {
         }
     }
     
+    /// Check if a movie has the "short" tag
+    private func movieHasShortTag(_ movie: Movie) -> Bool {
+        guard let movieTags = movie.tags else { return false }
+        let tagList = movieTags
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        return tagList.contains("short")
+    }
+    
     private func checkSimilarRatings(rating: Double) {
         Task {
             do {
                 // Use decade-based ranges (100-90, 89-80, 79-70, etc.)
                 let (minRating, maxRating) = getDecadeRange(for: rating)
-                let movies = try await supabaseService.getMoviesInRatingRange(
+                var movies = try await supabaseService.getMoviesInRatingRange(
                     minRating: minRating,
                     maxRating: maxRating,
                     limit: 3000  // Get more movies for pagination
                 )
+                
+                // Filter to only short films if short film mode is enabled
+                if isShortFilm {
+                    movies = movies.filter { movieHasShortTag($0) }
+                }
 
                 // Deduplicate by movie identity (tmdb_id or title) AND detailed rating, keeping latest entry
                 let deduplicatedMovies = deduplicateMoviesByIdentityAndDetailedRating(movies)
@@ -966,73 +1221,104 @@ struct AddMoviesView: View {
         }
     }
     
+    
+    @MainActor
     private func addMovie() async {
         guard let selectedMovie = selectedMovie else { return }
-        
+
         isAddingMovie = true
-        
-        do {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            
-            let genres = movieDetails?.genreNames ?? []
-            
-            let movieRequest = AddMovieRequest(
-                title: selectedMovie.title,
-                release_year: selectedMovie.releaseYear,
-                release_date: selectedMovie.releaseDate,
-                rating: starRating > 0 ? starRating : nil,
-                ratings100: Double(detailedRating),
-                reviews: review.isEmpty ? nil : review,
-                tags: tags.isEmpty ? nil : tags,
-                watched_date: formatter.string(from: watchDate),
-                rewatch: isRewatch ? "yes" : "no",
-                tmdb_id: selectedMovie.id,
-                overview: selectedMovie.overview,
-                poster_url: selectedMovie.fullPosterURL,
-                backdrop_path: selectedMovie.backdropPath,
-                director: director,
-                runtime: movieDetails?.runtime,
-                vote_average: selectedMovie.voteAverage,
-                vote_count: selectedMovie.voteCount,
-                popularity: selectedMovie.popularity,
-                original_language: selectedMovie.originalLanguage,
-                original_title: selectedMovie.originalTitle,
-                tagline: movieDetails?.tagline,
-                status: movieDetails?.status,
-                budget: movieDetails?.budget,
-                revenue: movieDetails?.revenue,
-                imdb_id: movieDetails?.imdbId,
-                homepage: movieDetails?.homepage,
-                genres: genres
-            )
-            
-            let addedMovie = try await supabaseService.addMovie(movieRequest)
-            
-            // Set favorite status if selected
-            if isFavorited {
-                let _ = try await supabaseService.setMovieFavorite(movieId: addedMovie.id, isFavorite: true)
-            }
-            
-            // Copy review to clipboard if it exists
-            if !review.isEmpty {
-                await MainActor.run {
-                    UIPasteboard.general.string = review
+
+        // Retry logic to handle initialization issues
+        var lastError: Error?
+        for attempt in 1...2 {
+            do {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd"
+
+                let genres = movieDetails?.genreNames ?? []
+
+                let movieRequest = AddMovieRequest(
+                    title: selectedMovie.title,
+                    release_year: selectedMovie.releaseYear,
+                    release_date: selectedMovie.releaseDate,
+                    rating: starRating > 0 ? starRating : nil,
+                    ratings100: Double(detailedRating),
+                    reviews: review.isEmpty ? nil : review,
+                    tags: tags.isEmpty ? nil : tags,
+                    watched_date: formatter.string(from: watchDate),
+                    rewatch: isRewatch ? "yes" : "no",
+                    tmdb_id: selectedMovie.id,
+                    overview: selectedMovie.overview,
+                    poster_url: selectedMovie.fullPosterURL,
+                    backdrop_path: selectedMovie.backdropPath,
+                    director: director,
+                    runtime: movieDetails?.runtime,
+                    vote_average: selectedMovie.voteAverage,
+                    vote_count: selectedMovie.voteCount,
+                    popularity: selectedMovie.popularity,
+                    original_language: selectedMovie.originalLanguage,
+                    original_title: selectedMovie.originalTitle,
+                    tagline: movieDetails?.tagline,
+                    status: movieDetails?.status,
+                    budget: movieDetails?.budget,
+                    revenue: movieDetails?.revenue,
+                    imdb_id: movieDetails?.imdbId,
+                    homepage: movieDetails?.homepage,
+                    genres: genres
+                )
+
+                let addedMovie = try await supabaseService.addMovie(movieRequest)
+
+                // Set favorite status if selected
+                if isFavorited {
+                    let _ = try await supabaseService.setMovieFavorite(movieId: addedMovie.id, isFavorite: true)
+                }
+
+                // Copy review to clipboard if it exists
+                if !review.isEmpty {
+                    var clipboardText = ""
+                    
+                    // Prepend detailed rating if it exists
+                    if let rating = Int(detailedRating), rating > 0 {
+                        clipboardText = "<i>\(rating).</i>  \n\n"
+                    }
+                    
+                    clipboardText += review
+                    #if canImport(UIKit)
+                    UIPasteboard.general.string = clipboardText
+                    #else
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(clipboardText, forType: .string)
+                    #endif
+                }
+
+                isAddingMovie = false
+                
+                // Delete draft on successful save
+                if let tmdbId = currentDraftTmdbId {
+                    draftManager.deleteDraftByTmdbId(tmdbId)
+                    draftCount = draftManager.getDraftCount()
+                }
+                
+                dismiss()
+
+                // Success - exit the retry loop
+                return
+
+            } catch {
+                lastError = error
+                // If this was the first attempt and we got a network error, wait briefly and retry
+                if attempt == 1 {
+                    try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+                    continue
                 }
             }
-            
-            await MainActor.run {
-                isAddingMovie = false
-                dismiss()
-            }
-            
-        } catch {
-            await MainActor.run {
-                isAddingMovie = false
-                alertMessage = "Failed to add movie: \(error.localizedDescription)"
-                showingAlert = true
-            }
         }
+
+        // If we got here, both attempts failed
+        isAddingMovie = false
+        alertMessage = "Failed to add movie: \(lastError?.localizedDescription ?? "Unknown error")"
+        showingAlert = true
     }
     
     private func resetForm() {
@@ -1043,6 +1329,7 @@ struct AddMoviesView: View {
         watchDate = Date()
         isRewatch = false
         isFavorited = false
+        isShortFilm = false
         showingSimilarRatings = false
         similarRatingMovies = []
         displayedMoviesCount = 5
@@ -1055,18 +1342,138 @@ struct AddMoviesView: View {
         showingComparisonTool = false
     }
     
+    // MARK: - Draft Methods
+    
+    /// Handle Cancel button tap - show discard dialog if draft has data
+    private func handleCancelTapped() {
+        // Check if we have meaningful draft data
+        let hasDraftData = starRating > 0 ||
+                          !detailedRating.isEmpty ||
+                          !review.isEmpty ||
+                          !tags.isEmpty ||
+                          isRewatch ||
+                          isFavorited
+        
+        if hasDraftData && currentDraftTmdbId != nil {
+            // Save draft before showing dialog
+            saveDraftNow()
+            showDiscardDraftDialog = true
+        } else {
+            dismiss()
+        }
+    }
+    
+    /// Resume a draft by populating form fields
+    private func resumeDraft(_ draft: MovieDraft) {
+        starRating = draft.starRating ?? 0.0
+        detailedRating = draft.detailedRating ?? ""
+        review = draft.review ?? ""
+        tags = draft.tags ?? ""
+        watchDate = draft.watchDate
+        isRewatch = draft.isRewatch
+        isFavorited = draft.isFavorited
+        isShortFilm = draft.isShortFilm
+        
+        // Check for similar ratings if detailed rating exists
+        if let ratingStr = draft.detailedRating, let rating = Double(ratingStr), rating > 0 {
+            checkSimilarRatings(rating: rating)
+        }
+        
+        pendingDraft = nil
+    }
+    
+    /// Select a movie from the drafts list
+    private func selectDraftMovie(_ draft: MovieDraft) {
+        // Create TMDBMovie from draft
+        let movie = TMDBMovie(
+            id: draft.tmdbId,
+            title: draft.title,
+            originalTitle: nil,
+            overview: nil,
+            releaseDate: draft.releaseYear != nil ? "\(draft.releaseYear!)-01-01" : nil,
+            posterPath: draft.posterUrl,
+            backdropPath: nil,
+            voteAverage: nil,
+            voteCount: nil,
+            popularity: nil,
+            originalLanguage: nil,
+            genreIds: nil,
+            adult: nil,
+            video: nil
+        )
+        
+        // Select the movie (which will trigger draft check and show resume dialog)
+        selectMovie(movie)
+        loadMovieDetails(movieId: draft.tmdbId)
+    }
+    
+    /// Schedule a debounced draft save (500ms delay)
+    private func scheduleDraftSave() {
+        guard let movie = selectedMovie else { return }
+        
+        // Cancel any pending save
+        autoSaveTask?.cancel()
+        
+        // Schedule new save after 500ms delay
+        autoSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            
+            guard !Task.isCancelled else { return }
+            
+            saveDraftNow()
+        }
+    }
+    
+    /// Save draft immediately
+    private func saveDraftNow() {
+        guard let movie = selectedMovie else { return }
+        
+        draftManager.saveDraft(
+            tmdbId: movie.id,
+            title: movie.title,
+            releaseYear: movie.releaseYear,
+            posterUrl: movie.fullPosterURL,
+            starRating: starRating > 0 ? starRating : nil,
+            detailedRating: detailedRating.isEmpty ? nil : detailedRating,
+            review: review.isEmpty ? nil : review,
+            tags: tags.isEmpty ? nil : tags,
+            watchDate: watchDate,
+            isRewatch: isRewatch,
+            isFavorited: isFavorited,
+            isShortFilm: isShortFilm
+        )
+        
+        // Update draft count
+        draftCount = draftManager.getDraftCount()
+    }
+    
     // MARK: - Comparison Tool Helper
     private func loadComparisonMovies() async {
         isLoadingComparisonMovies = true
         
-        let range = ComparisonToolViewModel.getRatingRange(for: starRating)
-        
         do {
-            let movies = try await supabaseService.getMoviesInRatingRange(
-                minRating: Double(range.min),
-                maxRating: Double(range.max),
-                limit: 500
-            )
+            var movies: [Movie]
+            if starRating > 0 {
+                // Standard mode: load movies in star rating range
+                let range = ComparisonToolViewModel.getRatingRange(for: starRating)
+                movies = try await supabaseService.getMoviesInRatingRange(
+                    minRating: Double(range.min),
+                    maxRating: Double(range.max),
+                    limit: 500
+                )
+            } else {
+                // Sentiment mode: load all rated movies (0-100 range)
+                movies = try await supabaseService.getMoviesInRatingRange(
+                    minRating: 0,
+                    maxRating: 100,
+                    limit: 1000
+                )
+            }
+            
+            // Filter to only short films if short film mode is enabled
+            if isShortFilm {
+                movies = movies.filter { movieHasShortTag($0) }
+            }
             
             await MainActor.run {
                 comparisonMoviesPool = movies.shuffled()
@@ -1077,6 +1484,22 @@ struct AddMoviesView: View {
                 comparisonMoviesPool = []
                 isLoadingComparisonMovies = false
             }
+        }
+    }
+    
+    /// Calculate star rating from detailed rating (for sentiment mode)
+    private func calculateStarRating(from detailedRating: Int) -> Double {
+        switch detailedRating {
+        case 0...9: return 0.5
+        case 10...19: return 1.0
+        case 20...29: return 1.5
+        case 30...39: return 2.0
+        case 40...49: return 2.5
+        case 50...59: return 3.0
+        case 60...69: return 3.5
+        case 70...79: return 4.0
+        case 80...89: return 4.5
+        default: return 5.0
         }
     }
     
@@ -1116,6 +1539,7 @@ struct AddMoviesView: View {
 
 // MARK: - Search Result Row
 struct SearchResultRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let movie: TMDBMovie
     let onLog: () -> Void
     let onAddToWatchlist: () -> Void
@@ -1144,7 +1568,7 @@ struct SearchResultRow: View {
                 Text(movie.title)
                     .font(.headline)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .lineLimit(2)
                 
                 if let year = movie.releaseYear {
@@ -1326,7 +1750,7 @@ struct PreviousEntryRow: View {
                     
                     // Show review if it exists
                     if let review = movie.review, !review.isEmpty {
-                        Text("Review: \(review)")
+                        (Text("Review: ") + Text(RichReviewCodec.toAttributedString(review)))
                             .font(.caption)
                             .foregroundColor(.gray)
                             .lineLimit(2)
@@ -1436,6 +1860,16 @@ struct MovieListRow: View {
         } else {
             return .blue
         }
+    }
+}
+
+// MARK: - Section Card Modifier
+extension View {
+    func sectionCard() -> some View {
+        self
+            .padding(16)
+            .background(Color.gray.opacity(0.15))
+            .cornerRadius(16)
     }
 }
 

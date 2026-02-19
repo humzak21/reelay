@@ -16,9 +16,10 @@ struct TVPosterBackdropChangeView: View {
     let onBackdropSelected: (String) -> Void
     
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var tmdbService = TMDBService.shared
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var televisionService = SupabaseTelevisionService.shared
+    @Environment(\.colorScheme) private var colorScheme
+    private let tmdbService = TMDBService.shared
+    private let dataManager = DataManager.shared
+    private let televisionService = SupabaseTelevisionService.shared
     
     @State private var selectedTab: ImageType = .poster
     @State private var availablePosters: [TMDBImage] = []
@@ -75,18 +76,20 @@ struct TVPosterBackdropChangeView: View {
                         .padding()
                 }
             }
-            .background(Color.black)
+            .background(Color.adaptiveBackground(scheme: colorScheme))
             .navigationTitle("Change \(selectedTab.rawValue)")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Update", systemImage: "checkmark") {
                         Task {
                             await updateSelectedImage()
@@ -141,7 +144,7 @@ struct TVPosterBackdropChangeView: View {
             Text(tvShowName)
                 .font(.headline)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
@@ -149,7 +152,10 @@ struct TVPosterBackdropChangeView: View {
         .padding(.vertical, 16)
         .background(
             LinearGradient(
-                colors: [Color.black.opacity(0.8), Color.black],
+                colors: [
+                    Color.adaptiveBackground(scheme: colorScheme).opacity(0.8), 
+                    Color.adaptiveBackground(scheme: colorScheme)
+                ],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -186,7 +192,7 @@ struct TVPosterBackdropChangeView: View {
             Text(tvShowName)
                 .font(.headline)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
@@ -194,7 +200,10 @@ struct TVPosterBackdropChangeView: View {
         .padding(.vertical, 16)
         .background(
             LinearGradient(
-                colors: [Color.black.opacity(0.8), Color.black],
+                colors: [
+                    Color.adaptiveBackground(scheme: colorScheme).opacity(0.8), 
+                    Color.adaptiveBackground(scheme: colorScheme)
+                ],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -232,7 +241,7 @@ struct TVPosterBackdropChangeView: View {
                 Text("No Alternate Posters")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 
                 Text("This TV show doesn't have alternate poster options available.")
                     .font(.body)
@@ -275,7 +284,7 @@ struct TVPosterBackdropChangeView: View {
                 Text("No Alternate Backdrops")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 
                 Text("This TV show doesn't have alternate backdrop options available.")
                     .font(.body)

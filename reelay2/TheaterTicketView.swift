@@ -12,7 +12,10 @@ struct TheaterTicketView: View {
     let list: MovieList
     let rank: Int?
     let showSpecialLayout: Bool
-    @StateObject private var dataManager = DataManager.shared
+    @ObservedObject private var dataManager = DataManager.shared
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
     @State private var selectedMovie: Movie?
     @State private var showingMovieDetails = false
     @State private var isLoadingMovie = false
@@ -62,7 +65,17 @@ struct TheaterTicketView: View {
         
         return lines.joined(separator: "\n")
     }
-    
+
+    private func loadTicketImage() -> Image? {
+        #if os(iOS)
+        guard let uiImage = UIImage(named: "ticket_blue_image") else { return nil }
+        return Image(uiImage: uiImage)
+        #elseif os(macOS)
+        guard let nsImage = NSImage(named: "ticket_blue_image") else { return nil }
+        return Image(nsImage: nsImage)
+        #endif
+    }
+
     var body: some View {
         Button(action: {
             Task {
@@ -71,8 +84,8 @@ struct TheaterTicketView: View {
         }) {
             ZStack {
                 // Use the actual ticket image as background
-                if let uiImage = UIImage(named: "ticket_blue_image") {
-                    Image(uiImage: uiImage)
+                if let ticketImage = loadTicketImage() {
+                    ticketImage
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(height: 240) // Increased by 50% (160 * 1.5 = 240)
@@ -173,11 +186,20 @@ struct TheaterTicketView: View {
             .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 3)
         }
         .buttonStyle(PlainButtonStyle())
+        #if os(iOS)
         .sheet(isPresented: $showingMovieDetails) {
             if let selectedMovie = selectedMovie {
                 MovieDetailsView(movie: selectedMovie)
             }
         }
+        #else
+        .onChange(of: showingMovieDetails) { _, showing in
+            if showing, let movie = selectedMovie {
+                navigationCoordinator.showMovieDetails(movie)
+                showingMovieDetails = false
+            }
+        }
+        #endif
         .task {
             await loadMovieDetails()
         }

@@ -9,7 +9,8 @@ import SDWebImageSwiftUI
 import SwiftUI
 
 struct MoviesView: View {
-  @StateObject private var movieService = SupabaseMovieService.shared
+  @Environment(\.colorScheme) private var colorScheme
+  @ObservedObject private var movieService = SupabaseMovieService.shared
   @State private var movies: [Movie] = []
   @State private var isLoading = false
   @State private var errorMessage: String?
@@ -32,19 +33,32 @@ struct MoviesView: View {
   @State private var selectedDate: Date = Date()
   @State private var currentCalendarMonth: Date = Date()
   @State private var longPressedMovieId: Int?
-  @StateObject private var listService = SupabaseListService.shared
+  @ObservedObject private var listService = SupabaseListService.shared
   @StateObject private var filterViewModel = FilterViewModel()
-  @StateObject private var monthDescriptorService = MonthDescriptorService.shared
+  @ObservedObject private var monthDescriptorService = MonthDescriptorService.shared
   @State private var movieToAddToLists: Movie?
   @State private var movieToChangePoster: Movie?
   @State private var movieToChangeBackdrop: Movie?
+  
+  #if os(macOS)
+  @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+  #endif
 
   // MARK: - Efficient Loading States
   @State private var hasLoadedInitially = false
+  @State private var isInitialLoad = true
   @State private var lastRefreshTime: Date = Date.distantPast
   @State private var isRefreshing = false
 
   private let refreshInterval: TimeInterval = 300  // 5 minutes
+
+  private var appBackground: Color {
+    #if canImport(UIKit)
+    colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+    #else
+    colorScheme == .dark ? .black : Color(.windowBackgroundColor)
+    #endif
+  }
 
   enum ViewMode {
     case list, tile, calendar
@@ -78,12 +92,7 @@ struct MoviesView: View {
   }
 
   private var navigationTitle: String {
-    switch viewMode {
-    case .list, .tile:
-      return "Movies"
-    case .calendar:
-      return "Calendar"
-    }
+    return "Movies"
   }
 
   // MARK: - Local Sorting Logic
@@ -160,54 +169,58 @@ struct MoviesView: View {
       contentView
     }
     .navigationTitle(navigationTitle)
-    .navigationBarTitleDisplayMode(.large)
-    .background(Color(.systemBackground))
+    #if canImport(UIKit)
+    .toolbarTitleDisplayMode(.inlineLarge)
+    .background(Color(.systemGroupedBackground))
+    #else
+    .background(Color(.windowBackgroundColor))
+    #endif
     .toolbar {
-      ToolbarItem(placement: .navigationBarLeading) {
-        HStack(spacing: 16) {
-          Button(action: {
-            showingFilters = true
-          }) {
-            ZStack {
-              Image(systemName: "line.3.horizontal.decrease")
-              if filterViewModel.hasActiveFilters {
-                Circle()
-                  .fill(.red)
-                  .frame(width: 8, height: 8)
-                  .offset(x: 8, y: -8)
-              }
+      ToolbarItemGroup {
+        Button(action: {
+          withAnimation(.easeInOut(duration: 0.3)) {
+            switch viewMode {
+            case .list:
+              viewMode = .tile
+            case .tile:
+              viewMode = .calendar
+            case .calendar:
+              viewMode = .list
             }
           }
-
-          Button(action: {
-            showingSortOptions = true
-          }) {
-            Image(
-              systemName: sortAscending
-                ? "arrow.up" : "arrow.down"
-            )
+        }) {
+          Image(systemName: viewModeIcon)
             .font(.system(size: 16, weight: .medium))
-          }
-
-          Button(action: {
-            withAnimation(.easeInOut(duration: 0.3)) {
-              switch viewMode {
-              case .list:
-                viewMode = .tile
-              case .tile:
-                viewMode = .calendar
-              case .calendar:
-                viewMode = .list
-              }
+        }
+        
+        Button(action: {
+          showingFilters = true
+        }) {
+          ZStack {
+            Image(systemName: "line.3.horizontal.decrease")
+            if filterViewModel.hasActiveFilters {
+              Circle()
+                .fill(.red)
+                .frame(width: 8, height: 8)
+                .offset(x: 8, y: -8)
             }
-          }) {
-            Image(systemName: viewModeIcon)
-              .font(.system(size: 16, weight: .medium))
           }
         }
-      }
 
-      ToolbarItem(placement: .navigationBarTrailing) {
+        Button(action: {
+          showingSortOptions = true
+        }) {
+          Image(
+            systemName: sortAscending
+              ? "arrow.up" : "arrow.down"
+          )
+          .font(.system(size: 16, weight: .medium))
+        }
+      }
+      
+      ToolbarSpacer(.fixed)
+
+      ToolbarItem(placement: .confirmationAction) {
         Menu {
           Button(action: {
             showingAddMovie = true
@@ -252,6 +265,7 @@ struct MoviesView: View {
         movies = []
         errorMessage = nil
         hasLoadedInitially = false
+        isInitialLoad = true
         lastRefreshTime = Date.distantPast
       }
     }
@@ -332,9 +346,18 @@ struct MoviesView: View {
         }
       }
     }
+    #if os(iOS)
     .sheet(item: $selectedMovie) { movie in
       MovieDetailsView(movie: movie)
     }
+    #else
+    .onChange(of: selectedMovie) { _, newMovie in
+      if let movie = newMovie {
+        navigationCoordinator.showMovieDetails(movie)
+        selectedMovie = nil
+      }
+    }
+    #endif
     .sheet(item: $movieToEdit) { movie in
       EditMovieView(movie: movie) { updated in
         updateMovieInPlace(updated)
@@ -405,7 +428,7 @@ struct MoviesView: View {
         "\(filterViewModel.activeFilterCount) filter\(filterViewModel.activeFilterCount == 1 ? "" : "s") active"
       )
       .font(.system(size: 14, weight: .medium))
-      .foregroundColor(.white)
+      .foregroundColor(Color.adaptiveText(scheme: colorScheme))
 
       Text("•")
         .foregroundColor(.gray)
@@ -428,7 +451,7 @@ struct MoviesView: View {
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 8)
-    .background(Color(.secondarySystemFill))
+    .background(Color.adaptiveCardBackground(scheme: colorScheme))
   }
 
   @ViewBuilder
@@ -436,6 +459,8 @@ struct MoviesView: View {
     Group {
       if !movieService.isLoggedIn {
         notLoggedInView
+      } else if isInitialLoad {
+        SkeletonMoviesContent(viewMode: viewMode)
       } else if isLoading {
         loadingView
       } else if filteredMovies.isEmpty && !isLoading {
@@ -465,7 +490,7 @@ struct MoviesView: View {
       Text("Sign In Required")
         .font(.title2)
         .fontWeight(.semibold)
-        .foregroundColor(.white)
+        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
 
       Text("Please sign in to view and manage your movie diary.")
         .font(.body)
@@ -492,7 +517,7 @@ struct MoviesView: View {
         .scaleEffect(1.2)
       Text("Finishing a film...")
         .font(.system(size: 16, weight: .medium))
-        .foregroundColor(.white)
+        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
       Spacer()
     }
   }
@@ -520,7 +545,7 @@ struct MoviesView: View {
       Text("Error Loading Movies")
         .font(.title2)
         .fontWeight(.semibold)
-        .foregroundColor(.white)
+        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
       Text(errorMessage)
         .font(.body)
         .foregroundColor(.gray)
@@ -539,7 +564,7 @@ struct MoviesView: View {
         Text("No Movies Match Filters")
           .font(.title2)
           .fontWeight(.semibold)
-          .foregroundColor(.white)
+          .foregroundColor(Color.adaptiveText(scheme: colorScheme))
         Text("Try adjusting your filters to see more movies.")
           .font(.body)
           .foregroundColor(.gray)
@@ -563,7 +588,7 @@ struct MoviesView: View {
         Text("No Movies Yet")
           .font(.title2)
           .fontWeight(.semibold)
-          .foregroundColor(.white)
+          .foregroundColor(Color.adaptiveText(scheme: colorScheme))
         Text(
           "Start logging your movie diary by adding your first film."
         )
@@ -628,19 +653,7 @@ struct MoviesView: View {
 
       // Movies for this month
       LazyVStack(spacing: 12) {
-        ForEach(
-          movies.sorted { movie1, movie2 in
-            let date1 = movie1.watch_date ?? ""
-            let date2 = movie2.watch_date ?? ""
-            if date1 == date2 {
-              // Secondary sort by created_at for same watch dates
-              let created1 = movie1.created_at ?? ""
-              let created2 = movie2.created_at ?? ""
-              return created1 > created2  // Most recent created_at first
-            }
-            return date1 > date2  // Most recent watch_date first
-          }
-        ) { movie in
+        ForEach(sortedMoviesForSection(movies)) { movie in
           movieButton(for: movie)
         }
       }
@@ -670,7 +683,7 @@ struct MoviesView: View {
       .padding(.horizontal, 20)
       .background(
         RoundedRectangle(cornerRadius: 24)
-          .fill(Color(.secondarySystemFill))
+          .fill(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
           .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
       )
       .overlay(
@@ -767,19 +780,7 @@ struct MoviesView: View {
         count: 3
       )
       LazyVGrid(columns: columns, spacing: 12) {
-        ForEach(
-          movies.sorted { movie1, movie2 in
-            let date1 = movie1.watch_date ?? ""
-            let date2 = movie2.watch_date ?? ""
-            if date1 == date2 {
-              // Secondary sort by created_at for same watch dates
-              let created1 = movie1.created_at ?? ""
-              let created2 = movie2.created_at ?? ""
-              return created1 > created2  // Most recent created_at first
-            }
-            return date1 > date2  // Most recent watch_date first
-          }
-        ) { movie in
+        ForEach(sortedMoviesForSection(movies)) { movie in
           movieTileButton(for: movie)
         }
       }
@@ -850,17 +851,17 @@ struct MoviesView: View {
         }
       }) {
         Image(systemName: "chevron.left")
-          .foregroundColor(.white)
+          .foregroundColor(Color.adaptiveText(scheme: colorScheme))
           .font(.title2)
       }
 
       Spacer()
 
       VStack(spacing: 6) {
-        Text(monthYearFormatter.string(from: currentCalendarMonth))
+        Text(Self.monthYearFormatter.string(from: currentCalendarMonth))
           .font(.title2)
           .fontWeight(.semibold)
-          .foregroundColor(.white)
+          .foregroundColor(Color.adaptiveText(scheme: colorScheme))
           .onTapGesture(count: 2) {
             returnToCurrentDate()
           }
@@ -880,7 +881,7 @@ struct MoviesView: View {
         }
       }) {
         Image(systemName: "chevron.right")
-          .foregroundColor(.white)
+          .foregroundColor(Color.adaptiveText(scheme: colorScheme))
           .font(.title2)
       }
     }
@@ -916,7 +917,7 @@ struct MoviesView: View {
       }
     }
     .padding(.vertical, 12)
-    .background(Color(.secondarySystemFill))
+    .background(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
     .cornerRadius(16)
   }
 
@@ -979,13 +980,13 @@ struct MoviesView: View {
         HStack(spacing: 2) {
           ForEach(0..<min(movieCount, 3), id: \.self) { _ in
             Circle()
-              .fill(Color.white.opacity(0.8))
+              .fill(Color.adaptiveText(scheme: colorScheme).opacity(0.8))
               .frame(width: 3, height: 3)
           }
           if movieCount > 3 {
             Text("+")
               .font(.system(size: 6, weight: .bold))
-              .foregroundColor(.white.opacity(0.8))
+              .foregroundColor(Color.adaptiveText(scheme: colorScheme).opacity(0.8))
           }
         }
         .frame(height: 6)
@@ -1017,11 +1018,11 @@ struct MoviesView: View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
         Text(
-          "Movies watched on \(selectedDateFormatter.string(from: selectedDate))"
+          "Movies watched on \(Self.selectedDateFormatter.string(from: selectedDate))"
         )
         .font(.headline)
         .fontWeight(.semibold)
-        .foregroundColor(.white)
+        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
         Spacer()
       }
 
@@ -1118,7 +1119,7 @@ struct MoviesView: View {
   ) -> some View {
     HStack(spacing: 12) {
       // Movie poster
-      AsyncImage(url: movie.posterURL) { image in
+      WebImage(url: movie.posterURL) { image in
         image
           .resizable()
           .aspectRatio(contentMode: .fill)
@@ -1138,7 +1139,7 @@ struct MoviesView: View {
             .foregroundColor(
               shouldHighlightMustWatchTitle
                 ? .purple
-                : shouldHighlightReleaseYearTitle ? .cyan : .white
+                : shouldHighlightReleaseYearTitle ? .cyan : Color.adaptiveText(scheme: colorScheme)
             )
             .shadow(
               color: shouldHighlightMustWatchTitle
@@ -1213,7 +1214,7 @@ struct MoviesView: View {
     .padding(.vertical, 8)
     .background(
       RoundedRectangle(cornerRadius: 12)
-        .fill(Color(.secondarySystemFill))
+        .fill(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
     )
     .overlay(
       Group {
@@ -1245,11 +1246,12 @@ struct MoviesView: View {
   }
 
   // Helper computed properties and functions
-  private var monthYearFormatter: DateFormatter {
+  // Static formatters to avoid recreation on each view update
+  private static let monthYearFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "MMMM yyyy"
     return formatter
-  }
+  }()
 
   @ViewBuilder
   private var monthCountPill: some View {
@@ -1280,12 +1282,26 @@ struct MoviesView: View {
     .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
   }
 
-  private var selectedDateFormatter: DateFormatter {
+  private static let selectedDateFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.dateFormat = "EEEE, MMMM d"
     return formatter
-  }
+  }()
 
+  /// Pre-sorts movies for section display to avoid inline sorting during ForEach rendering
+  private func sortedMoviesForSection(_ movies: [Movie]) -> [Movie] {
+    movies.sorted { movie1, movie2 in
+      let date1 = movie1.watch_date ?? ""
+      let date2 = movie2.watch_date ?? ""
+      if date1 == date2 {
+        // Secondary sort by created_at for same watch dates
+        let created1 = movie1.created_at ?? ""
+        let created2 = movie2.created_at ?? ""
+        return created1 > created2  // Most recent created_at first
+      }
+      return date1 > date2  // Most recent watch_date first
+    }
+  }
   private func moviesCountInMonth(for monthDate: Date, in source: [Movie])
     -> Int
   {
@@ -1324,7 +1340,7 @@ struct MoviesView: View {
     } else if isToday {
       return .white
     } else if isCurrentMonth {
-      return .white
+      return Color.adaptiveText(scheme: colorScheme)
     } else {
       return .gray
     }
@@ -1491,21 +1507,14 @@ struct MoviesView: View {
 
   private func getMonthYearFromWatchDate(_ dateString: String?) -> String {
     guard let dateString = dateString else { return "Unknown Date" }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy-MM-dd"
-    guard let date = formatter.date(from: dateString) else {
+    guard let date = DateFormatter.movieDateFormatter.date(from: dateString) else {
       return "Unknown Date"
     }
-
-    let monthYearFormatter = DateFormatter()
-    monthYearFormatter.dateFormat = "MMMM yyyy"
-    return monthYearFormatter.string(from: date)
+    return Self.monthYearFormatter.string(from: date)
   }
 
   private func getDateFromMonthYear(_ monthYearString: String) -> Date {
-    let formatter = DateFormatter()
-    formatter.dateFormat = "MMMM yyyy"
-    return formatter.date(from: monthYearString) ?? Date.distantPast
+    return Self.monthYearFormatter.date(from: monthYearString) ?? Date.distantPast
   }
 
   // MARK: - Efficient Loading Functions
@@ -1525,7 +1534,10 @@ struct MoviesView: View {
       return
     }
 
-    isLoading = true
+    // Only show loading spinner on non-initial loads
+    if !isInitialLoad {
+      isLoading = true
+    }
     errorMessage = nil
 
     do {
@@ -1535,13 +1547,17 @@ struct MoviesView: View {
         limit: 3000
       )
       lastRefreshTime = Date()
-      
+
       // Load optimized caches for rewatch colors and must watches highlighting
       await loadOptimizedCaches()
     } catch {
       errorMessage = error.localizedDescription
     }
-    isLoading = false
+
+    await MainActor.run {
+      isInitialLoad = false
+      isLoading = false
+    }
   }
   
   /// Load first watch dates and must watches mapping using batch queries
@@ -2045,21 +2061,17 @@ struct MoviesView: View {
   // MARK: - Favorite Functions
   
   private func toggleMovieFavorite(_ movie: Movie) async {
-    print("🔥 DEBUG MOVIESVIEW: toggleMovieFavorite called for movie: \(movie.title)")
-    print("🔥 DEBUG MOVIESVIEW: Current favorite status: \(movie.isFavorited)")
-    print("🔥 DEBUG MOVIESVIEW: Current favorited field: \(movie.favorited)")
+
     
     do {
       let updatedMovie = try await movieService.toggleMovieFavorite(movieId: movie.id)
       
-      print("🔥 DEBUG MOVIESVIEW: Received updated movie")
-      print("🔥 DEBUG MOVIESVIEW: Updated favorite status: \(updatedMovie.isFavorited)")
-      print("🔥 DEBUG MOVIESVIEW: Updated favorited field: \(updatedMovie.favorited)")
+
       
       await MainActor.run {
         // Update the movie in the local array
         if let index = movies.firstIndex(where: { $0.id == movie.id }) {
-          print("🔥 DEBUG MOVIESVIEW: Found movie at index \(index), updating local array")
+
           
           // Create a new movie with updated favorite status
           movies[index] = Movie(
@@ -2096,13 +2108,10 @@ struct MoviesView: View {
             favorited: updatedMovie.favorited
           )
           
-          print("🔥 DEBUG MOVIESVIEW: Local array updated. New status: \(movies[index].isFavorited)")
-        } else {
-          print("🔥 DEBUG MOVIESVIEW: ERROR - Could not find movie in local array!")
         }
       }
     } catch {
-      print("🔥 DEBUG MOVIESVIEW ERROR: \(error.localizedDescription)")
+
       await MainActor.run {
         errorMessage = "Failed to update favorite status: \(error.localizedDescription)"
       }
@@ -2111,6 +2120,7 @@ struct MoviesView: View {
 }
 
 struct MovieRowView: View {
+  @Environment(\.colorScheme) private var colorScheme
   let movie: Movie
   let rewatchIconColor: Color
   let shouldHighlightMustWatchTitle: Bool
@@ -2120,7 +2130,7 @@ struct MovieRowView: View {
   var body: some View {
     HStack(spacing: 16) {
       // Movie poster
-      AsyncImage(url: movie.posterURL) { image in
+      WebImage(url: movie.posterURL) { image in
         image
           .resizable()
           .aspectRatio(contentMode: .fill)
@@ -2139,7 +2149,7 @@ struct MovieRowView: View {
           .foregroundColor(
             shouldHighlightMustWatchTitle
               ? .purple
-              : shouldHighlightReleaseYearTitle ? .cyan : .white
+              : shouldHighlightReleaseYearTitle ? .cyan : Color.adaptiveText(scheme: colorScheme)
           )
           .shadow(
             color: shouldHighlightMustWatchTitle
@@ -2223,11 +2233,11 @@ struct MovieRowView: View {
             Text(getDayFromWatchDate(movie.watch_date))
               .font(.title)
               .fontWeight(.bold)
-              .foregroundColor(.white)
+              .foregroundColor(Color.adaptiveText(scheme: colorScheme))
 
             Text(getDayOfWeekFromWatchDate(movie.watch_date))
               .font(.caption)
-              .foregroundColor(.gray)
+              .foregroundColor(Color.adaptiveText(scheme: colorScheme))
               .textCase(.uppercase)
           }
         }
@@ -2292,7 +2302,7 @@ struct MovieTileView: View {
   var body: some View {
     VStack(spacing: 6) {
       // Movie poster (no overlay indicators)
-      AsyncImage(url: movie.posterURL) { image in
+      WebImage(url: movie.posterURL) { image in
         image
           .resizable()
           .aspectRatio(2 / 3, contentMode: .fill)
@@ -2350,6 +2360,7 @@ struct MovieTileView: View {
 }
 // MARK - Filter and Sorting View - FilterSortView
 struct FilterSortView: View {
+  @Environment(\.colorScheme) private var colorScheme
   @Binding var sortBy: MovieSortField
   @ObservedObject var filterViewModel: FilterViewModel
   let movies: [Movie]
@@ -2430,20 +2441,22 @@ struct FilterSortView: View {
           .padding(.horizontal, 20)
           .padding(.top, 16)
         }
-        .background(Color.black)
+        .background(Color.adaptiveBackground(scheme: colorScheme))
       }
-      .background(Color.black)
+      .background(Color.adaptiveBackground(scheme: colorScheme))
       .navigationTitle("Filters")
+      #if canImport(UIKit)
       .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
+        ToolbarItem(placement: .cancellationAction) {
           Button("Cancel", systemImage: "xmark") {
             dismiss()
           }
           .foregroundColor(.red)
         }
 
-        ToolbarItem(placement: .navigationBarTrailing) {
+        ToolbarItem(placement: .confirmationAction) {
           Button("Apply", systemImage: "checkmark") {
             filterViewModel.applyStagingFilters()
             dismiss()
@@ -2481,14 +2494,14 @@ struct FilterSortView: View {
         Text(section.rawValue)
           .font(.system(size: 14, weight: .medium))
       }
-      .foregroundColor(selectedSection == section ? .black : .white)
+      .foregroundColor(selectedSection == section ? (colorScheme == .dark ? .black : .white) : Color.adaptiveText(scheme: colorScheme))
       .padding(.horizontal, 16)
       .padding(.vertical, 8)
       .background(
         RoundedRectangle(cornerRadius: 20)
           .fill(
             selectedSection == section
-              ? .white : Color.gray.opacity(0.2)
+              ? (colorScheme == .dark ? .white : .black) : Color.gray.opacity(0.2)
           )
       )
     }
@@ -2595,7 +2608,9 @@ struct FilterSortView: View {
               )
             )
             .textFieldStyle(RoundedBorderTextFieldStyle())
+            #if canImport(UIKit)
             .keyboardType(.numberPad)
+            #endif
             .frame(width: 80)
           }
 
@@ -2624,7 +2639,9 @@ struct FilterSortView: View {
               )
             )
             .textFieldStyle(RoundedBorderTextFieldStyle())
+            #if canImport(UIKit)
             .keyboardType(.numberPad)
+            #endif
             .frame(width: 80)
           }
         }
@@ -2780,7 +2797,7 @@ struct FilterSortView: View {
         VStack(spacing: 12) {
           HStack {
             Text("Has Review:")
-              .foregroundColor(.white)
+              .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
 
             Button(action: {
@@ -2887,6 +2904,7 @@ struct FilterSortView: View {
 // MARK: - Filter UI Components
 
 struct FilterSectionCard<Content: View>: View {
+  @Environment(\.colorScheme) private var colorScheme
   let title: String
   let icon: String
   @ViewBuilder let content: Content
@@ -2900,7 +2918,7 @@ struct FilterSectionCard<Content: View>: View {
         Text(title)
           .font(.headline)
           .fontWeight(.semibold)
-          .foregroundColor(.white)
+          .foregroundColor(Color.adaptiveText(scheme: colorScheme))
         Spacer()
       }
 
@@ -2943,13 +2961,14 @@ struct FilterChip: View {
 }
 
 struct FilterToggle: View {
+  @Environment(\.colorScheme) private var colorScheme
   let title: String
   @Binding var isOn: Bool
 
   var body: some View {
     HStack {
       Text(title)
-        .foregroundColor(.white)
+        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
       Spacer()
       Toggle("", isOn: $isOn)
         .toggleStyle(SwitchToggleStyle(tint: .blue))
@@ -2958,13 +2977,14 @@ struct FilterToggle: View {
 }
 
 struct RuntimeSlider: View {
+  @Environment(\.colorScheme) private var colorScheme
   @Binding var value: Int
   let range: ClosedRange<Int>
 
   var body: some View {
     HStack(spacing: 12) {
       Text(formatRuntime(value))
-        .foregroundColor(.white)
+        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
         .font(.system(size: 14, weight: .medium))
         .frame(width: 60, alignment: .trailing)
 
@@ -3152,6 +3172,7 @@ struct MultipleBorderOverlay: View {
 // MARK: - Sort Options View
 
 struct SortOptionsView: View {
+  @Environment(\.colorScheme) private var colorScheme
   @Binding var sortBy: MovieSortField
   @Binding var sortAscending: Bool
   @Environment(\.dismiss) private var dismiss
@@ -3168,7 +3189,7 @@ struct SortOptionsView: View {
             Text("Sort By")
               .font(.headline)
               .fontWeight(.semibold)
-              .foregroundColor(.white)
+              .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
           }
 
@@ -3206,7 +3227,7 @@ struct SortOptionsView: View {
             Text("Sort Direction")
               .font(.headline)
               .fontWeight(.semibold)
-              .foregroundColor(.white)
+              .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
           }
 
@@ -3240,16 +3261,18 @@ struct SortOptionsView: View {
       .padding(.top, 16)
       .background(Color.black)
       .navigationTitle("Sort Options")
+      #if canImport(UIKit)
       .navigationBarTitleDisplayMode(.inline)
+      #endif
       .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
+        ToolbarItem(placement: .cancellationAction) {
           Button("Cancel", systemImage: "xmark") {
             dismiss()
           }
           .foregroundColor(.red)
         }
 
-        ToolbarItem(placement: .navigationBarTrailing) {
+        ToolbarItem(placement: .confirmationAction) {
           Button("Done", systemImage: "checkmark") {
             dismiss()
           }

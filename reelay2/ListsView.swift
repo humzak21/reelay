@@ -9,8 +9,9 @@ import SwiftUI
 import SDWebImageSwiftUI
 
 struct ListsView: View {
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var movieService = SupabaseMovieService.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var dataManager = DataManager.shared
+    @ObservedObject private var movieService = SupabaseMovieService.shared
     @State private var showingCreateList = false
     @State private var showingAddTelevision = false
     @State private var showingEditWatchlist = false
@@ -23,36 +24,63 @@ struct ListsView: View {
     @State private var showingCSVImport = false
     @State private var showingRandomizer = false
     
+    private var toolbarTrailingPlacement: ToolbarItemPlacement {
+        #if os(iOS)
+        .navigationBarTrailing
+        #else
+        .automatic
+        #endif
+    }
+
     // MARK: - Efficient Loading States
     @State private var hasLoadedInitially = false
+    @State private var isInitialLoad = true
     @State private var lastRefreshTime: Date = Date.distantPast
     @State private var isRefreshing = false
-    
+
     private let refreshInterval: TimeInterval = 300 // 5 minutes
     
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
+
+    private var appBackground: Color {
+        #if canImport(UIKit)
+        colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+        #else
+        colorScheme == .dark ? .black : Color(.windowBackgroundColor)
+        #endif
+    }
+
     var body: some View {
         contentView
             .navigationTitle("Lists")
-            .navigationBarTitleDisplayMode(.large)
-            .background(Color(.systemBackground))
+            #if canImport(UIKit)
+            .toolbarTitleDisplayMode(.inlineLarge)
+            #endif
+            #if canImport(UIKit)
+            .background(Color(.systemGroupedBackground))
+            #else
+            .background(Color(.windowBackgroundColor))
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack {
-                        Button(action: {
-                            showingCSVImport = true
-                        }) {
-                            Image(systemName: "square.and.arrow.down")
-                        }
-                        
-                        Button(action: {
-                            showingRandomizer = true
-                        }) {
-                            Image(systemName: "dice")
-                        }
+                ToolbarItemGroup {
+                    Button(action: {
+                        showingRandomizer = true
+                    }) {
+                        Image(systemName: "dice")
+                    }
+                    
+                    Button(action: {
+                        showingCSVImport = true
+                    }) {
+                        Image(systemName: "square.and.arrow.down")
                     }
                 }
                 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarSpacer(.fixed)
+                
+                ToolbarItem(placement: toolbarTrailingPlacement) {
                     Menu {
                         Button("Create New List", systemImage: "list.bullet") {
                             showingCreateList = true
@@ -84,6 +112,7 @@ struct ListsView: View {
                     }
                 } else {
                     hasLoadedInitially = false
+                    isInitialLoad = true
                     lastRefreshTime = Date.distantPast
                 }
             }
@@ -111,9 +140,18 @@ struct ListsView: View {
             .sheet(isPresented: $showingEditWatchlist) {
                 WatchlistEditView()
             }
+            #if os(iOS)
             .sheet(item: $selectedList) { list in
                 ListDetailsView(list: list)
             }
+            #else
+            .onChange(of: selectedList) { _, list in
+                if let list = list {
+                    navigationCoordinator.showListDetails(list)
+                    selectedList = nil
+                }
+            }
+            #endif
             .sheet(item: $listToEdit) { list in
                 EditListView(list: list)
             }
@@ -141,6 +179,8 @@ struct ListsView: View {
         Group {
             if !movieService.isLoggedIn {
                 notLoggedInView
+            } else if isInitialLoad {
+                SkeletonListsContent()
             } else if isLoading {
                 loadingView
             } else if dataManager.movieLists.isEmpty && !isLoading {
@@ -190,7 +230,7 @@ struct ListsView: View {
                 .scaleEffect(1.2)
             Text("Finishing a film...")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             Spacer()
         }
     }
@@ -312,19 +352,23 @@ struct ListsView: View {
             isLoading = false
             return
         }
-        
-        // Set loading state if not already loading
-        if !isLoading {
+
+        // Only show loading spinner on non-initial loads
+        if !isInitialLoad && !isLoading {
             isLoading = true
         }
-        
+
         errorMessage = nil
-        
+
         // Use optimized refresh which uses batch database function
         await dataManager.refreshListsOptimized()
-        
+
         lastRefreshTime = Date()
-        isLoading = false
+
+        await MainActor.run {
+            isInitialLoad = false
+            isLoading = false
+        }
     }
     
     private func refreshLists() async {
@@ -364,9 +408,10 @@ struct ListsView: View {
 }
 
 struct ListCardView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let list: MovieList
     let onTap: () -> Void
-    @StateObject private var dataManager = DataManager.shared
+    @ObservedObject private var dataManager = DataManager.shared
     
     private var listItems: [ListItem] {
         dataManager.getListItems(list)
@@ -383,7 +428,7 @@ struct ListCardView: View {
                 posterPreviewSection
             }
             .padding(16)
-            .background(Color(.secondarySystemFill))
+            .background(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
             .cornerRadius(16)
         }
         .buttonStyle(PlainButtonStyle())
@@ -403,7 +448,7 @@ struct ListCardView: View {
                 Text(list.name)
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .lineLimit(2)
                 
                 if list.pinned {
@@ -428,7 +473,7 @@ struct ListCardView: View {
                 Text("\(list.itemCount)")
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             }
             
             Text("films")
@@ -491,7 +536,8 @@ struct ListCardView: View {
 // Placeholder for CreateListView
 struct CreateListView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var dataManager = DataManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var dataManager = DataManager.shared
     @State private var listName = ""
     @State private var listDescription = ""
     @State private var isRanked = false
@@ -523,7 +569,7 @@ struct CreateListView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("List Name")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     TextField("Enter list name", text: $listName)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -535,7 +581,7 @@ struct CreateListView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Description (Optional)")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     TextField("Enter description", text: $listDescription, axis: .vertical)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -549,7 +595,7 @@ struct CreateListView: View {
                     HStack {
                         Text("Ranked List")
                             .font(.headline)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Spacer()
                         
@@ -567,7 +613,7 @@ struct CreateListView: View {
                     HStack {
                         Text("Tags")
                             .font(.headline)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Spacer()
                         
@@ -590,7 +636,7 @@ struct CreateListView: View {
                                     HStack(spacing: 4) {
                                         Text(tag)
                                             .font(.caption)
-                                            .foregroundColor(.white)
+                                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                         
                                         Button(action: {
                                             selectedTags.removeAll { $0 == tag }
@@ -604,7 +650,7 @@ struct CreateListView: View {
                                     .padding(.vertical, 4)
                                     .background(
                                         Capsule()
-                                            .fill(tagColor(for: tag))
+                                            .fill(AppColorHelpers.tagColor(for: tag))
                                     )
                                 }
                             }
@@ -623,7 +669,7 @@ struct CreateListView: View {
                     HStack {
                         Text("Themed Movie Months")
                             .font(.headline)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Spacer()
                         
@@ -639,7 +685,7 @@ struct CreateListView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Select Month")
                                 .font(.subheadline)
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                             
                             DatePicker(
                                 "Themed Month",
@@ -673,15 +719,17 @@ struct CreateListView: View {
             .padding()
             .background(Color.black)
             .navigationTitle("Create List")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Create", systemImage: "checkmark") {
                         Task {
                             await createList()
@@ -736,24 +784,6 @@ struct CreateListView: View {
         if !isRanked && MovieList.shouldAutoEnableRanking(name: listName, description: listDescription) {
             isRanked = true
         }
-    }
-    
-    private func tagColor(for tag: String) -> Color {
-        // Generate consistent colors based on tag name (same as other views)
-        let tagHash = tag.lowercased().hash
-        let colors: [Color] = [
-            .blue.opacity(0.8),
-            .green.opacity(0.8),
-            .orange.opacity(0.8),
-            .purple.opacity(0.8),
-            .red.opacity(0.8),
-            .yellow.opacity(0.8),
-            .pink.opacity(0.8),
-            .cyan.opacity(0.8),
-            .indigo.opacity(0.8),
-            .mint.opacity(0.8)
-        ]
-        return colors[abs(tagHash) % colors.count]
     }
 }
 

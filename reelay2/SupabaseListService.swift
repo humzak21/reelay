@@ -1002,7 +1002,7 @@ class SupabaseListService: ObservableObject {
             
         } catch {
             // Fallback to legacy method if optimized function fails
-            print("Optimized list sync failed, falling back to legacy: \(error)")
+            // print("Optimized list sync failed, falling back to legacy: \(error)")
             await syncListsFromSupabase()
         }
     }
@@ -1037,10 +1037,9 @@ class SupabaseListService: ObservableObject {
             
             return (listItems, watchedTmdbIds)
         } catch {
-            // Fallback to legacy method
-            print("Optimized list items fetch failed, falling back to legacy: \(error)")
-            let items = try await getItemsForList(listId)
-            return (items, Set())
+            // Re-throw so the caller can fallback to legacy method with proper watched status loading
+            // print("Optimized list items fetch failed: \(error)")
+            throw error
         }
     }
 }

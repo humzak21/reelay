@@ -23,6 +23,9 @@ class DataManager: ObservableObject {
     // Album data
     @Published var allAlbums: [Album] = []
     
+    // Theater visit data
+    @Published var theaterVisits: [TheaterVisit] = []
+    
     // List data
     @Published var movieLists: [MovieList] = []
     @Published var listItems: [UUID: [ListItem]] = [:]
@@ -35,6 +38,7 @@ class DataManager: ObservableObject {
     private var televisionService: SupabaseTelevisionService
     private var watchlistService: SupabaseWatchlistService
     private var albumService: SupabaseAlbumService
+    private var theaterVisitService: SupabaseTheaterVisitService
     private var cancellables = Set<AnyCancellable>()
     private var watchlistRefreshTask: Task<Void, Never>?
     
@@ -44,6 +48,7 @@ class DataManager: ObservableObject {
         self.televisionService = SupabaseTelevisionService.shared
         self.watchlistService = SupabaseWatchlistService.shared
         self.albumService = SupabaseAlbumService.shared
+        self.theaterVisitService = SupabaseTheaterVisitService.shared
         
         // Load goals from UserDefaults
         loadGoals()
@@ -57,12 +62,14 @@ class DataManager: ObservableObject {
                         await self.loadMovies()
                         await self.loadTelevision()
                         await self.loadAlbums()
+                        await self.loadTheaterVisits()
                     }
                 } else {
                     // Clear data when logged out
                     self.allMovies = []
                     self.allTelevision = []
                     self.allAlbums = []
+                    self.theaterVisits = []
                 }
             }
             .store(in: &cancellables)
@@ -421,6 +428,61 @@ class DataManager: ObservableObject {
         let album = try await albumService.addAlbum(albumRequest)
         await refreshAlbums()
         return album
+    }
+    
+    // MARK: - Theater Visit Operations
+    
+    func loadTheaterVisits() async {
+        do {
+            let visits = try await theaterVisitService.getAllVisits()
+            await MainActor.run {
+                self.theaterVisits = visits
+            }
+        } catch {
+            print("Error loading theater visits in DataManager: \(error)")
+        }
+    }
+    
+    func refreshTheaterVisits() async {
+        await loadTheaterVisits()
+    }
+    
+    func addTheaterVisit(_ visitRequest: AddTheaterVisitRequest) async throws -> TheaterVisit {
+        let visit = try await theaterVisitService.addVisit(visitRequest)
+        await refreshTheaterVisits()
+        return visit
+    }
+    
+    func updateTheaterVisit(id: Int, with data: UpdateTheaterVisitRequest) async throws -> TheaterVisit {
+        let visit = try await theaterVisitService.updateVisit(id: id, with: data)
+        await refreshTheaterVisits()
+        return visit
+    }
+    
+    func deleteTheaterVisit(id: Int) async throws {
+        try await theaterVisitService.deleteVisit(id: id)
+        await refreshTheaterVisits()
+    }
+    
+    func toggleTheaterVisitCompleted(id: Int, completed: Bool) async throws {
+        _ = try await theaterVisitService.toggleCompleted(id: id, completed: completed)
+        await refreshTheaterVisits()
+    }
+    
+    func getTheaterVisitsForDate(_ date: Date) -> [TheaterVisit] {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let dateString = formatter.string(from: date)
+        return theaterVisits.filter { $0.visit_date == dateString }
+    }
+    
+    func getUpcomingTheaterVisits() -> [TheaterVisit] {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        let todayString = formatter.string(from: Date())
+        return theaterVisits.filter { $0.visit_date >= todayString && !$0.completed }
     }
     
     // MARK: - Goals Management

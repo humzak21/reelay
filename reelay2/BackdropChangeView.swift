@@ -14,9 +14,10 @@ struct BackdropChangeView: View {
     let onBackdropSelected: (String) -> Void
     
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var tmdbService = TMDBService.shared
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var movieService = SupabaseMovieService.shared
+    @Environment(\.colorScheme) private var colorScheme
+    private let tmdbService = TMDBService.shared
+    private let dataManager = DataManager.shared
+    private let movieService = SupabaseMovieService.shared
     
     @State private var availableBackdrops: [TMDBImage] = []
     @State private var isLoading = false
@@ -62,7 +63,7 @@ struct BackdropChangeView: View {
                         Text("No Alternate Backdrops")
                             .font(.title2)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text("This movie doesn't have alternate backdrop options available.")
                             .font(.body)
@@ -80,18 +81,20 @@ struct BackdropChangeView: View {
                         .padding()
                 }
             }
-            .background(Color.black)
+            .background(Color.adaptiveBackground(scheme: colorScheme))
             .navigationTitle("Change Backdrop")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Update", systemImage: "checkmark") {
                         if let selectedBackdropUrl = selectedBackdropUrl {
                             Task {
@@ -137,7 +140,7 @@ struct BackdropChangeView: View {
             Text(movieTitle)
                 .font(.headline)
                 .fontWeight(.semibold)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
@@ -145,7 +148,10 @@ struct BackdropChangeView: View {
         .padding(.vertical, 16)
         .background(
             LinearGradient(
-                colors: [Color.black.opacity(0.8), Color.black],
+                colors: [
+                    Color.adaptiveBackground(scheme: colorScheme).opacity(0.8), 
+                    Color.adaptiveBackground(scheme: colorScheme)
+                ],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -236,7 +242,10 @@ struct BackdropChangeView: View {
     }
     
     private func updateBackdrop(_ newBackdropUrl: String) async {
-        isUpdating = true
+        await MainActor.run {
+            isUpdating = true
+            errorMessage = nil
+        }
         
         do {
             // Update movie entries with this TMDB ID
@@ -246,7 +255,10 @@ struct BackdropChangeView: View {
             try await dataManager.updateBackdropForTmdbId(tmdbId: tmdbId, newBackdropUrl: newBackdropUrl)
             
             await MainActor.run {
+                // Call the callback to update the parent view
                 onBackdropSelected(newBackdropUrl)
+                isUpdating = false
+                // Dismiss the view
                 dismiss()
             }
         } catch {

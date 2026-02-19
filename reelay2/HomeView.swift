@@ -6,13 +6,16 @@
 //
 
 import SwiftUI
+import SDWebImageSwiftUI
 
 struct HomeView: View {
-    @StateObject private var movieService = SupabaseMovieService.shared
-    @StateObject private var statisticsService = SupabaseStatisticsService.shared
-    @StateObject private var dataManager = DataManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var movieService = SupabaseMovieService.shared
+    @ObservedObject private var statisticsService = SupabaseStatisticsService.shared
+    @ObservedObject private var dataManager = DataManager.shared
     @State private var recentMovies: [Movie] = []
     @State private var isLoading = false
+    @State private var isInitialLoad = true
     @State private var showingAddMovie = false
     @State private var showingAddTelevision = false
     @State private var showingAddAlbum = false
@@ -34,6 +37,11 @@ struct HomeView: View {
     @State private var showingThemedList = false
     @State private var selectedThemedList: MovieList?
     
+    // Theater Planner (Fantastical-style three-state)
+    @State private var plannerDetent: PlannerDetent = .compact
+    @State private var plannerSelectedDate: Date = Date()
+    @State private var plannerCalendarMonth: Date = Date()
+    
     // Television Data
     @State private var currentlyWatchingShows: [Television] = []
     @State private var selectedTelevisionShow: Television?
@@ -43,86 +51,174 @@ struct HomeView: View {
     
     // Upcoming Films Data
     @State private var upcomingFilms: [ListItem] = []
-    
+
+    // On This Day Data
+    @State private var onThisDayMovies: [OnThisDayMovie] = []
+
     // Quick Stats Data
     @State private var filmsThisMonth: Int = 0
     @State private var highestRatedFilmThisMonth: Movie?
+    @State private var highestRatedFilmValue: String = "—"
+    @State private var highestRatedFilmTitle: String = ""
     @State private var currentStreak: Int = 0
+    
+    // Year Stats Data (for top static stats boxes)
+    @State private var filmsThisYear: Int = 0
+    @State private var averageRatingThisYear: Double = 0.0
+    @State private var formattedAverageRating: String = "0.00"
+    @State private var currentYearReleasesWatched: Int = 0
     
     // Caching mechanism
     @State private var lastDataLoadTime: Date?
     @State private var hasLoadedInitially = false
     private let cacheRefreshInterval: TimeInterval = 300 // 5 minutes
+    private let homeHorizontalPadding: CGFloat = 20
     
+    // Planner detent heights
+    private let compactPlannerHeight: CGFloat = 60
+    
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
+    
+    // Static formatters to avoid recreation
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+    
+    private static let displayDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f
+    }()
+
+    private var appBackground: Color {
+        #if os(macOS)
+        colorScheme == .dark ? .black : Color(NSColor.windowBackgroundColor)
+        #else
+        colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+        #endif
+    }
+
     var body: some View {
-        ZStack {
-            if isLoading {
-                // Loading Screen
-                VStack(spacing: 20) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    
-                    Text("Finishing a film...")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black.opacity(0.1))
-            } else {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // Goals Section
-                        if dataManager.yearlyFilmGoal > 0 || !dataManager.movieLists.isEmpty {
-                            goalsSection
+        GeometryReader { geometry in
+            let fullPlannerHeight = geometry.size.height * 0.85
+            
+            VStack(spacing: 0) {
+                // Theater Planner (variable height based on detent)
+                TheaterPlannerView(
+                    selectedDate: $plannerSelectedDate,
+                    currentCalendarMonth: $plannerCalendarMonth,
+                    plannerDetent: plannerDetent
+                )
+                .frame(height: plannerDetentHeight(full: fullPlannerHeight), alignment: .top)
+                .clipped()
+                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: plannerDetent)
+                
+                // Drag handle / chevron
+                plannerDragHandle
+                    .gesture(
+                        DragGesture(minimumDistance: 5)
+                            .onEnded { value in
+                                let verticalMovement = value.translation.height
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                                    if plannerDetent == .compact && verticalMovement > 40 {
+                                        plannerDetent = .full
+                                        Task { await dataManager.refreshTheaterVisits() }
+                                    } else if plannerDetent == .full && verticalMovement < -40 {
+                                        plannerDetent = .compact
+                                    }
+                                }
+                            }
+                    )
+                
+                // Home content
+                ZStack {
+                    if isInitialLoad {
+                        SkeletonHomeContent()
+                    } else if isLoading {
+                        ZStack {
+                            Color.clear
+
+                            VStack(spacing: 20) {
+                                ProgressView()
+                                    .scaleEffect(1.5)
+                                    .progressViewStyle(CircularProgressViewStyle(tint: Color.adaptiveText(scheme: colorScheme)))
+
+                                Text("Finishing a film...")
+                                    .font(.headline)
+                                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.adaptiveOverlay(scheme: colorScheme, intensity: 0.3))
                         }
-                        
-                        // Recently Logged Section
-                        if !recentMovies.isEmpty {
-                            recentlyLoggedSection
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                yearStatsSection
+                                
+                                if dataManager.yearlyFilmGoal > 0 || !dataManager.movieLists.isEmpty {
+                                    goalsSection
+                                }
+
+                                if !onThisDayMovies.isEmpty {
+                                    OnThisDayView(
+                                        movies: onThisDayMovies,
+                                        onMovieTapped: { movie in
+                                            selectedMovie = movie
+                                        }
+                                    )
+                                }
+
+                                if !currentlyWatchingShows.isEmpty {
+                                    currentlyWatchingShowsSection
+                                }
+
+                                if !recentMovies.isEmpty {
+                                    recentlyLoggedSection
+                                }
+
+                                if !upcomingFilms.isEmpty {
+                                    upcomingFilmsSection
+                                }
+
+                                Spacer()
+                            }
+                            .padding(.top, 20)
+                            .padding(.horizontal, homeHorizontalPadding)
                         }
-                        
-                        // Currently Watching TV Shows Section
-                        if !currentlyWatchingShows.isEmpty {
-                            currentlyWatchingShowsSection
+                        .refreshable {
+                            await refreshAllData()
                         }
-                        
-                        // Upcoming Films Section
-                        if !upcomingFilms.isEmpty {
-                            upcomingFilmsSection
-                        }
-                        
-                        // Quick Stats Section
-                        quickStatsSection
-                        
-                        Spacer()
                     }
-                    .padding(.top, 20)
-                }
-                .refreshable {
-                    await refreshAllData()
                 }
             }
         }
         .navigationTitle("Home")
+        #if canImport(UIKit)
+        .toolbarTitleDisplayMode(.inlineLarge)
+        #endif
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                HStack {
-                    Button(action: {
-                        showingGoalsSettings = true
-                    }) {
-                        Image(systemName: "target")
-                    }
-                    
-                    Button(action: {
-                        showingRandomizer = true
-                    }) {
-                        Image(systemName: "dice")
-                    }
+            ToolbarItemGroup {
+                Button(action: {
+                    showingRandomizer = true
+                }) {
+                    Image(systemName: "dice")
+                }
+                
+                Button(action: {
+                    showingGoalsSettings = true
+                }) {
+                    Image(systemName: "target")
                 }
             }
             
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarSpacer(.fixed)
+            
+            ToolbarItem(placement: .automatic) {
                 Menu {
                     Button(action: {
                         showingAddMovie = true
@@ -170,11 +266,11 @@ struct HomeView: View {
         .sheet(isPresented: $showingRandomizer) {
             WatchlistRandomizerView()
         }
+        #if os(iOS)
         .sheet(isPresented: $showingMustWatchesList) {
             if let mustWatchesList = dataManager.movieLists.first(where: { $0.name == "Must Watches for \(Calendar.current.component(.year, from: Date()))" }) {
                 ListDetailsView(list: mustWatchesList)
             } else {
-                // Fallback view if list is not found
                 Text("Must Watches list not found")
                     .foregroundColor(.secondary)
             }
@@ -183,11 +279,25 @@ struct HomeView: View {
             if let lookingForwardList = dataManager.movieLists.first(where: { $0.name == "Looking Forward in \(Calendar.current.component(.year, from: Date()))" }) {
                 ListDetailsView(list: lookingForwardList)
             } else {
-                // Fallback view if list is not found
                 Text("Looking Forward list not found")
                     .foregroundColor(.secondary)
             }
         }
+        #else
+        .onChange(of: showingMustWatchesList) { _, showing in
+            if showing, let mustWatchesList = dataManager.movieLists.first(where: { $0.name == "Must Watches for \(Calendar.current.component(.year, from: Date()))" }) {
+                navigationCoordinator.showListDetails(mustWatchesList)
+                showingMustWatchesList = false
+            }
+        }
+        .onChange(of: showingLookingForwardList) { _, showing in
+            if showing, let lookingForwardList = dataManager.movieLists.first(where: { $0.name == "Looking Forward in \(Calendar.current.component(.year, from: Date()))" }) {
+                navigationCoordinator.showListDetails(lookingForwardList)
+                showingLookingForwardList = false
+            }
+        }
+        #endif
+        #if os(iOS)
         .sheet(isPresented: $showingThemedList) {
             if let themedList = selectedThemedList {
                 ListDetailsView(list: themedList)
@@ -202,6 +312,32 @@ struct HomeView: View {
         .sheet(item: $selectedMovie) { movie in
             MovieDetailsView(movie: movie)
         }
+        #else
+        .onChange(of: showingThemedList) { _, showing in
+            if showing, let themedList = selectedThemedList {
+                navigationCoordinator.showListDetails(themedList)
+                showingThemedList = false
+            }
+        }
+        .onChange(of: selectedUpcomingMovie) { _, movie in
+            if let movie = movie {
+                navigationCoordinator.showMovieDetails(movie)
+                selectedUpcomingMovie = nil
+            }
+        }
+        .onChange(of: selectedTelevisionShow) { _, show in
+            if let show = show {
+                navigationCoordinator.showTelevisionDetails(show)
+                selectedTelevisionShow = nil
+            }
+        }
+        .onChange(of: selectedMovie) { _, movie in
+            if let movie = movie {
+                navigationCoordinator.showMovieDetails(movie)
+                selectedMovie = nil
+            }
+        }
+        #endif
         .sheet(item: $movieToEdit) { movie in
             EditMovieView(movie: movie) { updated in
                 updateMovieInPlace(updated)
@@ -283,29 +419,42 @@ struct HomeView: View {
                 }
             } else {
                 isLoading = false
+                isInitialLoad = true
                 recentMovies = []
                 currentlyWatchingShows = []
                 upcomingFilms = []
+                onThisDayMovies = []
                 filmsThisMonth = 0
                 highestRatedFilmThisMonth = nil
+                highestRatedFilmValue = "—"
+                highestRatedFilmTitle = ""
                 currentStreak = 0
+                filmsThisYear = 0
+                averageRatingThisYear = 0.0
+                formattedAverageRating = "0.00"
+                currentYearReleasesWatched = 0
                 lastDataLoadTime = nil
                 hasLoadedInitially = false
             }
         }
         .onChange(of: showingAddMovie) { _, isShowing in
             if !isShowing && movieService.isLoggedIn {
-                // Refresh data when add movie sheet is dismissed
+                // Only refresh data that is affected by adding a movie
                 Task {
-                    await loadAllDataIfNeeded(force: true)
+                    async let recentTask = loadRecentMovies()
+                    async let quickStatsTask = loadQuickStats()
+                    async let yearStatsTask = loadYearStats()
+                    await recentTask
+                    await quickStatsTask
+                    await yearStatsTask
                 }
             }
         }
         .onChange(of: showingAddTelevision) { _, isShowing in
             if !isShowing && movieService.isLoggedIn {
-                // Refresh data when add television sheet is dismissed
+                // Only refresh television data
                 Task {
-                    await loadAllDataIfNeeded(force: true)
+                    await loadCurrentlyWatchingShows()
                 }
             }
         }
@@ -319,81 +468,63 @@ struct HomeView: View {
         }
         .onChange(of: showingLogAgain) { _, isShowing in
             if !isShowing && movieService.isLoggedIn {
-                // Refresh data when log again sheet is dismissed
+                // Only refresh movie-related data for log again
                 Task {
-                    await loadAllDataIfNeeded(force: true)
+                    async let recentTask = loadRecentMovies()
+                    async let quickStatsTask = loadQuickStats()
+                    async let yearStatsTask = loadYearStats()
+                    await recentTask
+                    await quickStatsTask
+                    await yearStatsTask
                 }
             }
         }
     }
     
-    // MARK: - Quick Stats Section
+
+    
+    // MARK: - Planner Height Helper
+    
+    private func plannerDetentHeight(full: CGFloat) -> CGFloat {
+        switch plannerDetent {
+        case .compact:
+            return compactPlannerHeight
+        case .full:
+            return full
+        }
+    }
+    
+    // MARK: - Planner Drag Handle
     
     @ViewBuilder
-    private var quickStatsSection: some View {
-        VStack(spacing: 0) {
-            // Section header
-            HStack {
-                Text("Quick Stats")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 16)
-            
-            // Horizontal scrollable stats tiles
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    NavigationLink(destination: StatisticsView()) {
-                        QuickStatTile(
-                            title: "Films This Month",
-                            value: "\(filmsThisMonth)",
-                            icon: "calendar",
-                            color: .blue
-                        )
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    
-                    NavigationLink(destination: StatisticsView()) {
-                        if let highestRatedFilm = highestRatedFilmThisMonth {
-                            QuickStatTile(
-                                title: "Highest Rated This Month",
-                                value: String(format: "%.1f", highestRatedFilm.rating ?? 0.0),
-                                subtitle: highestRatedFilm.title,
-                                icon: "star.fill",
-                                color: .yellow
-                            )
-                        } else {
-                            QuickStatTile(
-                                title: "Highest Rated This Month",
-                                value: "—",
-                                icon: "star.fill",
-                                color: .yellow
-                            )
-                        }
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    
-                    NavigationLink(destination: StatisticsView()) {
-                        QuickStatTile(
-                            title: "Current Streak",
-                            value: "\(currentStreak)",
-                            // subtitle: currentStreak == 1 ? "day" : "days",
-                            icon: "flame.fill",
-                            color: .red
-                        )
-                    }
-                    .buttonStyle(PlainButtonStyle())
+    private var plannerDragHandle: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                if plannerDetent == .compact {
+                    plannerDetent = .full
+                    Task { await dataManager.refreshTheaterVisits() }
+                } else {
+                    plannerDetent = .compact
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
             }
-            .frame(height: 140)
-            .padding(.bottom, 20)
+        }) {
+            // Single grabber: pill when compact, up-chevron when expanded
+            Group {
+                if plannerDetent == .full {
+                    Image(systemName: "chevron.compact.up")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundColor(Color.gray.opacity(0.45))
+                } else {
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(Color.gray.opacity(0.45))
+                        .frame(width: 40, height: 5)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 26)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(PlainButtonStyle())
     }
     
     // MARK: - Upcoming Films Section
@@ -406,10 +537,9 @@ struct HomeView: View {
                 Text("Upcoming Films")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
-            .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
             
@@ -420,7 +550,6 @@ struct HomeView: View {
                         upcomingMoviePosterView(for: item)
                     }
                 }
-                .padding(.horizontal, 20)
             }
             .padding(.bottom, 20)
         }
@@ -435,7 +564,7 @@ struct HomeView: View {
             }
         }) {
             VStack(spacing: 8) {
-                AsyncImage(url: item.posterURL) { image in
+                WebImage(url: item.posterURL) { image in
                     image
                         .resizable()
                         .aspectRatio(2/3, contentMode: .fill)
@@ -452,7 +581,7 @@ struct HomeView: View {
                 if let releaseDateString = item.movieReleaseDate {
                     Text(formatReleaseDate(releaseDateString))
                         .font(.caption2)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .lineLimit(1)
                         .frame(height: 16, alignment: .top)
                 } else {
@@ -498,10 +627,9 @@ struct HomeView: View {
                 Text("Currently Watching")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
-            .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
             
@@ -512,7 +640,6 @@ struct HomeView: View {
                         televisionPosterView(for: show)
                     }
                 }
-                .padding(.horizontal, 20)
             }
             .padding(.bottom, 20)
         }
@@ -524,7 +651,7 @@ struct HomeView: View {
             selectedTelevisionShow = show
         }) {
             VStack(spacing: 8) {
-                AsyncImage(url: show.posterURL) { image in
+                WebImage(url: show.posterURL) { image in
                     image
                         .resizable()
                         .aspectRatio(2/3, contentMode: .fill)
@@ -536,11 +663,11 @@ struct HomeView: View {
                 .frame(width: 100, height: 150)
                 .cornerRadius(12)
                 .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-                
+
                 // Episode progress below poster
                 Text(show.progressText)
                     .font(.caption2)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .lineLimit(1)
                     .frame(height: 16, alignment: .top)
             }
@@ -602,10 +729,9 @@ struct HomeView: View {
                 Text("Recently Logged")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
-            .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
             
@@ -616,7 +742,6 @@ struct HomeView: View {
                         moviePosterView(for: movie)
                     }
                 }
-                .padding(.horizontal, 20)
             }
             .padding(.bottom, 20)
         }
@@ -628,7 +753,7 @@ struct HomeView: View {
             selectedMovie = movie
         }) {
             VStack(spacing: 8) {
-                AsyncImage(url: movie.posterURL) { image in
+                WebImage(url: movie.posterURL) { image in
                     image
                         .resizable()
                         .aspectRatio(2/3, contentMode: .fill)
@@ -640,11 +765,11 @@ struct HomeView: View {
                 .frame(width: 100, height: 150)
                 .cornerRadius(12)
                 .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-                
+
                 // Movie title below poster
                 Text(movie.title)
                     .font(.caption2)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .frame(height: 32, alignment: .top)
@@ -693,7 +818,6 @@ struct HomeView: View {
                 currentlyWatchingShows = Array(sortedShows.prefix(15))
             }
         } catch {
-            print("Error loading currently watching shows: \(error)")
             await MainActor.run {
                 currentlyWatchingShows = []
             }
@@ -739,12 +863,7 @@ struct HomeView: View {
             .map { $0.0 }
             
             await MainActor.run {
-                upcomingFilms = Array(upcomingItems.prefix(15))
-            }
-        } catch {
-            print("Error loading upcoming films: \(error)")
-            await MainActor.run {
-                upcomingFilms = []
+                upcomingFilms = upcomingItems
             }
         }
     }
@@ -764,7 +883,6 @@ struct HomeView: View {
                 recentMovies = movies
             }
         } catch {
-            print("Error loading recent movies: \(error)")
         }
     }
     
@@ -773,17 +891,17 @@ struct HomeView: View {
             // Get current month's films count and streak data
             let currentYear = Calendar.current.component(.year, from: Date())
             let currentMonth = Calendar.current.component(.month, from: Date())
-            
+
             async let filmsThisMonthTask = statisticsService.getFilmsPerMonth(year: currentYear)
             async let streakTask = statisticsService.getStreakStats(year: nil)
             async let recentMoviesTask = movieService.getMovies(sortBy: .watchDate, ascending: false, limit: 500)
-            
+
             let results = try await (
                 filmsPerMonth: filmsThisMonthTask,
                 streakStats: streakTask,
                 recentMovies: recentMoviesTask
             )
-            
+
             await MainActor.run {
                 // Films this month
                 if let thisMonthData = results.filmsPerMonth.first(where: { $0.month == currentMonth }) {
@@ -791,18 +909,18 @@ struct HomeView: View {
                 } else {
                     self.filmsThisMonth = 0
                 }
-                
+
                 // Current streak
                 self.currentStreak = results.streakStats.currentStreakDays
-                
+
                 // Highest rated film this month - filter recent movies by current month
                 let calendar = Calendar.current
                 let allMovies = results.recentMovies
                 var currentMonthMovies: [Movie] = []
-                
+
                 let dateFormatter = DateFormatter()
                 dateFormatter.dateFormat = "yyyy-MM-dd"
-                
+
                 for movie in allMovies {
                     if let watchDateString = movie.watch_date,
                        let watchDate = dateFormatter.date(from: watchDateString) {
@@ -812,19 +930,135 @@ struct HomeView: View {
                         }
                     }
                 }
-                
+
                 if !currentMonthMovies.isEmpty {
                     let ratedMovies = currentMonthMovies.compactMap { movie -> (Movie, Double)? in
-                        guard let rating = movie.rating else { return nil }
-                        return (movie, rating)
+                        guard let detailedRating = movie.detailed_rating else { return nil }
+                        return (movie, detailedRating)
                     }
-                    self.highestRatedFilmThisMonth = ratedMovies.max { $0.1 < $1.1 }?.0
+
+                    if let highestRated = ratedMovies.max(by: { $0.1 < $1.1 }) {
+                        self.highestRatedFilmThisMonth = highestRated.0
+                        let detailedRating = highestRated.1
+                        self.highestRatedFilmValue = String(Int(detailedRating))
+                        self.highestRatedFilmTitle = highestRated.0.title
+                    } else {
+                        self.highestRatedFilmThisMonth = nil
+                        self.highestRatedFilmValue = "—"
+                        self.highestRatedFilmTitle = ""
+                    }
                 } else {
                     self.highestRatedFilmThisMonth = nil
+                    self.highestRatedFilmValue = "—"
+                    self.highestRatedFilmTitle = ""
                 }
             }
         } catch {
-            print("Error loading quick stats: \(error)")
+            await MainActor.run {
+                self.filmsThisMonth = 0
+                self.highestRatedFilmThisMonth = nil
+                self.highestRatedFilmValue = "—"
+                self.highestRatedFilmTitle = ""
+                self.currentStreak = 0
+            }
+        }
+    }
+    
+    private func loadYearStats() async {
+        let currentYear = Calendar.current.component(.year, from: Date())
+        
+        do {
+            // Load dashboard stats for average rating and year release stats concurrently
+            async let yearDashboardTask = statisticsService.getDashboardStats(year: currentYear)
+            async let globalDashboardTask = statisticsService.getDashboardStats(year: nil)
+            async let yearReleaseTask = statisticsService.getYearReleaseStats(year: currentYear)
+            
+            let (yearDashboard, globalDashboard, yearRelease) = try await (yearDashboardTask, globalDashboardTask, yearReleaseTask)
+            
+            await MainActor.run {
+                self.filmsThisYear = yearDashboard.totalFilms > 0 ? yearDashboard.totalFilms : globalDashboard.filmsThisYear
+
+                // Average rating this year - ensure it's a valid, finite number
+                let rawAverage = yearDashboard.averageRating ?? 0.0
+                let safeAverage = rawAverage.isFinite ? rawAverage : 0.0
+                self.averageRatingThisYear = safeAverage
+
+                // Format the average rating string safely
+                self.formattedAverageRating = String(format: "%.2f", safeAverage)
+
+                // Films released in current year that were watched
+                self.currentYearReleasesWatched = yearRelease.filmsFromYear
+            }
+        } catch {
+            await MainActor.run {
+                self.filmsThisYear = 0
+                self.averageRatingThisYear = 0.0
+                self.formattedAverageRating = "0.00"
+                self.currentYearReleasesWatched = 0
+            }
+        }
+    }
+
+    private func loadOnThisDayMovies() async {
+        let calendar = Calendar.current
+        let today = Date()
+        let month = calendar.component(.month, from: today)
+        let day = calendar.component(.day, from: today)
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        let todayString = dateFormatter.string(from: today)
+
+        do {
+            let movies = try await movieService.getFilmsOnThisDay(month: month, day: day)
+            let filteredMovies = movies
+                .filter { ($0.watched_date ?? "") != todayString }
+                .sorted { lhs, rhs in
+                    if lhs.resolvedWatchedYear != rhs.resolvedWatchedYear {
+                        return lhs.resolvedWatchedYear > rhs.resolvedWatchedYear
+                    }
+                    return (lhs.watched_date ?? "") > (rhs.watched_date ?? "")
+                }
+
+            await MainActor.run {
+                onThisDayMovies = filteredMovies
+            }
+
+            if filteredMovies.isEmpty {
+                await loadOnThisDayMoviesFallback(month: month, day: day, todayString: todayString)
+            }
+        } catch {
+            await loadOnThisDayMoviesFallback(month: month, day: day, todayString: todayString)
+        }
+    }
+
+    private func loadOnThisDayMoviesFallback(month: Int, day: Int, todayString: String) async {
+        await dataManager.refreshMovies()
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+
+        let matches: [OnThisDayMovie] = dataManager.allMovies.compactMap { movie in
+            guard let watchDateString = movie.watch_date, !watchDateString.isEmpty else { return nil }
+            guard watchDateString != todayString else { return nil }
+            guard let watchDate = formatter.date(from: watchDateString) else { return nil }
+
+            let calendar = Calendar.current
+            let components = calendar.dateComponents([.year, .month, .day], from: watchDate)
+            guard components.month == month, components.day == day, let year = components.year else { return nil }
+
+            return OnThisDayMovie(from: movie, watchedYear: year)
+        }
+        .sorted { lhs, rhs in
+            if lhs.resolvedWatchedYear != rhs.resolvedWatchedYear {
+                return lhs.resolvedWatchedYear > rhs.resolvedWatchedYear
+            }
+            return (lhs.watched_date ?? "") > (rhs.watched_date ?? "")
+        }
+
+        await MainActor.run {
+            onThisDayMovies = matches
         }
     }
     
@@ -840,57 +1074,75 @@ struct HomeView: View {
         if !force && !shouldRefreshData() && hasLoadedInitially {
             return
         }
-        
-        isLoading = true
-        
+
+        // Only show loading spinner on non-initial loads
+        if !isInitialLoad {
+            isLoading = true
+        }
+
         // Load all data concurrently using optimized methods where available
         async let recentMoviesTask = loadRecentMovies()
         async let currentlyWatchingTask = loadCurrentlyWatchingShows()
         async let upcomingFilmsTask = loadUpcomingFilms()
         async let quickStatsTask = loadQuickStats()
+        async let yearStatsTask = loadYearStats()
+        async let onThisDayTask = loadOnThisDayMovies()
         async let listsTask = dataManager.refreshListsOptimized()
-        
+
         // Wait for all tasks to complete
         await recentMoviesTask
         await currentlyWatchingTask
         await upcomingFilmsTask
         await quickStatsTask
+        await yearStatsTask
+        await onThisDayTask
         await listsTask
-        
+
         lastDataLoadTime = Date()
         hasLoadedInitially = true
-        isLoading = false
+
+        // Mark initial load as complete
+        await MainActor.run {
+            isInitialLoad = false
+            isLoading = false
+        }
     }
     
     // MARK: - Refresh Function
     
+    @MainActor
     private func refreshAllData() async {
         guard movieService.isLoggedIn else { return }
-        
+
         isLoading = true
-        
+
         // Refresh all data sources concurrently using optimized methods
         async let recentMoviesTask = loadRecentMovies()
         async let currentlyWatchingTask = loadCurrentlyWatchingShows()
         async let upcomingFilmsTask = loadUpcomingFilms()
         async let quickStatsTask = loadQuickStats()
+        async let yearStatsTask = loadYearStats()
+        async let onThisDayTask = loadOnThisDayMovies()
         async let listsRefreshTask = dataManager.refreshListsOptimized()
         async let moviesRefreshTask = dataManager.refreshMovies()
         async let televisionRefreshTask = dataManager.refreshTelevision()
         async let albumsRefreshTask = dataManager.refreshAlbums()
-        
+
         // Wait for all tasks to complete
         await recentMoviesTask
         await currentlyWatchingTask
         await upcomingFilmsTask
         await quickStatsTask
+        await yearStatsTask
+        await onThisDayTask
         await listsRefreshTask
         await moviesRefreshTask
         await televisionRefreshTask
         await albumsRefreshTask
-        
+
         lastDataLoadTime = Date()
         hasLoadedInitially = true
+
         isLoading = false
     }
     
@@ -944,7 +1196,6 @@ struct HomeView: View {
                 }
             }
         } catch {
-            print("Error checking if movie is logged: \(error)")
             // On error, still show the unlogged version
             await MainActor.run {
                 let unloggedMovie = Movie(
@@ -986,16 +1237,10 @@ struct HomeView: View {
     }
     
     private func formatReleaseDate(_ dateString: String) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        
-        guard let date = dateFormatter.date(from: dateString) else {
+        guard let date = Self.dateFormatter.date(from: dateString) else {
             return dateString
         }
-        
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateFormat = "MMM d"
-        return displayFormatter.string(from: date)
+        return Self.displayDateFormatter.string(from: date)
     }
     
     private func updateMovieInPlace(_ updated: Movie) {
@@ -1017,7 +1262,6 @@ struct HomeView: View {
             }
         } catch {
             await MainActor.run {
-                print("Error deleting movie: \(error)")
                 movieToDelete = nil
                 showingDeleteMovieAlert = false
             }
@@ -1031,7 +1275,6 @@ struct HomeView: View {
             try await dataManager.updateTelevisionProgress(id: show.id, season: season, episode: episode)
             // The onChange listener for dataManager.allTelevision will handle refreshing currentlyWatchingShows
         } catch {
-            print("Error updating television progress: \(error)")
         }
     }
     
@@ -1040,7 +1283,6 @@ struct HomeView: View {
             try await dataManager.updateTelevisionStatus(id: show.id, status: status)
             // The onChange listener for dataManager.allTelevision will handle refreshing currentlyWatchingShows
         } catch {
-            print("Error updating television status: \(error)")
         }
     }
     
@@ -1079,7 +1321,6 @@ struct HomeView: View {
             }
         } catch {
             await MainActor.run {
-                print("Error deleting television show: \(error)")
                 televisionToDelete = nil
                 showingDeleteTelevisionAlert = false
             }
@@ -1144,6 +1385,117 @@ struct HomeView: View {
         )
     }
     
+    // MARK: - Year Stats Section
+    
+    @ViewBuilder
+    private var yearStatsSection: some View {
+        // Only render when data is loaded and not in loading state
+        if !isInitialLoad && !isLoading && hasLoadedInitially {
+            let currentYear = Calendar.current.component(.year, from: Date())
+
+            VStack(spacing: 0) {
+                // Section header
+                HStack {
+                    Text("\(String(currentYear)) Stats")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                    Spacer()
+                }
+                .padding(.top, 12)
+                .padding(.bottom, 16)
+
+                // Stats grid - 3x2 uniform layout
+                VStack(spacing: 12) {
+                    // First row - Year stats
+                    HStack(spacing: 12) {
+                        NavigationLink {
+                            LazyView { StatisticsView() }
+                        } label: {
+                            UnifiedStatTile(
+                                title: "Films This Year",
+                                value: "\(filmsThisYear)",
+                                icon: "film",
+                                color: .purple,
+                                colorScheme: colorScheme
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        NavigationLink {
+                            LazyView { StatisticsView() }
+                        } label: {
+                            UnifiedStatTile(
+                                title: "Avg Rating",
+                                value: formattedAverageRating,
+                                icon: "star.fill",
+                                color: .green,
+                                colorScheme: colorScheme
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        NavigationLink {
+                            LazyView { StatisticsView() }
+                        } label: {
+                            UnifiedStatTile(
+                                title: "\(String(currentYear)) Releases",
+                                value: "\(currentYearReleasesWatched)",
+                                icon: "eye",
+                                color: .cyan,
+                                colorScheme: colorScheme
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                
+                    // Second row - Monthly/streak stats
+                    HStack(spacing: 12) {
+                        NavigationLink {
+                            LazyView { StatisticsView() }
+                        } label: {
+                            UnifiedStatTile(
+                                title: "Films This Month",
+                                value: "\(filmsThisMonth)",
+                                icon: "calendar",
+                                color: .blue,
+                                colorScheme: colorScheme
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        NavigationLink {
+                            LazyView { StatisticsView() }
+                        } label: {
+                            UnifiedStatTile(
+                                title: highestRatedFilmTitle.isEmpty ? "Top Rated" : highestRatedFilmTitle,
+                                value: highestRatedFilmValue,
+                                icon: "trophy.fill",
+                                color: .yellow,
+                                colorScheme: colorScheme
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        NavigationLink {
+                            LazyView { StatisticsView() }
+                        } label: {
+                            UnifiedStatTile(
+                                title: "Streak",
+                                value: "\(currentStreak)",
+                                icon: "flame.fill",
+                                color: .red,
+                                colorScheme: colorScheme
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .padding(.bottom, 20)
+            }
+        }
+    }
+
     // MARK: - Goals Section
     
     @ViewBuilder
@@ -1154,10 +1506,9 @@ struct HomeView: View {
                 Text("Goals")
                     .font(.title2)
                     .fontWeight(.semibold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
-            .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
             
@@ -1236,7 +1587,6 @@ struct HomeView: View {
                     .buttonStyle(PlainButtonStyle())
                 }
             }
-            .padding(.horizontal, 20)
         }
         .padding(.bottom, 20)
     }
@@ -1253,20 +1603,20 @@ struct HomeView: View {
                 Text(title)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(.white)
-                
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
                 HStack(spacing: 8) {
                     Text("\(current) / \(total)")
                         .font(.caption)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                    
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
                     Spacer()
-                    
+
                     Text(String(format: "%.0f%%", (Double(current) / Double(total)) * 100))
                         .font(.caption)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundColor(Color.adaptiveSecondaryText(scheme: colorScheme))
                 }
                 
                 ProgressView(value: Double(current), total: Double(total))
@@ -1278,19 +1628,20 @@ struct HomeView: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color.gray.opacity(0.15))
+                .fill(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
         )
     }
 }
 
-// MARK: - Quick Stat Tile Component
+// MARK: - Unified Stat Tile Component
 
-struct QuickStatTile: View {
+struct UnifiedStatTile: View {
     let title: String
     let value: String
     var subtitle: String?
     let icon: String
     let color: Color
+    let colorScheme: ColorScheme
     
     private var borderGradient: [Color] {
         switch color {
@@ -1299,12 +1650,13 @@ struct QuickStatTile: View {
         case .yellow: return [Color.yellow, Color.orange]
         case .purple: return [Color.purple, Color.pink]
         case .red:    return [Color.red, Color.pink]
+        case .cyan:   return [Color.cyan, Color.teal]
         default:      return [color, color.opacity(0.8)]
         }
     }
     
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             Image(systemName: icon)
                 .foregroundStyle(
                     LinearGradient(
@@ -1325,12 +1677,14 @@ struct QuickStatTile: View {
                     )
                 )
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
             
             Text(title)
-                .font(.caption)
-                .foregroundColor(.white)
+                .font(.caption2)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
+                .minimumScaleFactor(0.8)
             
             if let subtitle = subtitle {
                 Text(subtitle)
@@ -1340,14 +1694,16 @@ struct QuickStatTile: View {
                     .truncationMode(.tail)
             }
         }
-        .frame(width: 120, height: 110)
-        .padding(12)
+        .frame(maxWidth: .infinity)
+        .frame(height: 90)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial.opacity(0.4))
+            RoundedRectangle(cornerRadius: 12)
+                .fill(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(
                     LinearGradient(
                         colors: borderGradient.map { $0.opacity(0.4) },
@@ -1357,6 +1713,26 @@ struct QuickStatTile: View {
                     lineWidth: 1.2
                 )
         )
+    }
+}
+
+// MARK: - Lazy View Wrapper
+// Prevents NavigationLink from eagerly instantiating destination views
+// which can cause EXC_BAD_ACCESS when navigating away via tab bar
+
+struct LazyView<Content: View>: View {
+    let build: () -> Content
+    
+    init(_ build: @autoclosure @escaping () -> Content) {
+        self.build = build
+    }
+    
+    init(@ViewBuilder _ build: @escaping () -> Content) {
+        self.build = build
+    }
+    
+    var body: Content {
+        build()
     }
 }
 

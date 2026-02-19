@@ -11,29 +11,47 @@ import Combine
 
 class SupabaseMovieService: ObservableObject {
     static let shared = SupabaseMovieService()
-    
+
     private let supabase: SupabaseClient
     @Published var isLoggedIn = false
     @Published var currentUser: User?
-    
+    private var isInitialized = false
+    private let initializationLock = NSLock()
+
     // Expose the authenticated client so other services (e.g., Watchlist) share the same auth/session
     var client: SupabaseClient { supabase }
-    
+
     private init() {
         guard let supabaseURL = URL(string: Config.supabaseURL) else {
             fatalError("Missing Supabase URL configuration")
         }
-        
+
         let supabaseKey = Config.supabaseAnonKey
-        
+
         self.supabase = SupabaseClient(
             supabaseURL: supabaseURL,
             supabaseKey: supabaseKey
         )
-        
+
         // Check current auth state
         Task {
             await checkAuthState()
+        }
+    }
+
+    /// Ensures the service is fully initialized before performing operations
+    private func ensureInitialized() async {
+        initializationLock.lock()
+        let initialized = isInitialized
+        initializationLock.unlock()
+
+        if !initialized {
+            // Wait a bit for the initial auth check to complete
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
+            initializationLock.lock()
+            isInitialized = true
+            initializationLock.unlock()
         }
     }
     
@@ -125,17 +143,20 @@ class SupabaseMovieService: ObservableObject {
     
     /// Add a new movie to the diary
     nonisolated func addMovie(_ movieData: AddMovieRequest) async throws -> Movie {
+        // Ensure service is fully initialized before performing operation
+        await ensureInitialized()
+
         let response = try await supabase
             .from("diary")
             .insert(movieData)
             .select()
             .execute()
-        
+
         let movies: [Movie] = try JSONDecoder().decode([Movie].self, from: response.data)
         guard let movie = movies.first else {
             throw SupabaseMovieError.noMovieReturned
         }
-        
+
         // Automatically remove from watchlist after successfully adding to diary
         if let tmdbId = movieData.tmdb_id {
             Task { @MainActor in
@@ -148,7 +169,7 @@ class SupabaseMovieService: ObservableObject {
                 }
             }
         }
-        
+
         return movie
     }
     
@@ -206,6 +227,9 @@ class SupabaseMovieService: ObservableObject {
     
     /// Update poster URL for all movies with the given TMDB ID
     nonisolated func updatePosterForTmdbId(tmdbId: Int, newPosterUrl: String) async throws {
+        // Ensure service is fully initialized before performing operation
+        await ensureInitialized()
+        
         try await supabase
             .from("diary")
             .update(["poster_url": newPosterUrl])
@@ -215,6 +239,9 @@ class SupabaseMovieService: ObservableObject {
     
     /// Update backdrop URL for all movies with the given TMDB ID
     nonisolated func updateBackdropForTmdbId(tmdbId: Int, newBackdropUrl: String) async throws {
+        // Ensure service is fully initialized before performing operation
+        await ensureInitialized()
+        
         try await supabase
             .from("diary")
             .update(["backdrop_path": newBackdropUrl])
@@ -286,11 +313,11 @@ class SupabaseMovieService: ObservableObject {
     // MARK: - Favorite Functions
     
     nonisolated func toggleMovieFavorite(movieId: Int) async throws -> Movie {
-        print("🔥 DEBUG SERVICE: toggleMovieFavorite called with movieId: \(movieId)")
+
         
         do {
             // First, fetch the current movie to get its favorite status
-            print("🔥 DEBUG SERVICE: Fetching current movie state")
+            // First, fetch the current movie to get its favorite status
             let currentMovie: Movie = try await supabase
                 .from("diary")
                 .select()
@@ -299,12 +326,11 @@ class SupabaseMovieService: ObservableObject {
                 .execute()
                 .value
             
-            print("🔥 DEBUG SERVICE: Current movie favorited field: \(currentMovie.favorited ?? false)")
-            print("🔥 DEBUG SERVICE: Current movie isFavorited: \(currentMovie.isFavorited)")
+
             
             // Toggle the favorite status
             let newFavoriteStatus = !(currentMovie.favorited ?? false)
-            print("🔥 DEBUG SERVICE: Setting favorited to: \(newFavoriteStatus)")
+
             
             let response: Movie = try await supabase
                 .from("diary")
@@ -316,15 +342,11 @@ class SupabaseMovieService: ObservableObject {
                 .execute()
                 .value
             
-            print("🔥 DEBUG SERVICE: Supabase response received")
-            print("🔥 DEBUG SERVICE: Response movie ID: \(response.id)")
-            print("🔥 DEBUG SERVICE: Response favorited field: \(response.favorited ?? false)")
-            print("🔥 DEBUG SERVICE: Response isFavorited computed: \(response.isFavorited)")
+
             
             return response
         } catch {
-            print("🔥 DEBUG SERVICE ERROR: Supabase update failed: \(error.localizedDescription)")
-            print("🔥 DEBUG SERVICE ERROR: Full error: \(error)")
+
             throw SupabaseMovieError.updateFailed(error)
         }
     }
@@ -398,19 +420,42 @@ class SupabaseMovieService: ObservableObject {
             let target_year: Int
             let current_month: Int
         }
-        
+
         let params = GoalsDataParams(
             user_id_param: userId.uuidString,
             target_year: targetYear,
             current_month: currentMonth
         )
-        
+
         let response = try await supabase
             .rpc("get_goals_data", params: params)
             .execute()
-        
+
         let goalsData = try JSONDecoder().decode([GoalListData].self, from: response.data)
         return goalsData
+    }
+
+    // MARK: - On This Day
+
+    /// Fetches movies watched on the same month/day across all years
+    /// - Parameters:
+    ///   - month: Target month (1-12)
+    ///   - day: Target day (1-31)
+    /// - Returns: Array of OnThisDayMovie with watched_year field
+    nonisolated func getFilmsOnThisDay(month: Int, day: Int) async throws -> [OnThisDayMovie] {
+        struct Params: Encodable {
+            let target_month: Int
+            let target_day: Int
+        }
+
+        let params = Params(target_month: month, target_day: day)
+
+        let response = try await supabase
+            .rpc("get_films_on_this_day", params: params)
+            .execute()
+
+        let movies = try JSONDecoder().decode([OnThisDayMovie].self, from: response.data)
+        return movies
     }
 }
 
@@ -500,13 +545,169 @@ enum MovieSortField: String, CaseIterable {
     }
 }
 
+// MARK: - On This Day Response Type
+
+/// Response type for On This Day query
+/// Includes all movie fields plus the computed watched_year field
+struct OnThisDayMovie: Codable, Identifiable, @unchecked Sendable {
+    let id: Int
+    let title: String
+    let release_year: Int?
+    let release_date: String?
+    let rating: Double?
+    let ratings100: Double?
+    let reviews: String?
+    let tags: String?
+    let watched_date: String?
+    let rewatch: String?
+    let tmdb_id: Int?
+    let overview: String?
+    let poster_url: String?
+    let backdrop_path: String?
+    let director: String?
+    let runtime: Int?
+    let vote_average: Double?
+    let vote_count: Int?
+    let popularity: Double?
+    let original_language: String?
+    let original_title: String?
+    let tagline: String?
+    let status: String?
+    let budget: Int?
+    let revenue: Int?
+    let imdb_id: String?
+    let homepage: String?
+    let genres: [String]?
+    let created_at: String?
+    let updated_at: String?
+    let favorited: Bool?
+    let watched_year: Int  // Computed field from database
+
+    var resolvedWatchedYear: Int {
+        if let watchedDate = watched_date {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+
+            if let date = formatter.date(from: watchedDate) {
+                return Calendar.current.component(.year, from: date)
+            }
+
+            if let date = ISO8601DateFormatter().date(from: watchedDate) {
+                return Calendar.current.component(.year, from: date)
+            }
+        }
+        return watched_year
+    }
+
+    /// Convert to Movie model
+    func toMovie() -> Movie {
+        return Movie(
+            id: id,
+            title: title,
+            release_year: release_year,
+            release_date: release_date,
+            rating: rating,
+            detailed_rating: ratings100,
+            review: reviews,
+            tags: tags,
+            watch_date: watched_date,
+            is_rewatch: rewatch?.lowercased() == "yes",
+            tmdb_id: tmdb_id,
+            overview: overview,
+            poster_url: poster_url,
+            backdrop_path: backdrop_path,
+            director: director,
+            runtime: runtime,
+            vote_average: vote_average,
+            vote_count: vote_count,
+            popularity: popularity,
+            original_language: original_language,
+            original_title: original_title,
+            tagline: tagline,
+            status: status,
+            budget: budget,
+            revenue: revenue,
+            imdb_id: imdb_id,
+            homepage: homepage,
+            genres: genres,
+            created_at: created_at,
+            updated_at: updated_at,
+            favorited: favorited
+        )
+    }
+
+    var posterURL: URL? {
+        guard let urlString = poster_url, !urlString.isEmpty else { return nil }
+        if urlString.hasPrefix("http") {
+            return URL(string: urlString)
+        }
+        if urlString.hasPrefix("/") {
+            return URL(string: "https://image.tmdb.org/t/p/w500\(urlString)")
+        }
+        return URL(string: urlString)
+    }
+
+    var backdropURL: URL? {
+        guard let urlString = backdrop_path, !urlString.isEmpty else { return nil }
+        if urlString.hasPrefix("http") {
+            return URL(string: urlString)
+        }
+        if urlString.hasPrefix("/") {
+            return URL(string: "https://image.tmdb.org/t/p/w1280\(urlString)")
+        }
+        return URL(string: urlString)
+    }
+}
+
+extension OnThisDayMovie {
+    init(from movie: Movie, watchedYear: Int) {
+        self.id = movie.id
+        self.title = movie.title
+        self.release_year = movie.release_year
+        self.release_date = movie.release_date
+        self.rating = movie.rating
+        self.ratings100 = movie.detailed_rating
+        self.reviews = movie.review
+        self.tags = movie.tags
+        self.watched_date = movie.watch_date
+        if let isRewatch = movie.is_rewatch {
+            self.rewatch = isRewatch ? "yes" : "no"
+        } else {
+            self.rewatch = nil
+        }
+        self.tmdb_id = movie.tmdb_id
+        self.overview = movie.overview
+        self.poster_url = movie.poster_url
+        self.backdrop_path = movie.backdrop_path
+        self.director = movie.director
+        self.runtime = movie.runtime
+        self.vote_average = movie.vote_average
+        self.vote_count = movie.vote_count
+        self.popularity = movie.popularity
+        self.original_language = movie.original_language
+        self.original_title = movie.original_title
+        self.tagline = movie.tagline
+        self.status = movie.status
+        self.budget = movie.budget
+        self.revenue = movie.revenue
+        self.imdb_id = movie.imdb_id
+        self.homepage = movie.homepage
+        self.genres = movie.genres
+        self.created_at = movie.created_at
+        self.updated_at = movie.updated_at
+        self.favorited = movie.favorited
+        self.watched_year = watchedYear
+    }
+}
+
 enum SupabaseMovieError: LocalizedError {
     case insertFailed(Error)
     case fetchFailed(Error)
     case updateFailed(Error)
     case deleteFailed(Error)
     case noMovieReturned
-    
+
     var errorDescription: String? {
         switch self {
         case .insertFailed(let error):

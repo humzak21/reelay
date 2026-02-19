@@ -10,9 +10,10 @@ import SDWebImageSwiftUI
 
 struct AddAlbumsView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var spotifyService = SpotifyService.shared
-    @StateObject private var supabaseService = SupabaseAlbumService.shared
-    @StateObject private var dataManager = DataManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+    private let spotifyService = SpotifyService.shared
+    private let supabaseService = SupabaseAlbumService.shared
+    private let dataManager = DataManager.shared
     
     // Search state
     @State private var searchText = ""
@@ -70,17 +71,21 @@ struct AddAlbumsView: View {
                 }
             }
             .navigationTitle("Add Album")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
-            .background(Color(.systemBackground))
+            .background(Color(.systemGroupedBackground))
+            #else
+            .background(Color(.windowBackgroundColor))
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
+
                 if selectedResult != nil || isManualEntry {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItem(placement: .confirmationAction) {
                         Button("Add", systemImage: "checkmark") {
                             Task {
                                 await addAlbum()
@@ -146,7 +151,11 @@ struct AddAlbumsView: View {
                 .padding(.vertical, 12)
             }
         }
-        .background(Color(.systemBackground))
+        #if canImport(UIKit)
+        .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(.windowBackgroundColor))
+        #endif
         .overlay(
             Rectangle()
                 .fill(Color.gray.opacity(0.2))
@@ -165,6 +174,7 @@ struct AddAlbumsView: View {
                 
                 TextField("Search albums...", text: $searchText)
                     .textFieldStyle(PlainTextFieldStyle())
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .onSubmit {
                         performSearch()
                     }
@@ -215,6 +225,7 @@ struct AddAlbumsView: View {
                     Text("No Results")
                         .font(.title2)
                         .fontWeight(.semibold)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Text("Try searching with different keywords.")
                         .font(.body)
@@ -231,6 +242,7 @@ struct AddAlbumsView: View {
                     Text("Search Albums")
                         .font(.title2)
                         .fontWeight(.semibold)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Text("Search for albums to add to your listen list.")
                         .font(.body)
@@ -244,9 +256,13 @@ struct AddAlbumsView: View {
             
             Spacer()
         }
-        .background(Color(.systemBackground))
+        #if canImport(UIKit)
+        .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(.windowBackgroundColor))
+        #endif
     }
-    
+
     private var searchResultsList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
@@ -302,7 +318,9 @@ struct AddAlbumsView: View {
                             
                             TextField("Release year", value: $manualReleaseYear, format: .number)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
+                                #if canImport(UIKit)
                                 .keyboardType(.numberPad)
+                                #endif
                         }
                         
                         HStack {
@@ -344,8 +362,10 @@ struct AddAlbumsView: View {
                                 
                                 TextField("https://...", text: $manualCoverURL)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    #if canImport(UIKit)
                                     .keyboardType(.URL)
                                     .autocapitalization(.none)
+                                    #endif
                             }
                             
                             if !manualCoverURL.isEmpty, let url = URL(string: manualCoverURL) {
@@ -381,7 +401,7 @@ struct AddAlbumsView: View {
                 }) {
                     Text("Continue to Details")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(
@@ -397,9 +417,13 @@ struct AddAlbumsView: View {
             }
             .padding(.vertical)
         }
-        .background(Color(.systemBackground))
+        #if canImport(UIKit)
+        .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(.windowBackgroundColor))
+        #endif
     }
-    
+
     // MARK: - Add Album View
     private var addAlbumView: some View {
         ScrollView {
@@ -422,7 +446,11 @@ struct AddAlbumsView: View {
             }
             .padding()
         }
-        .background(Color.black)
+        #if canImport(UIKit)
+        .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(.windowBackgroundColor))
+        #endif
         .onAppear {
             if selectedResult != nil {
                 Task {
@@ -465,6 +493,7 @@ struct AddAlbumsView: View {
                         Text(result.name ?? "Unknown Album")
                             .font(.title2)
                             .fontWeight(.bold)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text(result.artistNames)
                             .font(.subheadline)
@@ -525,6 +554,7 @@ struct AddAlbumsView: View {
                         Text(manualTitle)
                             .font(.title2)
                             .fontWeight(.bold)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text(manualArtist)
                             .font(.subheadline)
@@ -573,7 +603,7 @@ struct AddAlbumsView: View {
                         Text("Previous Entries")
                             .font(.headline)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text("\(previousEntries.count) previous \(previousEntries.count == 1 ? "entry" : "entries") found")
                             .font(.caption)
@@ -917,6 +947,7 @@ struct AddAlbumsView: View {
 
 // MARK: - Album Search Result Row
 struct AlbumSearchResultRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let result: SpotifyAlbum
     let onSelect: () -> Void
     
@@ -945,6 +976,7 @@ struct AlbumSearchResultRow: View {
                     Text(result.name ?? "Unknown Album")
                         .font(.headline)
                         .fontWeight(.semibold)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .lineLimit(2)
                     
                     Text(result.artistNames)
@@ -994,6 +1026,7 @@ struct AlbumSearchResultRow: View {
 
 // MARK: - Album Previous Entry Row
 struct AlbumPreviousEntryRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let album: Album
     
     var body: some View {
@@ -1011,7 +1044,7 @@ struct AlbumPreviousEntryRow: View {
                 Text(album.albumStatus.displayName)
                     .font(.body)
                     .fontWeight(.medium)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 
                 if let listenedDate = album.listened_date {
                     Text("Listened: \(formatDate(listenedDate))")

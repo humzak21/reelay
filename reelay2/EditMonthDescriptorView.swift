@@ -4,7 +4,7 @@ struct EditMonthDescriptorView: View {
     let monthYear: String
     let displayMonthYear: String
     @Binding var isPresented: Bool
-    @StateObject private var monthDescriptorService = MonthDescriptorService.shared
+    @ObservedObject private var monthDescriptorService = MonthDescriptorService.shared
     
     @State private var descriptorText: String = ""
     @State private var isLoading: Bool = false
@@ -107,8 +107,14 @@ struct EditMonthDescriptorView: View {
                 .padding(.horizontal)
                 .padding(.bottom)
             }
-            .background(Color(.systemBackground))
+            #if os(macOS)
+            .background(Color(NSColor.windowBackgroundColor))
+            #else
+            .background(Color(.systemGroupedBackground))
+            #endif
+            #if !os(macOS)
             .navigationBarHidden(true)
+            #endif
         }
         .onAppear {
             setupInitialState()

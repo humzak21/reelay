@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ThemedMonthDebugView: View {
-    @StateObject private var dataManager = DataManager.shared
+    @ObservedObject private var dataManager = DataManager.shared
     @State private var debugOutput: String = ""
     @State private var selectedList: MovieList?
     
@@ -132,7 +132,7 @@ struct ThemedMonthDebugView: View {
             }
             .navigationTitle("Themed Month Debug")
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Select List") {
                         // In a real app, show a picker
                         selectedList = dataManager.movieLists.first

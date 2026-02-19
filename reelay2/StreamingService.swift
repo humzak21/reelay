@@ -148,7 +148,7 @@ class StreamingService: ObservableObject {
     
     /// Get streaming availability for a movie by TMDB ID
     func getMovieStreamingAvailability(tmdbId: Int, country: String = "us") async throws -> StreamingAvailabilityResponse {
-        print("🎬 [StreamingService] Starting movie streaming lookup for TMDB ID: \(tmdbId), country: \(country)")
+        // print("🎬 [StreamingService] Starting movie streaming lookup for TMDB ID: \(tmdbId), country: \(country)")
         
         await MainActor.run {
             isLoading = true
@@ -165,7 +165,7 @@ class StreamingService: ObservableObject {
         
         // Format TMDB ID correctly for the API (movie/{id})
         let formattedTmdbId = "movie/\(tmdbId)"
-        print("🔍 [StreamingService] Formatted TMDB ID: \(formattedTmdbId)")
+        // print("🔍 [StreamingService] Formatted TMDB ID: \(formattedTmdbId)")
         
         // Build URL with country parameter
         var urlComponents = URLComponents(string: "\(baseURL)/shows/\(formattedTmdbId)")
@@ -173,14 +173,14 @@ class StreamingService: ObservableObject {
         
         guard let url = urlComponents?.url else {
             let errorMsg = "Invalid URL for TMDB ID: \(tmdbId)"
-            print("❌ [StreamingService] \(errorMsg)")
+            // print("❌ [StreamingService] \(errorMsg)")
             await MainActor.run {
                 error = errorMsg
             }
             throw StreamingServiceError.invalidURL
         }
         
-        print("🌐 [StreamingService] Request URL: \(url.absoluteString)")
+        // print("🌐 [StreamingService] Request URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -188,36 +188,36 @@ class StreamingService: ObservableObject {
         request.addValue(rapidAPIKey, forHTTPHeaderField: "X-RapidAPI-Key")
         request.addValue("streaming-availability.p.rapidapi.com", forHTTPHeaderField: "X-RapidAPI-Host")
         
-        print("🔑 [StreamingService] API Key present: \(!rapidAPIKey.isEmpty)")
-        print("📤 [StreamingService] Making request to streaming API...")
+        // print("🔑 [StreamingService] API Key present: \(!rapidAPIKey.isEmpty)")
+        // print("📤 [StreamingService] Making request to streaming API...")
         
         do {
             let (data, response) = try await session.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 let errorMsg = "Invalid response type"
-                print("❌ [StreamingService] \(errorMsg)")
+                // print("❌ [StreamingService] \(errorMsg)")
                 await MainActor.run {
                     error = errorMsg
                 }
                 throw StreamingServiceError.invalidResponse
             }
             
-            print("📥 [StreamingService] HTTP Status: \(httpResponse.statusCode)")
-            print("📥 [StreamingService] Response headers: \(httpResponse.allHeaderFields)")
+            // print("📥 [StreamingService] HTTP Status: \(httpResponse.statusCode)")
+            // print("📥 [StreamingService] Response headers: \(httpResponse.allHeaderFields)")
             
             // Log response data for debugging
             if let responseString = String(data: data, encoding: .utf8) {
-                print("📥 [StreamingService] Response body: \(responseString.prefix(500))...")
+                // print("📥 [StreamingService] Response body: \(responseString.prefix(500))...")
             }
             
             guard httpResponse.statusCode == 200 else {
                 let errorMsg = "HTTP error: \(httpResponse.statusCode)"
-                print("❌ [StreamingService] \(errorMsg)")
+                // print("❌ [StreamingService] \(errorMsg)")
                 
                 // Try to parse error response
                 if let errorResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    print("❌ [StreamingService] Error response: \(errorResponse)")
+                    // print("❌ [StreamingService] Error response: \(errorResponse)")
                 }
                 
                 await MainActor.run {
@@ -227,12 +227,12 @@ class StreamingService: ObservableObject {
             }
             
             let result = try decoder.decode(StreamingAvailabilityResponse.self, from: data)
-            print("✅ [StreamingService] Successfully decoded response for: \(result.title ?? "Unknown")")
-            print("📺 [StreamingService] Streaming options count: \(result.streamingOptions?[country]?.count ?? 0)")
+            // print("✅ [StreamingService] Successfully decoded response for: \(result.title ?? "Unknown")")
+            // print("📺 [StreamingService] Streaming options count: \(result.streamingOptions?[country]?.count ?? 0)")
             
             // Check for API-level errors in the response
             if let error = result.error ?? result.message {
-                print("⚠️ [StreamingService] API returned error: \(error)")
+                // print("⚠️ [StreamingService] API returned error: \(error)")
                 await MainActor.run {
                     self.error = error
                 }
@@ -243,21 +243,10 @@ class StreamingService: ObservableObject {
             
         } catch let decodingError as DecodingError {
             let errorMsg = "Failed to decode response: \(decodingError.localizedDescription)"
-            print("❌ [StreamingService] Decoding error: \(decodingError)")
+            // print("❌ [StreamingService] Decoding error: \(decodingError)")
             
             // Print detailed decoding error info
-            switch decodingError {
-            case .keyNotFound(let key, let context):
-                print("❌ [StreamingService] Key '\(key)' not found: \(context.debugDescription)")
-            case .valueNotFound(let value, let context):
-                print("❌ [StreamingService] Value '\(value)' not found: \(context.debugDescription)")
-            case .typeMismatch(let type, let context):
-                print("❌ [StreamingService] Type '\(type)' mismatch: \(context.debugDescription)")
-            case .dataCorrupted(let context):
-                print("❌ [StreamingService] Data corrupted: \(context.debugDescription)")
-            @unknown default:
-                print("❌ [StreamingService] Unknown decoding error")
-            }
+
             
             await MainActor.run {
                 error = errorMsg
@@ -265,7 +254,7 @@ class StreamingService: ObservableObject {
             throw StreamingServiceError.decodingError(decodingError)
         } catch {
             let errorMsg = "Network error: \(error.localizedDescription)"
-            print("❌ [StreamingService] \(errorMsg)")
+            // print("❌ [StreamingService] \(errorMsg)")
             await MainActor.run {
                 self.error = errorMsg
             }
@@ -275,7 +264,7 @@ class StreamingService: ObservableObject {
     
     /// Get streaming availability for a TV show by TMDB ID
     func getTVShowStreamingAvailability(tmdbId: Int, country: String = "us") async throws -> StreamingAvailabilityResponse {
-        print("📺 [StreamingService] Starting TV show streaming lookup for TMDB ID: \(tmdbId), country: \(country)")
+        // print("📺 [StreamingService] Starting TV show streaming lookup for TMDB ID: \(tmdbId), country: \(country)")
         
         await MainActor.run {
             isLoading = true
@@ -292,7 +281,7 @@ class StreamingService: ObservableObject {
         
         // Format TMDB ID correctly for TV shows (tv/{id})
         let formattedTmdbId = "tv/\(tmdbId)"
-        print("🔍 [StreamingService] Formatted TMDB ID for TV: \(formattedTmdbId)")
+        // print("🔍 [StreamingService] Formatted TMDB ID for TV: \(formattedTmdbId)")
         
         // Build URL with country parameter
         var urlComponents = URLComponents(string: "\(baseURL)/shows/\(formattedTmdbId)")
@@ -300,14 +289,14 @@ class StreamingService: ObservableObject {
         
         guard let url = urlComponents?.url else {
             let errorMsg = "Invalid URL for TV TMDB ID: \(tmdbId)"
-            print("❌ [StreamingService] \(errorMsg)")
+            // print("❌ [StreamingService] \(errorMsg)")
             await MainActor.run {
                 error = errorMsg
             }
             throw StreamingServiceError.invalidURL
         }
         
-        print("🌐 [StreamingService] TV Request URL: \(url.absoluteString)")
+        // print("🌐 [StreamingService] TV Request URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -315,36 +304,36 @@ class StreamingService: ObservableObject {
         request.addValue(rapidAPIKey, forHTTPHeaderField: "X-RapidAPI-Key")
         request.addValue("streaming-availability.p.rapidapi.com", forHTTPHeaderField: "X-RapidAPI-Host")
         
-        print("🔑 [StreamingService] TV API Key present: \(!rapidAPIKey.isEmpty)")
-        print("📤 [StreamingService] Making TV request to streaming API...")
+        // print("🔑 [StreamingService] TV API Key present: \(!rapidAPIKey.isEmpty)")
+        // print("📤 [StreamingService] Making TV request to streaming API...")
         
         do {
             let (data, response) = try await session.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 let errorMsg = "Invalid response type for TV show"
-                print("❌ [StreamingService] \(errorMsg)")
+                // print("❌ [StreamingService] \(errorMsg)")
                 await MainActor.run {
                     error = errorMsg
                 }
                 throw StreamingServiceError.invalidResponse
             }
             
-            print("📥 [StreamingService] TV HTTP Status: \(httpResponse.statusCode)")
-            print("📥 [StreamingService] TV Response headers: \(httpResponse.allHeaderFields)")
+            // print("📥 [StreamingService] TV HTTP Status: \(httpResponse.statusCode)")
+            // print("📥 [StreamingService] TV Response headers: \(httpResponse.allHeaderFields)")
             
             // Log response data for debugging
             if let responseString = String(data: data, encoding: .utf8) {
-                print("📥 [StreamingService] TV Response body: \(responseString.prefix(500))...")
+                // print("📥 [StreamingService] TV Response body: \(responseString.prefix(500))...")
             }
             
             guard httpResponse.statusCode == 200 else {
                 let errorMsg = "TV HTTP error: \(httpResponse.statusCode)"
-                print("❌ [StreamingService] \(errorMsg)")
+                // print("❌ [StreamingService] \(errorMsg)")
                 
                 // Try to parse error response
                 if let errorResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    print("❌ [StreamingService] TV Error response: \(errorResponse)")
+                    // print("❌ [StreamingService] TV Error response: \(errorResponse)")
                 }
                 
                 await MainActor.run {
@@ -354,12 +343,12 @@ class StreamingService: ObservableObject {
             }
             
             let result = try decoder.decode(StreamingAvailabilityResponse.self, from: data)
-            print("✅ [StreamingService] Successfully decoded TV response for: \(result.title ?? "Unknown")")
-            print("📺 [StreamingService] TV Streaming options count: \(result.streamingOptions?[country]?.count ?? 0)")
+            // print("✅ [StreamingService] Successfully decoded TV response for: \(result.title ?? "Unknown")")
+            // print("📺 [StreamingService] TV Streaming options count: \(result.streamingOptions?[country]?.count ?? 0)")
             
             // Check for API-level errors in the response
             if let error = result.error ?? result.message {
-                print("⚠️ [StreamingService] TV API returned error: \(error)")
+                // print("⚠️ [StreamingService] TV API returned error: \(error)")
                 await MainActor.run {
                     self.error = error
                 }
@@ -370,21 +359,10 @@ class StreamingService: ObservableObject {
             
         } catch let decodingError as DecodingError {
             let errorMsg = "Failed to decode TV response: \(decodingError.localizedDescription)"
-            print("❌ [StreamingService] TV Decoding error: \(decodingError)")
+            // print("❌ [StreamingService] TV Decoding error: \(decodingError)")
             
             // Print detailed decoding error info
-            switch decodingError {
-            case .keyNotFound(let key, let context):
-                print("❌ [StreamingService] TV Key '\(key)' not found: \(context.debugDescription)")
-            case .valueNotFound(let value, let context):
-                print("❌ [StreamingService] TV Value '\(value)' not found: \(context.debugDescription)")
-            case .typeMismatch(let type, let context):
-                print("❌ [StreamingService] TV Type '\(type)' mismatch: \(context.debugDescription)")
-            case .dataCorrupted(let context):
-                print("❌ [StreamingService] TV Data corrupted: \(context.debugDescription)")
-            @unknown default:
-                print("❌ [StreamingService] TV Unknown decoding error")
-            }
+
             
             await MainActor.run {
                 error = errorMsg
@@ -392,7 +370,7 @@ class StreamingService: ObservableObject {
             throw StreamingServiceError.decodingError(decodingError)
         } catch {
             let errorMsg = "TV Network error: \(error.localizedDescription)"
-            print("❌ [StreamingService] \(errorMsg)")
+            // print("❌ [StreamingService] \(errorMsg)")
             await MainActor.run {
                 self.error = errorMsg
             }
@@ -402,14 +380,14 @@ class StreamingService: ObservableObject {
     
     /// Get supported streaming services for a country
     func getSupportedServices(country: String = "us") async throws -> StreamingServicesResponse {
-        print("🌍 [StreamingService] Getting supported services for country: \(country)")
+        // print("🌍 [StreamingService] Getting supported services for country: \(country)")
         
         guard let url = URL(string: "\(baseURL)/countries/\(country)") else {
-            print("❌ [StreamingService] Invalid URL for countries endpoint")
+            // print("❌ [StreamingService] Invalid URL for countries endpoint")
             throw StreamingServiceError.invalidURL
         }
         
-        print("🌐 [StreamingService] Countries URL: \(url.absoluteString)")
+        // print("🌐 [StreamingService] Countries URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -417,7 +395,7 @@ class StreamingService: ObservableObject {
         
         // Use RapidAPI authentication
         guard !rapidAPIKey.isEmpty else {
-            print("❌ [StreamingService] API key is empty")
+            // print("❌ [StreamingService] API key is empty")
             throw StreamingServiceError.authenticationRequired
         }
         
@@ -428,24 +406,24 @@ class StreamingService: ObservableObject {
             let (data, response) = try await session.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
-                print("❌ [StreamingService] Invalid response type for countries")
+                // print("❌ [StreamingService] Invalid response type for countries")
                 throw StreamingServiceError.invalidResponse
             }
             
-            print("📥 [StreamingService] Countries HTTP Status: \(httpResponse.statusCode)")
+            // print("📥 [StreamingService] Countries HTTP Status: \(httpResponse.statusCode)")
             
             guard httpResponse.statusCode == 200 else {
-                print("❌ [StreamingService] Countries HTTP error: \(httpResponse.statusCode)")
+                // print("❌ [StreamingService] Countries HTTP error: \(httpResponse.statusCode)")
                 throw StreamingServiceError.httpError(httpResponse.statusCode)
             }
             
             let result = try decoder.decode(StreamingServicesResponse.self, from: data)
-            print("✅ [StreamingService] Successfully got \(result.services.count) services for \(country)")
+            // print("✅ [StreamingService] Successfully got \(result.services.count) services for \(country)")
             
             return result
             
         } catch {
-            print("❌ [StreamingService] Countries lookup failed: \(error.localizedDescription)")
+            // print("❌ [StreamingService] Countries lookup failed: \(error.localizedDescription)")
             throw error
         }
     }
@@ -498,21 +476,21 @@ extension StreamingAvailabilityResponse {
     /// Get all available streaming services for the configured country
     func getAvailableServices(for country: String = "us") -> [String] {
         let services = streamingOptions?[country]?.map { $0.service.name } ?? []
-        print("📋 [StreamingService] Available services for \(country): \(services)")
+        // print("📋 [StreamingService] Available services for \(country): \(services)")
         return services
     }
     
     /// Get streaming options for a specific service
     func getStreamingOptions(for serviceName: String, country: String = "us") -> [StreamingOption] {
         let options = streamingOptions?[country]?.filter { $0.service.name.lowercased() == serviceName.lowercased() } ?? []
-        print("🔍 [StreamingService] Options for \(serviceName) in \(country): \(options.count)")
+        // print("🔍 [StreamingService] Options for \(serviceName) in \(country): \(options.count)")
         return options
     }
     
     /// Check if content is available on a specific service
     func isAvailableOn(_ serviceName: String, country: String = "us") -> Bool {
         let available = !getStreamingOptions(for: serviceName, country: country).isEmpty
-        print("❓ [StreamingService] Available on \(serviceName): \(available)")
+        // print("❓ [StreamingService] Available on \(serviceName): \(available)")
         return available
     }
     

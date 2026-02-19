@@ -60,12 +60,18 @@ struct AddToListsView: View {
                     addToListsButton
                 }
             }
-            .background(Color(.systemBackground))
+            #if canImport(UIKit)
+            .background(Color(.systemGroupedBackground))
+            #else
+            .background(Color(.windowBackgroundColor))
+            #endif
             .navigationTitle("Add to Lists")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
-            
+            #endif
+
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }

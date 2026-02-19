@@ -327,6 +327,24 @@ class SupabaseStatisticsService: ObservableObject {
         }
     }
     
+    /// Get films by release year data
+    nonisolated func getFilmsByReleaseYear(year: Int? = nil) async throws -> [FilmsByReleaseYear] {
+        do {
+            let response = if let year = year {
+                try await supabase.rpc("get_films_by_release_year_by_year", params: ["target_year": year]).execute()
+            } else {
+                try await supabase.rpc("get_films_by_release_year").execute()
+            }
+            
+            let filmsByReleaseYear: [FilmsByReleaseYear] = try JSONDecoder().decode([FilmsByReleaseYear].self, from: response.data)
+            return filmsByReleaseYear
+            
+        } catch {
+            // Return empty array instead of throwing error
+            return []
+        }
+    }
+    
     /// Get daily watch counts
     nonisolated func getDailyWatchCounts() async throws -> [DailyWatchCount] {
         let response = try await supabase.rpc("get_daily_watch_counts").execute()
@@ -707,6 +725,51 @@ class SupabaseStatisticsService: ObservableObject {
         }
     }
     
+    /// Get weekly streak statistics for a specific year (NULL for all time)
+    nonisolated func getWeeklyStreakStats(year: Int? = nil) async throws -> WeeklyStreakStats {
+        do {
+            let response = if let year = year {
+                try await supabase.rpc("get_weekly_streak_stats", params: ["target_year": year]).execute()
+            } else {
+                try await supabase.rpc("get_weekly_streak_stats", params: ["target_year": Optional<Int>.none]).execute()
+            }
+            
+            // Try to decode as array first
+            if let stats = try? JSONDecoder().decode([WeeklyStreakStats].self, from: response.data),
+               let weeklyStreakStats = stats.first {
+                return weeklyStreakStats
+            }
+            
+            // Try to decode as single object
+            if let weeklyStreakStats = try? JSONDecoder().decode(WeeklyStreakStats.self, from: response.data) {
+                return weeklyStreakStats
+            }
+            
+            // Return mock data if database function doesn't exist
+            return WeeklyStreakStats(
+                longestWeeklyStreakWeeks: 0,
+                longestWeeklyStreakStartDate: nil,
+                longestWeeklyStreakEndDate: nil,
+                currentWeeklyStreakWeeks: 0,
+                currentWeeklyStreakStartDate: nil,
+                currentWeeklyStreakEndDate: nil,
+                isCurrentWeeklyStreakActive: false
+            )
+            
+        } catch {
+            // Return mock data instead of throwing error
+            return WeeklyStreakStats(
+                longestWeeklyStreakWeeks: 0,
+                longestWeeklyStreakStartDate: nil,
+                longestWeeklyStreakEndDate: nil,
+                currentWeeklyStreakWeeks: 0,
+                currentWeeklyStreakStartDate: nil,
+                currentWeeklyStreakEndDate: nil,
+                isCurrentWeeklyStreakActive: false
+            )
+        }
+    }
+    
     // MARK: - Year Release Date Statistics
     
     /// Get year release date statistics for a specific year
@@ -903,6 +966,297 @@ class SupabaseStatisticsService: ObservableObject {
         } catch {
             return nil
         }
+    }
+}
+
+// MARK: - On Pace Chart Calculations
+
+extension SupabaseStatisticsService {
+    
+    /// Calculate yearly pace statistics from existing films per month data
+    /// - Parameters:
+    ///   - targetYear: The year to calculate pace for
+    ///   - allFilmsPerMonth: All available films per month data (for all years)
+    ///   - allFilmsPerYear: All available films per year data
+    /// - Returns: YearlyPaceStats with actual data, projections, and historical average
+    nonisolated func calculateYearlyPaceStats(
+        targetYear: Int,
+        allFilmsPerMonth: [FilmsPerMonth],
+        allFilmsPerYear: [FilmsPerYear]
+    ) -> YearlyPaceStats {
+        let calendar = Calendar.current
+        let currentDate = Date()
+        let currentYear = calendar.component(.year, from: currentDate)
+        let currentMonth = calendar.component(.month, from: currentDate)
+        let isCurrentYear = targetYear == currentYear
+        
+        // Get month data for target year
+        let targetYearMonths = allFilmsPerMonth
+            .filter { $0.year == targetYear }
+            .sorted { $0.month < $1.month }
+        
+        // Build actual monthly pace data with cumulative counts
+        var cumulativeTotal = 0
+        var monthlyData: [MonthlyPaceData] = []
+        
+        for month in 1...12 {
+            let monthFilmCount: Int
+            if let monthData = targetYearMonths.first(where: { $0.month == month }) {
+                monthFilmCount = monthData.filmCount
+            } else if isCurrentYear && month > currentMonth {
+                // Future month in current year - skip
+                continue
+            } else {
+                monthFilmCount = 0
+            }
+            
+            cumulativeTotal += monthFilmCount
+            monthlyData.append(MonthlyPaceData(
+                month: month,
+                monthName: monthName(for: month),
+                filmCount: monthFilmCount,
+                cumulativeCount: cumulativeTotal
+            ))
+        }
+        
+        // Calculate historical average pace (weighted by recency)
+        let historicalAverage = calculateHistoricalAveragePace(
+            allFilmsPerMonth: allFilmsPerMonth,
+            excludeYear: targetYear,
+            currentYear: currentYear
+        )
+        
+        // Calculate projections for current year only
+        var projectedLinear: [MonthlyPaceData]?
+        var projectedSeasonal: [MonthlyPaceData]?
+        var projectedEndOfYearLinear: Int?
+        var projectedEndOfYearSeasonal: Int?
+        
+        if isCurrentYear && !monthlyData.isEmpty {
+            // Linear projection
+            let linearResult = calculateLinearProjection(
+                monthlyData: monthlyData,
+                currentMonth: currentMonth
+            )
+            projectedLinear = linearResult.projection
+            projectedEndOfYearLinear = linearResult.endOfYearTotal
+            
+            // Seasonal projection
+            let seasonalResult = calculateSeasonalProjection(
+                monthlyData: monthlyData,
+                historicalMonthlyDistribution: calculateMonthlyDistribution(allFilmsPerMonth: allFilmsPerMonth, excludeYear: targetYear),
+                currentMonth: currentMonth
+            )
+            projectedSeasonal = seasonalResult.projection
+            projectedEndOfYearSeasonal = seasonalResult.endOfYearTotal
+        }
+        
+        return YearlyPaceStats(
+            year: targetYear,
+            isCurrentYear: isCurrentYear,
+            monthlyData: monthlyData,
+            projectedLinear: projectedLinear,
+            projectedSeasonal: projectedSeasonal,
+            historicalAverage: historicalAverage,
+            projectedEndOfYearLinear: projectedEndOfYearLinear,
+            projectedEndOfYearSeasonal: projectedEndOfYearSeasonal
+        )
+    }
+    
+    /// Calculate historical average pace with exponential decay weighting
+    private nonisolated func calculateHistoricalAveragePace(
+        allFilmsPerMonth: [FilmsPerMonth],
+        excludeYear: Int,
+        currentYear: Int
+    ) -> [MonthlyPaceData] {
+        // Group films by year (excluding target year)
+        let yearlyData = Dictionary(grouping: allFilmsPerMonth.filter { $0.year != excludeYear }) { $0.year }
+        
+        guard !yearlyData.isEmpty else {
+            // Return zeros if no historical data
+            return (1...12).map { month in
+                MonthlyPaceData(month: month, monthName: monthName(for: month), filmCount: 0, cumulativeCount: 0)
+            }
+        }
+        
+        // Calculate weighted average for each month
+        var weightedMonthlyCounts: [Int: Double] = [:]
+        var totalWeight: Double = 0
+        
+        for (year, months) in yearlyData {
+            // Exponential decay: more recent years weighted higher
+            let yearsAgo = max(0, currentYear - year)
+            let weight = pow(0.7, Double(yearsAgo))
+            totalWeight += weight
+            
+            for monthData in months {
+                let currentValue = weightedMonthlyCounts[monthData.month] ?? 0
+                weightedMonthlyCounts[monthData.month] = currentValue + (Double(monthData.filmCount) * weight)
+            }
+        }
+        
+        // Build cumulative historical average
+        var cumulativeTotal: Double = 0
+        var result: [MonthlyPaceData] = []
+        
+        for month in 1...12 {
+            let avgCount = (weightedMonthlyCounts[month] ?? 0) / max(1, totalWeight)
+            cumulativeTotal += avgCount
+            
+            result.append(MonthlyPaceData(
+                month: month,
+                monthName: monthName(for: month),
+                filmCount: Int(round(avgCount)),
+                cumulativeCount: Int(round(cumulativeTotal))
+            ))
+        }
+        
+        return result
+    }
+    
+    /// Linear projection: extrapolate from daily average
+    private nonisolated func calculateLinearProjection(
+        monthlyData: [MonthlyPaceData],
+        currentMonth: Int
+    ) -> (projection: [MonthlyPaceData], endOfYearTotal: Int) {
+        guard let lastData = monthlyData.last else {
+            return ([], 0)
+        }
+        
+        let totalFilmsSoFar = lastData.cumulativeCount
+        let daysElapsed = daysElapsedInYear(throughMonth: currentMonth)
+        let dailyRate = Double(totalFilmsSoFar) / Double(max(1, daysElapsed))
+        
+        // Project remaining months
+        var projection: [MonthlyPaceData] = monthlyData
+        var cumulativeTotal = totalFilmsSoFar
+        
+        for month in (currentMonth + 1)...12 {
+            let daysInMonth = daysInMonth(month)
+            let projectedMonthCount = Int(round(dailyRate * Double(daysInMonth)))
+            cumulativeTotal += projectedMonthCount
+            
+            projection.append(MonthlyPaceData(
+                month: month,
+                monthName: monthName(for: month),
+                filmCount: projectedMonthCount,
+                cumulativeCount: cumulativeTotal
+            ))
+        }
+        
+        return (projection, cumulativeTotal)
+    }
+    
+    /// Seasonal projection: adjust for historical monthly patterns
+    private nonisolated func calculateSeasonalProjection(
+        monthlyData: [MonthlyPaceData],
+        historicalMonthlyDistribution: [Int: Double],
+        currentMonth: Int
+    ) -> (projection: [MonthlyPaceData], endOfYearTotal: Int) {
+        guard let lastData = monthlyData.last else {
+            return ([], 0)
+        }
+        
+        let totalFilmsSoFar = lastData.cumulativeCount
+        
+        // Calculate what percentage of the year has passed based on historical distribution
+        var historicalProgressPercentage: Double = 0
+        for month in 1...currentMonth {
+            historicalProgressPercentage += historicalMonthlyDistribution[month] ?? (1.0 / 12.0)
+        }
+        
+        // Avoid division by zero
+        let projectedYearTotal = historicalProgressPercentage > 0.01 
+            ? Int(round(Double(totalFilmsSoFar) / historicalProgressPercentage))
+            : totalFilmsSoFar * 2
+        
+        // Project remaining months based on their historical percentage
+        var projection: [MonthlyPaceData] = monthlyData
+        var cumulativeTotal = totalFilmsSoFar
+        
+        for month in (currentMonth + 1)...12 {
+            let monthPercentage = historicalMonthlyDistribution[month] ?? (1.0 / 12.0)
+            let projectedMonthCount = Int(round(Double(projectedYearTotal) * monthPercentage))
+            cumulativeTotal += projectedMonthCount
+            
+            projection.append(MonthlyPaceData(
+                month: month,
+                monthName: monthName(for: month),
+                filmCount: projectedMonthCount,
+                cumulativeCount: cumulativeTotal
+            ))
+        }
+        
+        return (projection, cumulativeTotal)
+    }
+    
+    /// Calculate monthly distribution percentages from historical data
+    private nonisolated func calculateMonthlyDistribution(
+        allFilmsPerMonth: [FilmsPerMonth],
+        excludeYear: Int
+    ) -> [Int: Double] {
+        let historicalData = allFilmsPerMonth.filter { $0.year != excludeYear }
+        let totalFilms = historicalData.reduce(0) { $0 + $1.filmCount }
+        
+        guard totalFilms > 0 else {
+            // Default to even distribution
+            return Dictionary(uniqueKeysWithValues: (1...12).map { ($0, 1.0 / 12.0) })
+        }
+        
+        var distribution: [Int: Double] = [:]
+        for month in 1...12 {
+            let monthTotal = historicalData.filter { $0.month == month }.reduce(0) { $0 + $1.filmCount }
+            distribution[month] = Double(monthTotal) / Double(totalFilms)
+        }
+        
+        return distribution
+    }
+    
+    /// Get month name for month number
+    private nonisolated func monthName(for month: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        return formatter.shortMonthSymbols[month - 1]
+    }
+    
+    /// Calculate days elapsed from Jan 1 through end of given month
+    private nonisolated func daysElapsedInYear(throughMonth month: Int) -> Int {
+        let calendar = Calendar.current
+        let currentDate = Date()
+        let currentYear = calendar.component(.year, from: currentDate)
+        let currentMonth = calendar.component(.month, from: currentDate)
+        let currentDay = calendar.component(.day, from: currentDate)
+        
+        var totalDays = 0
+        for m in 1..<month {
+            totalDays += daysInMonth(m, year: currentYear)
+        }
+        
+        // Add days in current month
+        if month == currentMonth {
+            totalDays += currentDay
+        } else if month > currentMonth {
+            totalDays += daysInMonth(month, year: currentYear)
+        }
+        
+        return totalDays
+    }
+    
+    /// Get number of days in a month
+    private nonisolated func daysInMonth(_ month: Int, year: Int? = nil) -> Int {
+        let calendar = Calendar.current
+        let actualYear = year ?? calendar.component(.year, from: Date())
+        
+        var components = DateComponents()
+        components.year = actualYear
+        components.month = month
+        
+        guard let date = calendar.date(from: components),
+              let range = calendar.range(of: .day, in: .month, for: date) else {
+            return 30 // Fallback
+        }
+        
+        return range.count
     }
 }
 

@@ -9,8 +9,9 @@ import SwiftUI
 import SDWebImageSwiftUI
 
 struct TelevisionView: View {
-    @StateObject private var televisionService = SupabaseTelevisionService.shared
-    @StateObject private var dataManager = DataManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var televisionService = SupabaseTelevisionService.shared
+    @ObservedObject private var dataManager = DataManager.shared
     @State private var televisionShows: [Television] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -40,6 +41,10 @@ struct TelevisionView: View {
     @State private var isRefreshing = false
     
     private let refreshInterval: TimeInterval = 300  // 5 minutes
+    
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
     
     enum ViewMode {
         case list, tile
@@ -178,9 +183,15 @@ struct TelevisionView: View {
             mainContentView
         }
         .navigationTitle("TV Shows")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.large)
-        .background(Color(.systemBackground))
+        #endif
+        .background(Color.adaptiveBackground(scheme: colorScheme))
+        #if os(iOS)
         .searchable(text: $searchText, placement: .navigationBarDrawer, prompt: "Search TV shows")
+        #else
+        .searchable(text: $searchText, prompt: "Search TV shows")
+        #endif
         .toolbar {
             toolbarContent
         }
@@ -237,9 +248,18 @@ struct TelevisionView: View {
                     Text("Are you sure you want to delete \"\(show.name)\"?")
                 }
             }
+            #if os(iOS)
             .sheet(item: $selectedShow) { show in
                 TelevisionDetailsView(televisionShow: show)
             }
+            #else
+            .onChange(of: selectedShow) { _, show in
+                if let show = show {
+                    navigationCoordinator.showTelevisionDetails(show)
+                    selectedShow = nil
+                }
+            }
+            #endif
             .sheet(isPresented: $showingImageChanger) {
                 if let showForImageChange = showForImageChange,
                    let tmdbId = showForImageChange.tmdb_id {
@@ -265,7 +285,7 @@ struct TelevisionView: View {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigationBarLeading) {
+        ToolbarItem(placement: .cancellationAction) {
             HStack(spacing: 16) {
                 Button(action: { showingSortOptions = true }) {
                     Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
@@ -283,7 +303,7 @@ struct TelevisionView: View {
             }
         }
         
-        ToolbarItem(placement: .navigationBarTrailing) {
+        ToolbarItem(placement: .confirmationAction) {
             Button(action: { showingAddTelevision = true }) {
                 Image(systemName: "plus")
             }
@@ -330,7 +350,7 @@ struct TelevisionView: View {
             }
             .padding(.horizontal)
         }
-        .background(Color(.systemBackground))
+        .background(Color.adaptiveBackground(scheme: colorScheme))
         .overlay(
             Rectangle()
                 .fill(Color.gray.opacity(0.2))

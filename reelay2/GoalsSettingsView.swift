@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct GoalsSettingsView: View {
-    @StateObject private var dataManager = DataManager.shared
+    @ObservedObject private var dataManager = DataManager.shared
     @Environment(\.dismiss) private var dismiss
     
     @State private var yearlyFilmGoal: String = ""
@@ -27,7 +27,9 @@ struct GoalsSettingsView: View {
                     
                     HStack {
                         TextField("0", text: $yearlyFilmGoal)
+                            #if !os(macOS)
                             .keyboardType(.numberPad)
+                            #endif
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                             .frame(maxWidth: 100)
                         
@@ -48,15 +50,17 @@ struct GoalsSettingsView: View {
             }
             .padding()
             .navigationTitle("Goals")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.large)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save", systemImage: "checkmark") {
                         saveGoals()
                         dismiss()

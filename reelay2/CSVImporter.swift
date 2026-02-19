@@ -426,8 +426,8 @@ extension DateFormatter {
 
 struct CSVImportView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var tmdbService = TMDBService.shared
+    private let dataManager = DataManager.shared
+    private let tmdbService = TMDBService.shared
     
     @State private var showingFilePicker = false
     @State private var selectedFileURL: URL?
@@ -451,18 +451,24 @@ struct CSVImportView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(.systemBackground))
+            #if os(macOS)
+            .background(Color(NSColor.windowBackgroundColor))
+            #else
+            .background(Color(.systemGroupedBackground))
+            #endif
             .navigationTitle("Import CSV")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
+
                 if !importedEntries.isEmpty {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItem(placement: .confirmationAction) {
                         Button("Import", systemImage: "checkmark") {
                             Task {
                                 await importList()
@@ -480,11 +486,15 @@ struct CSVImportView: View {
                 handleFileImport(result)
             }
         }
-        .background(Color(.systemBackground))
-        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        #if os(macOS)
+        .background(Color(NSColor.windowBackgroundColor))
+        #else
+        .background(Color(.systemGroupedBackground))
+        .toolbarBackground(Color(.systemGroupedBackground), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        #endif
     }
-    
+
     @ViewBuilder
     private var initialView: some View {
         VStack(spacing: 24) {
@@ -991,8 +1001,8 @@ struct WatchlistEntry: Identifiable {
 
 struct WatchlistImportView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var tmdbService = TMDBService.shared
+    private let dataManager = DataManager.shared
+    private let tmdbService = TMDBService.shared
 
     @State private var showingFilePicker = false
     @State private var selectedFileURL: URL?
@@ -1017,15 +1027,21 @@ struct WatchlistImportView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(.systemBackground))
+            #if os(macOS)
+            .background(Color(NSColor.windowBackgroundColor))
+            #else
+            .background(Color(.systemGroupedBackground))
+            #endif
             .navigationTitle("Import Watchlist")
+            #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") { dismiss() }
                 }
                 if !importedEntries.isEmpty {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItem(placement: .confirmationAction) {
                         Button("Import", systemImage: "checkmark") {
                             Task { await importWatchlist() }
                         }
@@ -1041,9 +1057,13 @@ struct WatchlistImportView: View {
                 handleFileImport(result)
             }
         }
-        .background(Color(.systemBackground))
-        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        #if os(macOS)
+        .background(Color(NSColor.windowBackgroundColor))
+        #else
+        .background(Color(.systemGroupedBackground))
+        .toolbarBackground(Color(.systemGroupedBackground), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        #endif
     }
 
     @ViewBuilder

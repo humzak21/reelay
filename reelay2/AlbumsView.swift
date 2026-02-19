@@ -9,8 +9,8 @@ import SwiftUI
 import SDWebImageSwiftUI
 
 struct AlbumsView: View {
-    @StateObject private var albumService = SupabaseAlbumService.shared
-    @StateObject private var spotifyService = SpotifyService.shared
+    @ObservedObject private var albumService = SupabaseAlbumService.shared
+    @ObservedObject private var spotifyService = SpotifyService.shared
     @State private var albums: [Album] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -36,6 +36,10 @@ struct AlbumsView: View {
     @State private var isRefreshing = false
     
     private let refreshInterval: TimeInterval = 300  // 5 minutes
+    
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
     
     enum ViewMode {
         case list, tile
@@ -144,11 +148,16 @@ struct AlbumsView: View {
             }
         }
         .navigationTitle("Albums")
+        #if canImport(UIKit)
         .navigationBarTitleDisplayMode(.large)
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
         .searchable(text: $searchText, placement: .navigationBarDrawer, prompt: "Search albums")
+        #else
+        .background(Color(.windowBackgroundColor))
+        .searchable(text: $searchText, prompt: "Search albums")
+        #endif
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItem(placement: .automatic) {
                 HStack(spacing: 16) {
                     Button(action: {
                         showingSortOptions = true
@@ -168,7 +177,7 @@ struct AlbumsView: View {
                 }
             }
             
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .confirmationAction) {
                 Button(action: {
                     showingAddAlbum = true
                 }) {
@@ -236,9 +245,18 @@ struct AlbumsView: View {
                 Text("Are you sure you want to delete \"\(album.title)\" by \(album.artist)?")
             }
         }
+        #if os(iOS)
         .sheet(item: $selectedAlbum) { album in
             AlbumDetailsView(album: album)
         }
+        #else
+        .onChange(of: selectedAlbum) { _, album in
+            if let album = album {
+                navigationCoordinator.showAlbumDetails(album)
+                selectedAlbum = nil
+            }
+        }
+        #endif
     }
     
     // MARK: - Status Tabs
@@ -264,7 +282,11 @@ struct AlbumsView: View {
                 title: "Best Albums"
             )
         }
-        .background(Color(.systemBackground))
+        #if canImport(UIKit)
+        .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(.windowBackgroundColor))
+        #endif
         .overlay(
             Rectangle()
                 .fill(Color.gray.opacity(0.2))

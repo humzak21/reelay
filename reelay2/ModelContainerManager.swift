@@ -17,7 +17,8 @@ class ModelContainerManager {
         let schema = Schema([
             Item.self,
             PersistentMovieList.self,
-            PersistentListItem.self
+            PersistentListItem.self,
+            MovieDraft.self
         ])
         
         let appSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!

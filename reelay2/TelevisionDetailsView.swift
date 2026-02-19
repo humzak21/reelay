@@ -12,10 +12,10 @@ struct TelevisionDetailsView: View {
     let televisionShow: Television
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var tmdbService = TMDBService.shared
-    @StateObject private var televisionService = SupabaseTelevisionService.shared
-    @StateObject private var streamingService = StreamingService.shared
+    @ObservedObject private var dataManager = DataManager.shared
+    @ObservedObject private var tmdbService = TMDBService.shared
+    @ObservedObject private var televisionService = SupabaseTelevisionService.shared
+    @ObservedObject private var streamingService = StreamingService.shared
     @State private var currentShow: Television
     @State private var isUpdatingProgress = false
     @State private var showingSeasonEpisodeSelector = false
@@ -36,8 +36,16 @@ struct TelevisionDetailsView: View {
         self._selectedStatus = State(initialValue: televisionShow.watchingStatus)
     }
     
+    #if os(macOS)
+    @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    #endif
+    
     private var appBackground: Color {
-        colorScheme == .dark ? .black : Color(.systemBackground)
+        #if os(iOS)
+        colorScheme == .dark ? .black : Color(.systemGroupedBackground)
+        #else
+        colorScheme == .dark ? .black : Color(.windowBackgroundColor)
+        #endif
     }
     
     var body: some View {
@@ -77,18 +85,24 @@ struct TelevisionDetailsView: View {
             .background(appBackground)
             .ignoresSafeArea(edges: .top)
             .navigationTitle("TV Details")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: "xmark") {
                         Task {
                             await dataManager.refreshTelevision()
                         }
+                        #if os(iOS)
                         dismiss()
+                        #else
+                        navigationCoordinator.clearDetail()
+                        #endif
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     HStack(spacing: 16) {
                         Button(action: {
                             Task {
@@ -226,7 +240,7 @@ struct TelevisionDetailsView: View {
                 Text(currentShow.name)
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .multilineTextAlignment(.leading)
                 
                 if let firstAirYear = currentShow.first_air_year {
@@ -281,7 +295,7 @@ struct TelevisionDetailsView: View {
                     Text(currentShow.progressText)
                         .font(.title3)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                         .background(Color.gray.opacity(0.2))
@@ -394,7 +408,7 @@ struct TelevisionDetailsView: View {
             HStack {
                 Text("Status")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             
@@ -417,7 +431,7 @@ struct TelevisionDetailsView: View {
                 HStack {
                     Text(currentShow.watchingStatus.displayName)
                         .font(.body)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Spacer()
                     
@@ -447,7 +461,7 @@ struct TelevisionDetailsView: View {
                 HStack {
                     Text("Current Episode")
                         .font(.headline)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     Spacer()
                 }
                 
@@ -476,7 +490,7 @@ struct TelevisionDetailsView: View {
                                 Text(episodeName)
                                     .font(.subheadline)
                                     .fontWeight(.semibold)
-                                    .foregroundColor(.white)
+                                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                     .multilineTextAlignment(.leading)
                             }
                             
@@ -519,7 +533,7 @@ struct TelevisionDetailsView: View {
                             
                             Text(overview)
                                 .font(.body)
-                                .foregroundColor(.white)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                 .multilineTextAlignment(.leading)
                         }
                     }
@@ -539,7 +553,7 @@ struct TelevisionDetailsView: View {
             HStack {
                 Text("Show Information")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             
@@ -548,7 +562,7 @@ struct TelevisionDetailsView: View {
                     Text("Overview")
                         .font(.subheadline)
                         .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Text(overview)
                         .font(.body)
@@ -563,7 +577,7 @@ struct TelevisionDetailsView: View {
                         Text("Genres")
                             .font(.subheadline)
                             .fontWeight(.medium)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         Spacer()
                     }
                     
@@ -583,7 +597,7 @@ struct TelevisionDetailsView: View {
                         Text("Networks")
                             .font(.subheadline)
                             .fontWeight(.medium)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         Spacer()
                     }
                     
@@ -603,7 +617,7 @@ struct TelevisionDetailsView: View {
                         Text("Created By")
                             .font(.subheadline)
                             .fontWeight(.medium)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         Spacer()
                     }
                     
@@ -968,37 +982,43 @@ struct SeasonEpisodeSelectorView: View {
                                     .tag(season)
                             }
                         }
+                        #if os(iOS)
                         .pickerStyle(WheelPickerStyle())
+                        #endif
                         .frame(width: 150)
                     }
-                    
+
                     // Episode Picker
                     VStack {
                         Text("Episode")
                             .font(.headline)
-                        
+
                         Picker("Episode", selection: $selectedEpisode) {
                             ForEach(1...50, id: \.self) { episode in
                                 Text("Episode \(episode)")
                                     .tag(episode)
                             }
                         }
+                        #if os(iOS)
                         .pickerStyle(WheelPickerStyle())
+                        #endif
                         .frame(width: 150)
                     }
                 }
                 
                 Spacer()
             }
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         onSave(selectedSeason, selectedEpisode)
                         dismiss()
@@ -1046,15 +1066,17 @@ struct StatusSelectorView: View {
                 }
             }
             .navigationTitle("Status")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         onSave(selectedStatus)
                         dismiss()
@@ -1116,12 +1138,18 @@ struct StatusSelectorView: View {
 // MARK: - TV Streaming Service Row Component
 
 struct TVStreamingServiceRow: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let streamingOption: StreamingOption
-    
+
     var body: some View {
         Button(action: {
             if let url = URL(string: streamingOption.link) {
+                #if os(iOS)
                 UIApplication.shared.open(url)
+                #elseif os(macOS)
+                NSWorkspace.shared.open(url)
+                #endif
             }
         }) {
             HStack(spacing: 12) {
@@ -1180,12 +1208,12 @@ struct TVStreamingServiceRow: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(.secondarySystemFill))
+            .background(Color.adaptiveCardBackground(scheme: colorScheme))
             .cornerRadius(12)
         }
         .buttonStyle(PlainButtonStyle())
     }
-    
+
     private var serviceIconName: String? {
         let serviceId = streamingOption.service.id.lowercased()
         let serviceName = streamingOption.service.name.lowercased()

@@ -10,9 +10,10 @@ import SDWebImageSwiftUI
 
 struct AddTelevisionView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var tmdbService = TMDBService.shared
-    @StateObject private var televisionService = SupabaseTelevisionService.shared
-    @StateObject private var dataManager = DataManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+    private let tmdbService = TMDBService.shared
+    private let televisionService = SupabaseTelevisionService.shared
+    private let dataManager = DataManager.shared
     
     // Search state
     @State private var searchText = ""
@@ -47,17 +48,21 @@ struct AddTelevisionView: View {
                 }
             }
             .navigationTitle("Add TV Show")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
-            .background(Color(.systemBackground))
+            .background(Color(.systemGroupedBackground))
+            #else
+            .background(Color(.windowBackgroundColor))
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         dismiss()
                     }
                 }
-                
+
                 if selectedShow != nil {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+                    ToolbarItem(placement: .confirmationAction) {
                         HStack(spacing: 16) {
                             Button(action: {
                                 isFavorited.toggle()
@@ -107,7 +112,7 @@ struct AddTelevisionView: View {
                 
                 TextField("Search TV shows...", text: $searchText)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .onSubmit {
                         performSearch()
                     }
@@ -139,7 +144,7 @@ struct AddTelevisionView: View {
                 
                 if isSearching {
                     ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .progressViewStyle(CircularProgressViewStyle(tint: Color.adaptiveText(scheme: colorScheme)))
                         .scaleEffect(0.8)
                 }
             }
@@ -226,7 +231,7 @@ struct AddTelevisionView: View {
                 Text(show.name)
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .multilineTextAlignment(.leading)
                 
                 if let firstAirYear = show.firstAirYear {
@@ -256,7 +261,7 @@ struct AddTelevisionView: View {
             HStack {
                 Text("Current Progress")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             
@@ -268,7 +273,7 @@ struct AddTelevisionView: View {
                         Text("Season \(selectedSeason), Episode \(selectedEpisode)")
                             .font(.title3)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         
                         Text("Tap to change")
                             .font(.caption)
@@ -297,7 +302,7 @@ struct AddTelevisionView: View {
             HStack {
                 Text("Watching Status")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             
@@ -320,7 +325,7 @@ struct AddTelevisionView: View {
             HStack {
                 Text("Show Information")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 Spacer()
             }
             
@@ -334,7 +339,7 @@ struct AddTelevisionView: View {
                         Text("\(totalSeasons)")
                             .font(.title3)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     }
                     
                     Spacer()
@@ -346,7 +351,7 @@ struct AddTelevisionView: View {
                         Text("\(totalEpisodes)")
                             .font(.title3)
                             .fontWeight(.semibold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     }
                 }
             }
@@ -361,7 +366,7 @@ struct AddTelevisionView: View {
                     }
                     Text(details.genreNames.joined(separator: ", "))
                         .font(.body)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
             }
         }
@@ -538,6 +543,7 @@ struct AddTelevisionView: View {
 // MARK: - TV Show Row Component
 
 struct TVShowRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let show: TMDBTVShow
     let onTap: () -> Void
     
@@ -564,7 +570,7 @@ struct TVShowRow: View {
                     Text(show.name)
                         .font(.body)
                         .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                         .multilineTextAlignment(.leading)
                     
                     if let firstAirYear = show.firstAirYear {
@@ -615,37 +621,47 @@ extension AddTelevisionView {
                                     .tag(season)
                             }
                         }
+                        #if canImport(UIKit)
                         .pickerStyle(WheelPickerStyle())
+                        #else
+                        .pickerStyle(.automatic)
+                        #endif
                         .frame(width: 150)
                     }
-                    
+
                     // Episode Picker
                     VStack {
                         Text("Episode")
                             .font(.headline)
-                        
+
                         Picker("Episode", selection: $selectedEpisode) {
                             ForEach(1...50, id: \.self) { episode in
                                 Text("Episode \(episode)")
                                     .tag(episode)
                             }
                         }
+                        #if canImport(UIKit)
                         .pickerStyle(WheelPickerStyle())
+                        #else
+                        .pickerStyle(.automatic)
+                        #endif
                         .frame(width: 150)
                     }
                 }
-                
+
                 Spacer()
             }
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", systemImage: "xmark") {
                         showingSeasonEpisodeSelector = false
                     }
                 }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done", systemImage: "checkmark") {
                         showingSeasonEpisodeSelector = false
                     }

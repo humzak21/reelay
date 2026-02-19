@@ -10,8 +10,9 @@ import Auth
 
 struct WatchlistRandomizerView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var dataManager = DataManager.shared
-    @StateObject private var movieService = SupabaseMovieService.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var dataManager = DataManager.shared
+    @ObservedObject private var movieService = SupabaseMovieService.shared
     @State private var randomMovie: ListItem?
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -45,7 +46,7 @@ struct WatchlistRandomizerView: View {
                     Text("List Randomizer")
                         .font(.title)
                         .fontWeight(.bold)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     Text("Can't decide what to watch? Let us pick for you!")
                         .font(.subheadline)
@@ -183,11 +184,17 @@ struct WatchlistRandomizerView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
             }
-            .background(Color.black)
+            #if canImport(UIKit)
+            .background(Color(.systemGroupedBackground))
+            #else
+            .background(Color(.windowBackgroundColor))
+            #endif
             .navigationTitle("Randomizer")
+            #if canImport(UIKit)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Done", systemImage: "xmark") {
                         dismiss()
                     }
@@ -232,7 +239,7 @@ struct WatchlistRandomizerView: View {
             HStack {
                 Text("Select Lists")
                     .font(.headline)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 
                 Spacer()
                 
@@ -280,7 +287,7 @@ struct WatchlistRandomizerView: View {
                                     
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(list.name)
-                                            .foregroundColor(.white)
+                                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                                             .font(.body)
                                         
                                         Text("\(list.itemCount) movies")
@@ -310,7 +317,7 @@ struct WatchlistRandomizerView: View {
         VStack(spacing: 16) {
             Text("Filters")
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
             
             VStack(spacing: 12) {
                 // Year range filter
@@ -318,7 +325,7 @@ struct WatchlistRandomizerView: View {
                     Text("Release Year Range")
                         .font(.subheadline)
                         .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 4) {
@@ -332,7 +339,7 @@ struct WatchlistRandomizerView: View {
                             }
                             .pickerStyle(MenuPickerStyle())
                             .frame(width: 100)
-                            .background(Color(.systemGray6))
+                            .background(Color.gray.opacity(0.12))
                             .cornerRadius(8)
                             .onChange(of: minYear) { oldValue, newValue in
                                 // Ensure min year doesn't exceed max year
@@ -360,7 +367,7 @@ struct WatchlistRandomizerView: View {
                             }
                             .pickerStyle(MenuPickerStyle())
                             .frame(width: 100)
-                            .background(Color(.systemGray6))
+                            .background(Color.gray.opacity(0.12))
                             .cornerRadius(8)
                             .onChange(of: maxYear) { oldValue, newValue in
                                 // Ensure max year doesn't go below min year
@@ -402,7 +409,7 @@ struct WatchlistRandomizerView: View {
                 Text(item.movieTitle)
                     .font(.title2)
                     .fontWeight(.bold)
-                    .foregroundColor(.white)
+                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                 
