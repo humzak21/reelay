@@ -1196,10 +1196,14 @@ struct MoviesView: View {
           }
         }
 
-        // Tag icons
-        if !tagIconsWithColors(for: movie.tags).isEmpty {
+        // Tag icons (including location tag when location_id exists)
+        let allTagIcons = tagIconsWithColors(
+          for: movie.tags,
+          hasLocation: movie.location_id != nil
+        )
+        if !allTagIcons.isEmpty {
           HStack(spacing: 3) {
-            ForEach(tagIconsWithColors(for: movie.tags), id: \.icon) { iconData in
+            ForEach(allTagIcons, id: \.icon) { iconData in
               Image(systemName: iconData.icon)
                 .foregroundColor(iconData.color)
                 .font(.system(size: 9, weight: .regular))
@@ -1393,10 +1397,16 @@ struct MoviesView: View {
     return rating == 5.0 ? .yellow : .blue
   }
 
-  private func tagIconsWithColors(for tagsString: String?) -> [(
+  private func tagIconsWithColors(
+    for tagsString: String?,
+    hasLocation: Bool = false
+  ) -> [(
     icon: String, color: Color
   )] {
-    return TagConfiguration.getTagIconsWithColors(for: tagsString)
+    return TagConfiguration.getTagIconsWithColors(
+      for: tagsString,
+      hasLocation: hasLocation
+    )
   }
 
   @ViewBuilder
@@ -2207,10 +2217,14 @@ struct MovieRowView: View {
 
         }
 
-        // Tag icons
-        if !tagIconsWithColors(for: movie.tags).isEmpty {
+        // Tag icons (including location tag when location_id exists)
+        let allTagIcons = tagIconsWithColors(
+          for: movie.tags,
+          hasLocation: movie.location_id != nil
+        )
+        if !allTagIcons.isEmpty {
           HStack(spacing: 4) {
-            ForEach(tagIconsWithColors(for: movie.tags), id: \.icon) { iconData in
+            ForEach(allTagIcons, id: \.icon) { iconData in
               Image(systemName: iconData.icon)
                 .foregroundColor(iconData.color)
                 .font(.system(size: 11, weight: .regular))
@@ -2288,10 +2302,16 @@ struct MovieRowView: View {
     return dayFormatter.string(from: date)
   }
 
-  private func tagIconsWithColors(for tagsString: String?) -> [(
+  private func tagIconsWithColors(
+    for tagsString: String?,
+    hasLocation: Bool = false
+  ) -> [(
     icon: String, color: Color
   )] {
-    return TagConfiguration.getTagIconsWithColors(for: tagsString)
+    return TagConfiguration.getTagIconsWithColors(
+      for: tagsString,
+      hasLocation: hasLocation
+    )
   }
 }
 

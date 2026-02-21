@@ -8,6 +8,19 @@
 import SwiftUI
 import Charts
 import Auth
+import MapKit
+
+private enum LocationCountMode: String, CaseIterable {
+    case specific
+    case grouped
+
+    var title: String {
+        switch self {
+        case .specific: return "Specific Locations"
+        case .grouped: return "Location Groups"
+        }
+    }
+}
 
 // MARK: - Selection Info Row
 private struct SelectionInfoRow: View {
@@ -37,6 +50,7 @@ struct StatisticsView: View {
     
     @State private var dashboardStats: DashboardStats?
     @State private var ratingDistribution: [RatingDistribution] = []
+    @State private var detailedRatingDistribution: [DetailedRatingDistribution] = []
     @State private var filmsByDecade: [FilmsByDecade] = []
     @State private var filmsByReleaseYear: [FilmsByReleaseYear] = []
     @State private var filmsPerYear: [FilmsPerYear] = []
@@ -58,6 +72,10 @@ struct StatisticsView: View {
     @State private var averageDetailedRatingsPerYear: [AverageDetailedRatingPerYear] = []
     @State private var yearlyPaceStats: YearlyPaceStats?
     @State private var allFilmsPerMonth: [FilmsPerMonth] = []
+    @State private var locationMapPoints: [LocationMapPoint] = []
+    @State private var specificLocationCounts: [LocationCountRow] = []
+    @State private var groupLocationCounts: [LocationCountRow] = []
+    @State private var locationCountMode: LocationCountMode = .specific
     
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -79,6 +97,7 @@ struct StatisticsView: View {
     private struct CachedStatisticsData {
         let dashboardStats: DashboardStats?
         let ratingDistribution: [RatingDistribution]
+        let detailedRatingDistribution: [DetailedRatingDistribution]
         let filmsByDecade: [FilmsByDecade]
         let filmsByReleaseYear: [FilmsByReleaseYear]
         let filmsPerYear: [FilmsPerYear]
@@ -99,6 +118,9 @@ struct StatisticsView: View {
         let resolvedAverageRating: Double?
         let yearlyPaceStats: YearlyPaceStats?
         let allFilmsPerMonth: [FilmsPerMonth]
+        let locationMapPoints: [LocationMapPoint]
+        let specificLocationCounts: [LocationCountRow]
+        let groupLocationCounts: [LocationCountRow]
         let cachedAt: Date
     }
     
@@ -170,9 +192,54 @@ struct StatisticsView: View {
     
     // MARK: - Statistics Content (extracted for platform-specific wrapping)
     private var statisticsContent: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                if isLoading {
+        TabView(selection: Binding(
+            get: { selectedYear ?? 9999 },
+            set: { newValue in
+                let newYear = newValue == 9999 ? nil : newValue
+                if newYear != selectedYear {
+                    #if canImport(UIKit)
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    #endif
+                    selectedYear = newYear
+                    Task {
+                        await loadStatistics()
+                    }
+                }
+            }
+        )) {
+            ScrollView {
+                statisticsScrollContent
+            }
+            .tag(9999)
+            
+            ForEach(availableYears, id: \.self) { year in
+                ScrollView {
+                    statisticsScrollContent
+                }
+                .tag(year)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .navigationTitle(navigationTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                yearPickerButton
+            }
+        }
+        .refreshable {
+            await refreshStatistics()
+        }
+        .sheet(isPresented: $showingYearPicker) {
+            yearPickerSheet
+        }
+    }
+
+    @ViewBuilder
+    private var statisticsScrollContent: some View {
+        VStack(spacing: 20) {
+            if isLoading {
                     VStack {
                         Spacer()
                         ProgressView()
@@ -195,18 +262,25 @@ struct StatisticsView: View {
                             averageRatingResolved: resolvedAverageRating,
                             watchSpan: watchSpan,
                             selectedYear: selectedYear,
-                            filmsPerMonth: filmsPerMonth
+                            filmsPerMonth: filmsPerMonth,
+                            advancedJourneyStats: advancedJourneyStats,
+                            yearFilteredAdvancedStats: yearFilteredAdvancedStats
                         )
                         
-                        // Advanced Film Journey Section - only show for all-time view
-                        if selectedYear == nil && advancedJourneyStats != nil {
-                            AdvancedFilmJourneySection(advancedStats: advancedJourneyStats!)
-                        }
-                        
-                        // Year-Filtered Advanced Film Journey Section - only show for year-filtered views
-                        if let year = selectedYear, let yearFilteredStats = yearFilteredAdvancedStats {
-                            YearFilteredAdvancedJourneySection(yearFilteredStats: yearFilteredStats, selectedYear: year)
-                        }
+                        // Modular Bar Chart
+                        ModularBarChartView(
+                            ratingDistribution: ratingDistribution,
+                            detailedRatingDistribution: detailedRatingDistribution,
+                            filmsPerYear: filmsPerYear,
+                            dayOfWeekPatterns: dayOfWeekPatterns,
+                            weeklyFilmsData: weeklyFilmsData,
+                            averageStarRatingsPerYear: averageStarRatingsPerYear,
+                            averageDetailedRatingsPerYear: averageDetailedRatingsPerYear,
+                            filmsByReleaseYear: filmsByReleaseYear,
+                            filmsByDecade: filmsByDecade,
+                            filmsPerMonth: filmsPerMonth,
+                            selectedYear: selectedYear
+                        )
                         
                         // Top Watched Films Section - only show for all-time view
                         if selectedYear == nil && !topWatchedFilms.isEmpty {
@@ -221,14 +295,13 @@ struct StatisticsView: View {
                         // Total Runtime Section
                         TimeSinceFirstFilmSection(watchSpan: watchSpan, runtimeStats: runtimeStats)
                         
-                        // Streak Statistics Section - only show for all-time view
+                        // Combined Streaks Section - only show for all-time view
                         if selectedYear == nil {
-                            StreakSection(streakStats: streakStats, selectedYear: selectedYear)
-                            
-                            // Weekly Streak Chart - only show for all-time view
-                            if let weeklyStats = weeklyStreakStats {
-                                WeeklyStreakChart(weeklyStreakStats: weeklyStats)
-                            }
+                            CombinedStreaksSection(
+                                streakStats: streakStats,
+                                weeklyStreakStats: weeklyStreakStats,
+                                selectedYear: selectedYear
+                            )
                         }
                         
                         // Year Release Date Pie Chart - only show for year-filtered views
@@ -236,22 +309,36 @@ struct StatisticsView: View {
                             YearReleasePieChart(yearReleaseStats: yearReleaseStats, selectedYear: year)
                         }
                         
-                        // Rating Distribution Chart
-                        RatingDistributionChart(distribution: ratingDistribution)
-                        
-                        // Films Per Year Chart (all-time) or Films Per Month Chart (year-filtered)
                         if selectedYear != nil {
                             // On Pace Chart - for year-filtered views
                             if let paceStats = yearlyPaceStats {
                                 OnPaceChart(yearlyPaceStats: paceStats)
                             }
-                            
-                            FilmsPerMonthChart(filmsPerMonth: filmsPerMonth)
-                        } else {
+                        }
+                        
+                        // Rating Distribution Chart
+                        RatingDistributionChart(distribution: ratingDistribution)
+
+                        // Detailed Rating Distribution Chart
+                        DetailedRatingDistributionChart(distribution: detailedRatingDistribution)
+
+                        LocationStatisticsSection(
+                            mapPoints: locationMapPoints,
+                            specificCounts: specificLocationCounts,
+                            groupCounts: groupLocationCounts,
+                            selectedMode: $locationCountMode,
+                            selectedYear: selectedYear
+                        )
+                        
+                        // Films Per Year Chart
+                        if selectedYear == nil {
                             FilmsPerYearChart(filmsPerYear: filmsPerYear)
                         }
                         
-                        // Weekly Films Chart - only show for year-filtered views
+                        // Films Per Month Chart
+                        FilmsPerMonthChart(filmsPerMonth: filmsPerMonth)
+                        
+                        // Weekly Films Chart
                         if let year = selectedYear, !weeklyFilmsData.isEmpty {
                             WeeklyFilmsChart(weeklyData: weeklyFilmsData, selectedYear: year)
                         }
@@ -259,7 +346,7 @@ struct StatisticsView: View {
                         // Day of Week Chart
                         DayOfWeekChart(dayOfWeekPatterns: dayOfWeekPatterns)
                         
-                        // Average Rating Per Year Charts - only show for all-time view
+                        // Average Rating Per Year Charts
                         if selectedYear == nil && !averageStarRatingsPerYear.isEmpty {
                             AverageStarRatingPerYearChart(averageStarRatings: averageStarRatingsPerYear)
                         }
@@ -268,7 +355,7 @@ struct StatisticsView: View {
                             AverageDetailedRatingPerYearChart(averageDetailedRatings: averageDetailedRatingsPerYear)
                         }
                         
-                        // Films by Release Year Chart - all-time or year-filtered
+                        // Films by Release Year Chart
                         if !filmsByReleaseYear.isEmpty {
                             if let year = selectedYear {
                                 FilmsByReleaseYearChart(filmsByReleaseYear: filmsByReleaseYear, filteredYear: year)
@@ -277,29 +364,13 @@ struct StatisticsView: View {
                             }
                         }
                         
-                        // Films by Decade Chart - moved to bottom
+                        // Films by Decade Chart
                         FilmsByDecadeChart(filmsByDecade: filmsByDecade)
                     }
                     .padding(.horizontal)
                 }
             }
         }
-        .navigationTitle(navigationTitle)
-        #if canImport(UIKit)
-        .toolbarTitleDisplayMode(.inlineLarge)
-        #endif
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                yearPickerButton
-            }
-        }
-        .refreshable {
-            await refreshStatistics()
-        }
-        .sheet(isPresented: $showingYearPicker) {
-            yearPickerSheet
-        }
-    }
     
     // MARK: - Year Picker UI Components
     
@@ -470,6 +541,7 @@ struct StatisticsView: View {
         await MainActor.run {
             self.dashboardStats = cachedData.dashboardStats
             self.ratingDistribution = cachedData.ratingDistribution
+            self.detailedRatingDistribution = cachedData.detailedRatingDistribution
             self.filmsByDecade = cachedData.filmsByDecade
             self.filmsByReleaseYear = cachedData.filmsByReleaseYear
             self.filmsPerYear = cachedData.filmsPerYear
@@ -490,6 +562,9 @@ struct StatisticsView: View {
             self.resolvedAverageRating = cachedData.resolvedAverageRating
             self.yearlyPaceStats = cachedData.yearlyPaceStats
             self.allFilmsPerMonth = cachedData.allFilmsPerMonth
+            self.locationMapPoints = cachedData.locationMapPoints
+            self.specificLocationCounts = cachedData.specificLocationCounts
+            self.groupLocationCounts = cachedData.groupLocationCounts
             self.isLoading = false
         }
     }
@@ -499,6 +574,7 @@ struct StatisticsView: View {
         let cachedData = CachedStatisticsData(
             dashboardStats: dashboardStats,
             ratingDistribution: ratingDistribution,
+            detailedRatingDistribution: detailedRatingDistribution,
             filmsByDecade: filmsByDecade,
             filmsByReleaseYear: filmsByReleaseYear,
             filmsPerYear: filmsPerYear,
@@ -519,6 +595,9 @@ struct StatisticsView: View {
             resolvedAverageRating: resolvedAverageRating,
             yearlyPaceStats: yearlyPaceStats,
             allFilmsPerMonth: allFilmsPerMonth,
+            locationMapPoints: locationMapPoints,
+            specificLocationCounts: specificLocationCounts,
+            groupLocationCounts: groupLocationCounts,
             cachedAt: Date()
         )
         
@@ -564,6 +643,7 @@ struct StatisticsView: View {
             // Load all stats from Supabase
             async let dashboardTask = statisticsService.getDashboardStats(year: selectedYear)
             async let ratingTask = statisticsService.getRatingDistribution(year: selectedYear)
+            async let detailedRatingTask = statisticsService.getDetailedRatingDistribution(year: selectedYear)
             async let decadeTask = statisticsService.getFilmsByDecade(year: selectedYear)
             async let releaseYearTask = statisticsService.getFilmsByReleaseYear(year: selectedYear)
             async let yearTask = statisticsService.getFilmsPerYear(year: selectedYear)
@@ -592,10 +672,14 @@ struct StatisticsView: View {
             async let averageDetailedRatingsTask = selectedYear == nil ? statisticsService.getAverageDetailedRatingPerYear() : nil
             // Get all films per month (for historical pace calculation) only for year-filtered views
             async let allFilmsPerMonthTask = selectedYear != nil ? statisticsService.getFilmsPerMonth(year: nil) : nil
+            async let locationMapPointsTask = statisticsService.getLocationMapPoints(year: selectedYear)
+            async let specificLocationCountsTask = statisticsService.getLocationCounts(year: selectedYear, groupMode: false)
+            async let groupLocationCountsTask = statisticsService.getLocationCounts(year: selectedYear, groupMode: true)
             
             let results = try await (
                 dashboard: dashboardTask,
                 rating: ratingTask,
+                detailedRating: detailedRatingTask,
                 decade: decadeTask,
                 releaseYear: releaseYearTask,
                 year: yearTask,
@@ -615,12 +699,16 @@ struct StatisticsView: View {
                 yearFilteredAdvancedJourney: yearFilteredAdvancedJourneyTask,
                 averageStarRatings: averageStarRatingsTask,
                 averageDetailedRatings: averageDetailedRatingsTask,
-                allFilmsPerMonth: allFilmsPerMonthTask
+                allFilmsPerMonth: allFilmsPerMonthTask,
+                locationMapPoints: locationMapPointsTask,
+                specificLocationCounts: specificLocationCountsTask,
+                groupLocationCounts: groupLocationCountsTask
             )
             
             await MainActor.run {
                 self.dashboardStats = results.dashboard
                 self.ratingDistribution = results.rating
+                self.detailedRatingDistribution = results.detailedRating
                 self.filmsByDecade = results.decade
                 self.filmsByReleaseYear = results.releaseYear
                 self.filmsPerYear = results.year
@@ -640,6 +728,9 @@ struct StatisticsView: View {
                 self.averageStarRatingsPerYear = results.averageStarRatings ?? []
                 self.averageDetailedRatingsPerYear = results.averageDetailedRatings ?? []
                 self.resolvedAverageRating = results.dashboard.averageRating ?? results.ratingStats.averageRating
+                self.locationMapPoints = results.locationMapPoints
+                self.specificLocationCounts = results.specificLocationCounts
+                self.groupLocationCounts = results.groupLocationCounts
                 
                 // Calculate pace stats for year-filtered views
                 if let year = self.selectedYear {
@@ -682,6 +773,7 @@ struct StatisticsView: View {
         do {
             async let dashboardTask = statisticsService.getDashboardStats(year: selectedYear)
             async let ratingTask = statisticsService.getRatingDistribution(year: selectedYear)
+            async let detailedRatingTask = statisticsService.getDetailedRatingDistribution(year: selectedYear)
             async let decadeTask = statisticsService.getFilmsByDecade(year: selectedYear)
             async let releaseYearRefreshTask = statisticsService.getFilmsByReleaseYear(year: selectedYear)
             async let yearTask = statisticsService.getFilmsPerYear(year: selectedYear)
@@ -708,10 +800,14 @@ struct StatisticsView: View {
             async let averageDetailedRatingsTask = selectedYear == nil ? statisticsService.getAverageDetailedRatingPerYear() : nil
             // Get all films per month (for historical pace calculation) only for year-filtered views
             async let allFilmsPerMonthTask = selectedYear != nil ? statisticsService.getFilmsPerMonth(year: nil) : nil
+            async let locationMapPointsTask = statisticsService.getLocationMapPoints(year: selectedYear)
+            async let specificLocationCountsTask = statisticsService.getLocationCounts(year: selectedYear, groupMode: false)
+            async let groupLocationCountsTask = statisticsService.getLocationCounts(year: selectedYear, groupMode: true)
             
             let results = try await (
                 dashboard: dashboardTask,
                 rating: ratingTask,
+                detailedRating: detailedRatingTask,
                 decade: decadeTask,
                 releaseYear: releaseYearRefreshTask,
                 year: yearTask,
@@ -730,12 +826,16 @@ struct StatisticsView: View {
                 yearFilteredAdvancedJourney: yearFilteredAdvancedJourneyTask,
                 averageStarRatings: averageStarRatingsTask,
                 averageDetailedRatings: averageDetailedRatingsTask,
-                allFilmsPerMonth: allFilmsPerMonthTask
+                allFilmsPerMonth: allFilmsPerMonthTask,
+                locationMapPoints: locationMapPointsTask,
+                specificLocationCounts: specificLocationCountsTask,
+                groupLocationCounts: groupLocationCountsTask
             )
             
             await MainActor.run {
                 self.dashboardStats = results.dashboard
                 self.ratingDistribution = results.rating
+                self.detailedRatingDistribution = results.detailedRating
                 self.filmsByDecade = results.decade
                 self.filmsByReleaseYear = results.releaseYear
                 self.filmsPerYear = results.year
@@ -754,6 +854,9 @@ struct StatisticsView: View {
                 self.averageStarRatingsPerYear = results.averageStarRatings ?? []
                 self.averageDetailedRatingsPerYear = results.averageDetailedRatings ?? []
                 self.resolvedAverageRating = results.dashboard.averageRating ?? results.ratingStats.averageRating
+                self.locationMapPoints = results.locationMapPoints
+                self.specificLocationCounts = results.specificLocationCounts
+                self.groupLocationCounts = results.groupLocationCounts
                 
                 // Calculate pace stats for year-filtered views
                 if let year = self.selectedYear {
@@ -787,20 +890,26 @@ struct StatisticsView: View {
     private func loadAdvancedJourneyStats() async throws -> AdvancedFilmJourneyStats {
         async let daysWith2PlusTask = statisticsService.getDaysWith2PlusFilms()
         async let averagePerYearTask = statisticsService.getAverageMoviesPerYear()
+        async let mustWatchTask = statisticsService.getMustWatchCompletionAllTime()
         async let unique5StarTask = statisticsService.getUnique5StarFilms()
+        async let mostMoviesInDayTask = statisticsService.getMostMoviesInDay()
         async let highestMonthlyTask = statisticsService.getHighestMonthlyAverage()
         
         let results = try await (
             daysWith2Plus: daysWith2PlusTask,
             averagePerYear: averagePerYearTask,
+            mustWatch: mustWatchTask,
             unique5Star: unique5StarTask,
+            mostMoviesInDay: mostMoviesInDayTask,
             highestMonthly: highestMonthlyTask
         )
         
         return AdvancedFilmJourneyStats(
             daysWith2PlusFilms: results.daysWith2Plus,
             averageMoviesPerYear: results.averagePerYear,
+            mustWatchCompletion: results.mustWatch,
             unique5StarFilms: results.unique5Star,
+            mostMoviesInDay: results.mostMoviesInDay,
             highestMonthlyAverage: results.highestMonthly
         )
     }
@@ -809,12 +918,14 @@ struct StatisticsView: View {
         async let daysWith2PlusTask = statisticsService.getDaysWith2PlusFilmsByYear(year: year)
         async let mustWatchTask = statisticsService.getMustWatchCompletionByYear(year: year)
         async let unique5StarTask = statisticsService.getUnique5StarFilmsByYear(year: year)
+        async let mostMoviesInDayTask = statisticsService.getMostMoviesInDayByYear(year: year)
         async let highestMonthlyTask = statisticsService.getHighestMonthlyAverageByYear(year: year)
         
         let results = try await (
             daysWith2Plus: daysWith2PlusTask,
             mustWatch: mustWatchTask,
             unique5Star: unique5StarTask,
+            mostMoviesInDay: mostMoviesInDayTask,
             highestMonthly: highestMonthlyTask
         )
         
@@ -822,6 +933,7 @@ struct StatisticsView: View {
             daysWith2PlusFilms: results.daysWith2Plus,
             mustWatchCompletion: results.mustWatch,
             unique5StarFilms: results.unique5Star,
+            mostMoviesInDay: results.mostMoviesInDay,
             highestMonthlyAverage: results.highestMonthly
         )
     }
@@ -957,20 +1069,7 @@ struct TimeSinceFirstFilmSection: View {
                 )
  
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.purple.opacity(0.5),
-                            Color.blue.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -984,6 +1083,24 @@ struct FilmJourneySection: View {
     let watchSpan: WatchSpan?
     let selectedYear: Int?
     let filmsPerMonth: [FilmsPerMonth]
+    let advancedJourneyStats: AdvancedFilmJourneyStats?
+    let yearFilteredAdvancedStats: YearFilteredAdvancedJourneyStats?
+    
+    enum ExpandedStatType: Identifiable {
+        case mostInDay
+        case bestMonth
+        case mostActiveMonth
+        
+        var id: String {
+            switch self {
+            case .mostInDay: return "mostInDay"
+            case .bestMonth: return "bestMonth"
+            case .mostActiveMonth: return "mostActiveMonth"
+            }
+        }
+    }
+    
+    @State private var expandedStatType: ExpandedStatType?
     
     // Derived text for the small subtitle under the header
     private var watchSpanText: String {
@@ -1000,6 +1117,24 @@ struct FilmJourneySection: View {
         guard !filmsPerMonth.isEmpty else { return 0.0 }
         let totalFilms = filmsPerMonth.reduce(0) { $0 + $1.filmCount }
         return Double(totalFilms) / Double(filmsPerMonth.count)
+    }
+    
+    private func formatShortDate(_ dateString: String) -> String {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        
+        let formatter = DateFormatter()
+        if selectedYear == nil {
+            formatter.dateFormat = "MMM d, yyyy"
+        } else {
+            formatter.dateFormat = "MMM d"
+        }
+        
+        if let date = parser.date(from: dateString) {
+            return formatter.string(from: date)
+        }
+        
+        return dateString
     }
     
     var body: some View {
@@ -1035,10 +1170,8 @@ struct FilmJourneySection: View {
             .padding(.horizontal, 16)
             
             // Stats Cards Grid
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 12) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
+                // 1. Total Films
                 StatCard(
                     title: "Total Films",
                     value: "\(dashboardStats?.totalFilms ?? 0)",
@@ -1046,6 +1179,7 @@ struct FilmJourneySection: View {
                     color: .blue
                 )
                 
+                // 2. Unique Films
                 StatCard(
                     title: "Unique Films",
                     value: "\(uniqueFilmsCount)",
@@ -1053,6 +1187,28 @@ struct FilmJourneySection: View {
                     color: .green
                 )
                 
+                // 3. Films This Year / Avg Films/Month
+                StatCard(
+                    title: selectedYear != nil ? "Avg Films/Month" : "Films This Year",
+                    value: selectedYear != nil ? String(format: "%.2f", averageFilmsPerMonth) : "\(dashboardStats?.filmsThisYear ?? 0)",
+                    icon: selectedYear != nil ? "calendar.badge.clock" : "calendar",
+                    color: .purple
+                )
+                
+                // 4. Avg/Year (Only for All-Time)
+                if selectedYear == nil {
+                    if let advancedStats = advancedJourneyStats {
+                        UniformStatCard(
+                            title: "Avg/Year",
+                            value: String(format: "%.1f", advancedStats.averageMoviesPerYear),
+                            subtitle: nil,
+                            icon: "chart.line.uptrend.xyaxis",
+                            color: .green
+                        )
+                    }
+                }
+                
+                // 5. Average Rating
                 StatCard(
                     title: "Average Rating",
                     value: String(format: "%.2f", averageRatingResolved ?? dashboardStats?.averageRating ?? 0.0),
@@ -1060,51 +1216,227 @@ struct FilmJourneySection: View {
                     color: .yellow
                 )
                 
-                StatCard(
-                    title: selectedYear != nil ? "Avg Films/Month" : "Films This Year",
-                    value: selectedYear != nil ? String(format: "%.2f", averageFilmsPerMonth) : "\(dashboardStats?.filmsThisYear ?? 0)",
-                    icon: selectedYear != nil ? "calendar.badge.clock" : "calendar",
-                    color: .purple
-                )
+                // 6. 2+ Film Days
+                if selectedYear == nil {
+                    if let advancedStats = advancedJourneyStats {
+                        UniformStatCard(
+                            title: "2+ Film Days",
+                            value: "\(advancedStats.daysWith2PlusFilms)",
+                            subtitle: nil,
+                            icon: "calendar.badge.plus",
+                            color: .orange
+                        )
+                    }
+                } else {
+                    if let yearStats = yearFilteredAdvancedStats {
+                        UniformStatCard(
+                            title: "2+ Film Days",
+                            value: "\(yearStats.daysWith2PlusFilms)",
+                            subtitle: nil,
+                            icon: "calendar.badge.plus",
+                            color: .orange
+                        )
+                    }
+                }
+                
+                // 7. Most in a Day
+                Button {
+                    expandedStatType = .mostInDay
+                } label: {
+                    if selectedYear == nil {
+                        if let advancedStats = advancedJourneyStats, let mostInDayList = advancedStats.mostMoviesInDay, let mostInDay = mostInDayList.first {
+                            UniformStatCard(
+                                title: "Most in a Day",
+                                value: "\(mostInDay.filmCount)",
+                                subtitle: formatShortDate(mostInDay.watchDate),
+                                icon: "calendar.badge.clock",
+                                color: .mint
+                            )
+                        } else {
+                            UniformStatCard(
+                                title: "Most in a Day",
+                                value: "N/A",
+                                subtitle: nil,
+                                icon: "calendar.badge.clock",
+                                color: .mint
+                            )
+                        }
+                    } else {
+                        if let yearStats = yearFilteredAdvancedStats, let mostInDayList = yearStats.mostMoviesInDay, let mostInDay = mostInDayList.first {
+                            UniformStatCard(
+                                title: "Most in a Day",
+                                value: "\(mostInDay.filmCount)",
+                                subtitle: formatShortDate(mostInDay.watchDate),
+                                icon: "calendar.badge.clock",
+                                color: .mint
+                            )
+                        } else {
+                            UniformStatCard(
+                                title: "Most in a Day",
+                                value: "N/A",
+                                subtitle: nil,
+                                icon: "calendar.badge.clock",
+                                color: .mint
+                            )
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                
+                // 8. Best Month
+                Button {
+                    expandedStatType = .bestMonth
+                } label: {
+                    if selectedYear == nil {
+                        if let advancedStats = advancedJourneyStats, let highestMonthList = advancedStats.highestMonthlyAverage, let highestMonth = highestMonthList.first {
+                            UniformStatCard(
+                                title: "Best Month",
+                                value: String(format: "%.2f", highestMonth.averageRating),
+                                subtitle: "\(highestMonth.monthName.trimmingCharacters(in: .whitespacesAndNewlines)) \(String(highestMonth.year))",
+                                icon: "trophy.fill",
+                                color: .purple
+                            )
+                        } else {
+                            UniformStatCard(
+                                title: "Best Month",
+                                value: "N/A",
+                                subtitle: nil,
+                                icon: "trophy.fill",
+                                color: .purple
+                            )
+                        }
+                    } else {
+                        if let yearStats = yearFilteredAdvancedStats, let highestMonthList = yearStats.highestMonthlyAverage, let highestMonth = highestMonthList.first {
+                            UniformStatCard(
+                                title: "Best Month",
+                                value: String(format: "%.2f", highestMonth.averageRating),
+                                subtitle: highestMonth.monthName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                icon: "trophy.fill",
+                                color: .purple
+                            )
+                        } else {
+                            UniformStatCard(
+                                title: "Best Month",
+                                value: "N/A",
+                                subtitle: "Insuff. data",
+                                icon: "trophy.fill",
+                                color: .purple
+                            )
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                
+                // 9. Most Films
+                Button {
+                    expandedStatType = .mostActiveMonth
+                } label: {
+                    let sortedMonths = filmsPerMonth.sorted { $0.filmCount > $1.filmCount }
+                    if let activeMonth = sortedMonths.first, activeMonth.filmCount > 0 {
+                        UniformStatCard(
+                            title: "Most Films",
+                            value: "\(activeMonth.filmCount)",
+                            subtitle: selectedYear == nil ? "\(activeMonth.monthName.trimmingCharacters(in: .whitespacesAndNewlines)) '\(String(activeMonth.year).suffix(2))" : activeMonth.monthName.trimmingCharacters(in: .whitespacesAndNewlines),
+                            icon: "chart.bar.fill",
+                            color: .mint
+                        )
+                    } else {
+                        UniformStatCard(
+                            title: "Most Films",
+                            value: "N/A",
+                            subtitle: "Insuff. data",
+                            icon: "chart.bar.fill",
+                            color: .mint
+                        )
+                    }
+                }
+                .buttonStyle(.plain)
+                
+
+                
+                // 10. Must Watches
+                if selectedYear == nil {
+                    /* All-time must watches logic commented out to save space
+                    if let advancedStats = advancedJourneyStats, let mustWatch = advancedStats.mustWatchCompletion {
+                        UniformStatCard(
+                            title: "Must Watches",
+                            value: "\(Int(mustWatch.completionPercentage.rounded()))%",
+                            subtitle: "\(mustWatch.watchedFilms)/\(mustWatch.totalFilms)",
+                            icon: "checklist",
+                            color: .blue
+                        )
+                    } else {
+                        UniformStatCard(
+                            title: "Must Watches",
+                            value: "N/A",
+                            subtitle: "No lists found",
+                            icon: "checklist",
+                            color: .blue
+                        )
+                    }
+                    */
+                } else {
+                    if let yearStats = yearFilteredAdvancedStats, let mustWatch = yearStats.mustWatchCompletion {
+                        UniformStatCard(
+                            title: "Must Watches",
+                            value: "\(Int(mustWatch.completionPercentage))%",
+                            subtitle: "\(mustWatch.watchedFilms)/\(mustWatch.totalFilms)",
+                            icon: "checklist",
+                            color: .blue
+                        )
+                    } else {
+                        UniformStatCard(
+                            title: "Must Watches",
+                            value: "N/A",
+                            subtitle: "No list found",
+                            icon: "checklist",
+                            color: .blue
+                        )
+                    }
+                }
+                
+                /*
+                // 5-Star Films - Commented out as requested
+                if selectedYear == nil {
+                    if let advancedStats = advancedJourneyStats {
+                        UniformStatCard(
+                            title: "5-Star Films",
+                            value: "\(advancedStats.unique5StarFilms)",
+                            subtitle: nil,
+                            icon: "star.fill",
+                            color: .yellow
+                        )
+                    }
+                } else {
+                    if let yearStats = yearFilteredAdvancedStats {
+                        UniformStatCard(
+                            title: "New 5-Stars",
+                            value: "\(yearStats.unique5StarFilms)",
+                            subtitle: nil,
+                            icon: "star.fill",
+                            color: .yellow
+                        )
+                    }
+                }
+                */
             }
             .padding(.horizontal, 16)
             
             // bottom runtime widget intentionally removed; top header remains
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.05),
-                            Color.purple.opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(
-                    color: .white.opacity(0.1),
-                    radius: 8,
-                    x: 0,
-                    y: 2
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.5),
-                            Color.purple.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+        .padding(.vertical, 8)
+        .sheet(item: $expandedStatType) { type in
+            TopEntriesListView(
+                expandedStatType: $expandedStatType,
+                type: type,
+                selectedYear: selectedYear,
+                advancedJourneyStats: advancedJourneyStats,
+                yearFilteredAdvancedStats: yearFilteredAdvancedStats,
+                filmsPerMonth: filmsPerMonth
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 }
 
@@ -1129,23 +1461,8 @@ struct StatCard: View {
     }
     
     var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Spacer()
-                Image(systemName: icon)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: borderGradient,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .font(.title2)
-                Spacer()
-            }
-            
-            Text(value)
-                .font(.system(size: 36, weight: .heavy, design: .rounded))
+        VStack(spacing: 4) {
+            Image(systemName: icon)
                 .foregroundStyle(
                     LinearGradient(
                         colors: borderGradient,
@@ -1153,26 +1470,31 @@ struct StatCard: View {
                         endPoint: .bottomTrailing
                     )
                 )
+                .font(.title3)
             
-            Text(title)
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.adaptiveCardBackground(scheme: colorScheme))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(
                     LinearGradient(
-                        colors: borderGradient.map { $0.opacity(0.4) },
+                        colors: borderGradient,
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1.2
+                    )
                 )
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+            
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.gray.opacity(0.15))
         )
     }
 }
@@ -1472,17 +1794,7 @@ struct StreakDetailCard: View {
             RoundedRectangle(cornerRadius: 16)
                 .fill(Color.adaptiveCardBackground(scheme: colorScheme))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(
-                    LinearGradient(
-                        colors: borderGradient.map { $0.opacity(0.3) },
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.8
-                )
-        )
+
         .shadow(
             color: effectiveColor.opacity(0.1),
             radius: 8,
@@ -1492,9 +1804,12 @@ struct StreakDetailCard: View {
     }
 }
 
-struct StreakSection: View {
+// MARK: - Combined Streaks Section
+
+struct CombinedStreaksSection: View {
     @Environment(\.colorScheme) private var colorScheme
     let streakStats: StreakStats?
+    let weeklyStreakStats: WeeklyStreakStats?
     let selectedYear: Int?
     
     var body: some View {
@@ -1513,248 +1828,88 @@ struct StreakSection: View {
                         .fontWeight(.bold)
                         .foregroundColor(Color.adaptiveText(scheme: colorScheme))
                 }
-                Text("Consecutive days with at least one film")
+                Text("Consecutive days and weeks with logged films")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
             .padding(.horizontal, 16)
             
-            // Streak Cards
-            VStack(spacing: 16) {
-                StreakDetailCard(
-                    title: "Longest Streak",
-                    streakStats: streakStats,
-                    streakType: .longest
-                )
-                
-                // Only show current streak for all-time view
-                if selectedYear == nil {
-                    StreakDetailCard(
-                        title: "Current Streak",
-                        streakStats: streakStats,
-                        streakType: .current
-                    )
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.orange.opacity(0.05),
-                            Color.red.opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
- 
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.orange.opacity(0.5),
-                            Color.red.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
-    }
-}
-
-// MARK: - Weekly Streak Chart
-
-struct WeeklyStreakChart: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let weeklyStreakStats: WeeklyStreakStats
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Section Header
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "calendar.badge.checkmark")
-                        .font(.title2)
-                        .gradientForeground([
-                            .blue,
-                            .cyan
-                        ], start: .topLeading, end: .bottomTrailing)
-                    Text("Weekly Streaks")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
-                }
-                Text("Consecutive weeks with at least one film logged")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            
-            // Streak Cards
-            VStack(spacing: 16) {
-                // Current Weekly Streak
-                WeeklyStreakCard(
-                    title: "Current Weekly Streak",
-                    weeks: weeklyStreakStats.currentStreak,
-                    startDate: weeklyStreakStats.currentStartDate,
-                    endDate: weeklyStreakStats.currentEndDate,
-                    isActive: weeklyStreakStats.isActive,
-                    accentColor: .blue
-                )
-                
-                // Longest Weekly Streak
-                WeeklyStreakCard(
-                    title: "Longest Weekly Streak",
-                    weeks: weeklyStreakStats.longestStreak,
-                    startDate: weeklyStreakStats.longestStartDate,
-                    endDate: weeklyStreakStats.longestEndDate,
-                    isActive: false,
-                    accentColor: .cyan
-                )
-            }
-            .padding(.horizontal, 16)
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.05),
-                            Color.cyan.opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.5),
-                            Color.cyan.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
-    }
-}
-
-// MARK: - Weekly Streak Card
-
-private struct WeeklyStreakCard: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let title: String
-    let weeks: Int
-    let startDate: String
-    let endDate: String
-    let isActive: Bool
-    let accentColor: Color
-    
-    private static let inputFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
-    
-    private static let outputFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        return formatter
-    }()
-    
-    private static let outputFormatterWithYear: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, yyyy"
-        return formatter
-    }()
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+            // Headers for columns
             HStack {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(Color.adaptiveText(scheme: colorScheme))
-                Spacer()
-                if isActive {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 8, height: 8)
-                        Text("Active")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundColor(.green)
-                    }
-                }
-            }
-            
-            HStack(alignment: .bottom, spacing: 8) {
-                Text("\(weeks)")
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [accentColor, accentColor.opacity(0.7)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                Text(weeks == 1 ? "week" : "weeks")
-                    .font(.title3)
-                    .fontWeight(.medium)
+                Text("Current")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
                     .foregroundColor(.secondary)
-                    .padding(.bottom, 10)
+                    .padding(.leading, 8)
+                Spacer()
+                Text("Longest")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+                    .padding(.trailing, 8)
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, -4)
             
-            if !startDate.isEmpty && !endDate.isEmpty {
-                HStack(spacing: 8) {
-                    Image(systemName: "calendar")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                    Text("\(formatDate(startDate)) → \(formatDate(endDate))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            // Streak Cards Grid
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 12) {
+                if selectedYear == nil {
+                    UniformStatCard(
+                        title: formatStreakDateRange(start: streakStats?.currentStart, end: streakStats?.currentEnd),
+                        value: "\(streakStats?.currentStreak ?? 0) days",
+                        subtitle: nil,
+                        icon: "flame.fill",
+                        color: .orange
+                    )
                 }
+                UniformStatCard(
+                    title: formatStreakDateRange(start: streakStats?.longestStart, end: streakStats?.longestEnd),
+                    value: "\(streakStats?.longestStreak ?? 0) days",
+                    subtitle: nil,
+                    icon: "trophy.fill",
+                    color: .red
+                )
+                if selectedYear == nil {
+                    UniformStatCard(
+                        title: formatStreakDateRange(start: weeklyStreakStats?.currentStartDate, end: weeklyStreakStats?.currentEndDate),
+                        value: "\(weeklyStreakStats?.currentStreak ?? 0) weeks",
+                        subtitle: nil,
+                        icon: "calendar.badge.clock",
+                        color: .blue
+                    )
+                }
+                UniformStatCard(
+                    title: formatStreakDateRange(start: weeklyStreakStats?.longestStartDate, end: weeklyStreakStats?.longestEndDate),
+                    value: "\(weeklyStreakStats?.longestStreak ?? 0) weeks",
+                    subtitle: nil,
+                    icon: "calendar.badge.checkmark",
+                    color: .cyan
+                )
             }
+            .padding(.horizontal, 16)
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.adaptiveCardBackground(scheme: colorScheme))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(accentColor.opacity(0.3), lineWidth: 0.5)
-        )
+        .padding(.vertical, 8)
     }
     
-    private func formatDate(_ dateString: String) -> String {
-        // Format from "2024-01-27" to "Jan 27" or "Jan 27, 2024" for different years
-        guard let date = Self.inputFormatter.date(from: dateString) else {
-            return dateString
+    private func formatStreakDateRange(start: String?, end: String?) -> String {
+        guard let startStr = start, !startStr.isEmpty, let endStr = end, !endStr.isEmpty else {
+            return "No Streak"
         }
         
-        let currentYear = Calendar.current.component(.year, from: Date())
-        let dateYear = Calendar.current.component(.year, from: date)
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
         
-        if dateYear == currentYear {
-            return Self.outputFormatter.string(from: date)
-        } else {
-            return Self.outputFormatterWithYear.string(from: date)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d/yy"
+        
+        if let startDate = parser.date(from: startStr), let endDate = parser.date(from: endStr) {
+            return "\(formatter.string(from: startDate)) - \(formatter.string(from: endDate))"
         }
+        
+        return "N/A"
     }
 }
 
@@ -1834,20 +1989,7 @@ struct TotalRuntimeSection: View {
                 )
  
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.purple.opacity(0.5),
-                            Color.blue.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -1945,20 +2087,7 @@ struct RewatchPieChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.orange.opacity(0.5),
-                            Color.blue.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
         .onAppear {
             withAnimation(.easeOut(duration: 1.0)) {
                 animationProgress = 1.0
@@ -2091,10 +2220,7 @@ struct RewatchPieChart: View {
     private var tooltipBackground: some View {
         RoundedRectangle(cornerRadius: 8)
             .fill(Color.black.opacity(0.9))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.orange.opacity(0.5), lineWidth: 1)
-            )
+
     }
     
     @ViewBuilder
@@ -2407,20 +2533,7 @@ struct RatingDistributionChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.cyan.opacity(0.5),
-                            Color.blue.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -2559,20 +2672,7 @@ struct FilmsByDecadeChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.red.opacity(0.5),
-                            Color.orange.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -2724,20 +2824,7 @@ struct DayOfWeekChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.orange.opacity(0.5),
-                            Color.yellow.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -2912,20 +2999,7 @@ struct FilmsPerYearChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.mint.opacity(0.5),
-                            Color.green.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -3158,20 +3232,7 @@ struct OnPaceChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.orange.opacity(0.5),
-                            Color.blue.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
     
     private func monthShort(_ month: Int) -> String {
@@ -3222,18 +3283,24 @@ struct FilmsPerMonthChart: View {
     let filmsPerMonth: [FilmsPerMonth]
     @State private var selectedMonth: Double?
 
+    private var aggregatedFilms: [(month: Int, count: Int)] {
+        var dict: [Int: Int] = [:]
+        for item in filmsPerMonth {
+            dict[item.month, default: 0] += item.count
+        }
+        return (1...12).map { (month: $0, count: dict[$0, default: 0]) }
+    }
+
     private var totalFilms: Int {
-        let counts: [Int] = filmsPerMonth.map { $0.count }
-        return counts.reduce(0, +)
+        aggregatedFilms.map { $0.count }.reduce(0, +)
     }
     
     private var maxCount: Int {
-        filmsPerMonth.map { $0.count }.max() ?? 0
+        aggregatedFilms.map { $0.count }.max() ?? 0
     }
 
     private var monthAxisValues: [Int] {
-        guard !filmsPerMonth.isEmpty else { return Array(1...12) }
-        return filmsPerMonth.map { $0.month }.sorted()
+        return Array(1...12)
     }
 
     private func monthName(for monthNumber: Int) -> String {
@@ -3242,9 +3309,9 @@ struct FilmsPerMonthChart: View {
         return formatter.shortMonthSymbols[monthNumber - 1]
     }
 
-    private var selectedItem: FilmsPerMonth? {
+    private var selectedItem: (month: Int, count: Int)? {
         guard let month = selectedMonth else { return nil }
-        return filmsPerMonth.first { $0.month == Int(month) }
+        return aggregatedFilms.first { $0.month == Int(month) }
     }
     
     var body: some View {
@@ -3263,7 +3330,7 @@ struct FilmsPerMonthChart: View {
             }
             .padding(.horizontal, 12)
             
-            Chart(filmsPerMonth, id: \.month) { item in
+            Chart(aggregatedFilms, id: \.month) { item in
                 BarMark(
                     x: .value("Month", item.month),
                     y: .value("Count", item.count)
@@ -3292,7 +3359,18 @@ struct FilmsPerMonthChart: View {
                 }
             }
             .frame(height: 200)
-            .chartXAxis(.hidden)
+            .chartXAxis {
+                AxisMarks(values: monthAxisValues) { value in
+                    AxisValueLabel {
+                        if let month = value.as(Int.self) {
+                            Text(monthName(for: month))
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundColor(.primary)
+                                .offset(x: -12)
+                        }
+                    }
+                }
+            }
             .chartXScale(domain: 0.5...12.5)
             .chartYAxis {
                 AxisMarks(position: .leading) { _ in
@@ -3307,7 +3385,7 @@ struct FilmsPerMonthChart: View {
             .padding(.horizontal, 12)
             
             // Highest month indicator
-            if let highestMonth = filmsPerMonth.max(by: { $0.count < $1.count }) {
+            if let highestMonth = aggregatedFilms.max(by: { $0.count < $1.count }) {
                 HStack {
                     Spacer()
                     Text("\(monthName(for: highestMonth.month)) - \(highestMonth.count) films")
@@ -3350,20 +3428,7 @@ struct FilmsPerMonthChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.cyan.opacity(0.5),
-                            Color.blue.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -3421,20 +3486,7 @@ struct WeeklyFilmsChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.pink.opacity(0.5),
-                            Color.purple.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
     
     // MARK: - Weekly Chart Subviews
@@ -3703,20 +3755,7 @@ struct YearReleasePieChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.green.opacity(0.5),
-                            Color.cyan.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
         .onAppear {
             withAnimation(.easeOut(duration: 1.0)) {
                 animationProgress = 1.0
@@ -3849,10 +3888,7 @@ struct YearReleasePieChart: View {
     private var tooltipBackground: some View {
         RoundedRectangle(cornerRadius: 8)
             .fill(Color.black.opacity(0.9))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.green.opacity(0.5), lineWidth: 1)
-            )
+
     }
     
     @ViewBuilder
@@ -4071,20 +4107,7 @@ struct TopWatchedFilmsSection: View {
                     y: 2
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.orange.opacity(0.5),
-                            Color.red.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -4182,247 +4205,6 @@ struct TopWatchedFilmCard: View {
     }
 }
 
-// MARK: - Advanced Film Journey Section
-
-struct AdvancedFilmJourneySection: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let advancedStats: AdvancedFilmJourneyStats
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Section Header
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "chart.bar.doc.horizontal")
-                        .font(.title2)
-                        .gradientForeground([
-                            .indigo,
-                            .cyan
-                        ], start: .topLeading, end: .bottomTrailing)
-                    Text("More Statistics")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
-                }
-                Text("Additional insights into your viewing patterns")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            
-            // Stats Cards Grid
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 12) {
-                UniformStatCard(
-                    title: "2+ Film Days",
-                    value: "\(advancedStats.daysWith2PlusFilms)",
-                    subtitle: nil,
-                    icon: "calendar.badge.plus",
-                    color: .orange
-                )
-                
-                UniformStatCard(
-                    title: "Avg/Year",
-                    value: String(format: "%.1f", advancedStats.averageMoviesPerYear),
-                    subtitle: nil,
-                    icon: "chart.line.uptrend.xyaxis",
-                    color: .green
-                )
-                
-                UniformStatCard(
-                    title: "5-Star Films",
-                    value: "\(advancedStats.unique5StarFilms)",
-                    subtitle: nil,
-                    icon: "star.fill",
-                    color: .yellow
-                )
-                
-                // Highest Monthly Average
-                if let highestMonth = advancedStats.highestMonthlyAverage {
-                    UniformStatCard(
-                        title: "Best Month",
-                        value: String(format: "%.2f", highestMonth.averageRating),
-                        subtitle: "\(highestMonth.monthName.trimmingCharacters(in: .whitespacesAndNewlines)) \(String(highestMonth.year))",
-                        icon: "trophy.fill",
-                        color: .purple
-                    )
-                } else {
-                    UniformStatCard(
-                        title: "Best Month",
-                        value: "N/A",
-                        subtitle: nil,
-                        icon: "trophy.fill",
-                        color: .purple
-                    )
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.05),
-                            Color.purple.opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(
-                    color: .white.opacity(0.1),
-                    radius: 8,
-                    x: 0,
-                    y: 2
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.5),
-                            Color.purple.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
-    }
-}
-
-// MARK: - Year-Filtered Advanced Film Journey Section
-
-struct YearFilteredAdvancedJourneySection: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let yearFilteredStats: YearFilteredAdvancedJourneyStats
-    let selectedYear: Int
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Section Header
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.title2)
-                        .gradientForeground([
-                            .teal,
-                            .cyan
-                        ], start: .topLeading, end: .bottomTrailing)
-                    Text("More Statistics")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
-                }
-                Text("Additional insights into your viewing patterns")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            
-            // Stats Cards Grid
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 12) {
-                UniformStatCard(
-                    title: "2+ Film Days",
-                    value: "\(yearFilteredStats.daysWith2PlusFilms)",
-                    subtitle: nil,
-                    icon: "calendar.badge.plus",
-                    color: .orange
-                )
-                
-                // Must Watch Completion
-                if let mustWatch = yearFilteredStats.mustWatchCompletion {
-                    UniformStatCard(
-                        title: "Must Watches",
-                        value: "\(Int(mustWatch.completionPercentage))%",
-                        subtitle: "\(mustWatch.watchedFilms)/\(mustWatch.totalFilms) completed",
-                        icon: "checklist",
-                        color: .blue
-                    )
-                } else {
-                    UniformStatCard(
-                        title: "Must Watches",
-                        value: "N/A",
-                        subtitle: "No list found",
-                        icon: "checklist",
-                        color: .blue
-                    )
-                }
-                
-                UniformStatCard(
-                    title: "New 5-Stars",
-                    value: "\(yearFilteredStats.unique5StarFilms)",
-                    subtitle: "First time rated",
-                    icon: "star.fill",
-                    color: .yellow
-                )
-                
-                // Highest Monthly Average
-                if let highestMonth = yearFilteredStats.highestMonthlyAverage {
-                    UniformStatCard(
-                        title: "Best Month",
-                        value: String(format: "%.2f", highestMonth.averageRating),
-                        subtitle: "\(highestMonth.monthName.trimmingCharacters(in: .whitespacesAndNewlines)) (\(highestMonth.filmCount) films)",
-                        icon: "trophy.fill",
-                        color: .purple
-                    )
-                } else {
-                    UniformStatCard(
-                        title: "Best Month",
-                        value: "N/A",
-                        subtitle: "Insufficient data",
-                        icon: "trophy.fill",
-                        color: .purple
-                    )
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 22)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.05),
-                            Color.purple.opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(
-                    color: .white.opacity(0.1),
-                    radius: 8,
-                    x: 0,
-                    y: 2
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.5),
-                            Color.purple.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
-    }
-}
 
 // MARK: - Uniform Stat Card
 
@@ -4446,23 +4228,19 @@ struct UniformStatCard: View {
     }
     
     var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Spacer()
-                Image(systemName: icon)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: borderGradient,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: borderGradient,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
-                    .font(.title2)
-                Spacer()
-            }
+                )
+                .font(.title3)
             
             Text(value)
-                .font(.system(size: 36, weight: .heavy, design: .rounded))
+                .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(
                     LinearGradient(
                         colors: borderGradient,
@@ -4475,40 +4253,28 @@ struct UniformStatCard: View {
             
             VStack(spacing: 2) {
                 Text(title)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                 
                 if let subtitle = subtitle {
                     Text(subtitle)
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundColor(color)
                         .fontWeight(.medium)
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                 }
             }
-            .frame(minHeight: subtitle != nil ? 32 : 16) // Ensure consistent height
+            .frame(minHeight: subtitle != nil ? 24 : 12) // Ensure consistent height
         }
-        .padding(18)
+        .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color.adaptiveCardBackground(scheme: colorScheme))
+                .fill(Color.gray.opacity(0.15))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(
-                    LinearGradient(
-                        colors: borderGradient.map { $0.opacity(0.4) },
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1.2
-                )
-        )
-        .aspectRatio(1.0, contentMode: .fit) // Force square aspect ratio
     }
 }
 
@@ -4644,20 +4410,7 @@ struct AverageStarRatingPerYearChart: View {
                     )
                 )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.blue.opacity(0.5),
-                            Color.orange.opacity(0.5)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
-                )
-        )
+
     }
 }
 
@@ -4756,57 +4509,400 @@ struct AverageDetailedRatingPerYearChart: View {
             // Highest average detailed rating year indicator
             if let highestAvgDetailedYear = averageDetailedRatings.max(by: { $0.averageRating < $1.averageRating }) {
                 HStack {
-                    Spacer()
-                    Text("\(String(highestAvgDetailedYear.year)) - \(String(format: "%.1f", highestAvgDetailedYear.averageRating))/100")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [.cyan.opacity(0.8), .purple.opacity(0.8)],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                        )
-                    Spacer()
+                    Image(systemName: "trophy")
+                        .foregroundColor(.yellow)
+                    Text("Highest: '\(String(highestAvgDetailedYear.year).suffix(2)) with \(String(format: "%.1f", highestAvgDetailedYear.averageRating))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
+                .padding(.top, 4)
                 .padding(.horizontal, 12)
             }
-            
         }
-        .padding(12)
+        .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 22)
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.cyan.opacity(0.05),
-                            Color.purple.opacity(0.05)
+                            Color.purple.opacity(0.05),
+                            Color.cyan.opacity(0.05)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
         )
-        .overlay(
+    }
+}
+
+private struct LocationStatisticsSection: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let mapPoints: [LocationMapPoint]
+    let specificCounts: [LocationCountRow]
+    let groupCounts: [LocationCountRow]
+    @Binding var selectedMode: LocationCountMode
+    let selectedYear: Int?
+
+    @State private var showingFullScreenMap = false
+
+    private var activeCounts: [LocationCountRow] {
+        switch selectedMode {
+        case .specific:
+            return specificCounts
+        case .grouped:
+            return groupCounts
+        }
+    }
+
+    private var mapRegion: MKCoordinateRegion {
+        guard !mapPoints.isEmpty else {
+            return MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 20, longitude: 0),
+                span: MKCoordinateSpan(latitudeDelta: 140, longitudeDelta: 140)
+            )
+        }
+
+        let lats = mapPoints.map(\.latitude)
+        let lons = mapPoints.map(\.longitude)
+        let minLat = lats.min() ?? 0
+        let maxLat = lats.max() ?? 0
+        let minLon = lons.min() ?? 0
+        let maxLon = lons.max() ?? 0
+
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2.0,
+            longitude: (minLon + maxLon) / 2.0
+        )
+        let latDelta = max(12.0, (maxLat - minLat) * 1.8)
+        let lonDelta = max(12.0, (maxLon - minLon) * 1.8)
+        return MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(latitudeDelta: min(latDelta, 170), longitudeDelta: min(lonDelta, 170))
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "globe.americas.fill")
+                        .foregroundColor(.blue)
+                    Text(selectedYear == nil ? "Watch Locations (All Time)" : "Watch Locations (\(selectedYear!))")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                }
+                Spacer()
+            }
+
+            if !mapPoints.isEmpty {
+                ZStack(alignment: .topTrailing) {
+                    Map(initialPosition: .region(mapRegion)) {
+                        ForEach(mapPoints) { point in
+                            Marker(
+                                "\(point.location_name) (\(point.count))",
+                                coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                            )
+                            .tint(.blue)
+                        }
+                    }
+                    .frame(height: 250)
+                    .cornerRadius(14)
+                    .onTapGesture {
+                        showingFullScreenMap = true
+                    }
+
+                    Button {
+                        showingFullScreenMap = true
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption.weight(.semibold))
+                            .padding(8)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .padding(10)
+                }
+            } else {
+                Text("No location map data for this period.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 16)
+            }
+
+            Picker("Location Count Mode", selection: $selectedMode) {
+                ForEach(LocationCountMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if activeCounts.isEmpty {
+                Text("No location counts available.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                LazyVStack(spacing: 8) {
+                    ForEach(activeCounts) { row in
+                        HStack {
+                            Text(row.label)
+                                .font(.subheadline)
+                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(row.count)")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(10)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(
             RoundedRectangle(cornerRadius: 22)
-                .stroke(
+                .fill(
                     LinearGradient(
                         colors: [
-                            Color.cyan.opacity(0.5),
-                            Color.purple.opacity(0.5)
+                            Color.blue.opacity(0.08),
+                            Color.cyan.opacity(0.06)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.5
+                    )
                 )
         )
+        .sheet(isPresented: $showingFullScreenMap) {
+            FullscreenLocationMapView(region: mapRegion, mapPoints: mapPoints)
+        }
+    }
+}
+
+private struct FullscreenLocationMapView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let region: MKCoordinateRegion
+    let mapPoints: [LocationMapPoint]
+
+    var body: some View {
+        NavigationStack {
+            Map(initialPosition: .region(region)) {
+                ForEach(mapPoints) { point in
+                    Marker(
+                        "\(point.location_name) (\(point.count))",
+                        coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                    )
+                    .tint(.blue)
+                }
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .navigationTitle("Locations Map")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Expanded Top Entries List View
+
+struct TopEntriesListView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Binding var expandedStatType: FilmJourneySection.ExpandedStatType?
+    let type: FilmJourneySection.ExpandedStatType
+    let selectedYear: Int?
+    let advancedJourneyStats: AdvancedFilmJourneyStats?
+    let yearFilteredAdvancedStats: YearFilteredAdvancedJourneyStats?
+    let filmsPerMonth: [FilmsPerMonth]?
+    
+    private var mostInDayEntries: [MostMoviesInDayStat] {
+        if selectedYear == nil {
+            return advancedJourneyStats?.mostMoviesInDay ?? []
+        } else {
+            return yearFilteredAdvancedStats?.mostMoviesInDay ?? []
+        }
+    }
+    
+    private var bestMonthEntries: [HighestMonthlyAverage] {
+        if selectedYear == nil {
+            return advancedJourneyStats?.highestMonthlyAverage ?? []
+        } else {
+            return yearFilteredAdvancedStats?.highestMonthlyAverage ?? []
+        }
+    }
+    
+    private var mostActiveMonthEntries: [FilmsPerMonth] {
+        return (filmsPerMonth ?? []).filter { $0.filmCount > 0 }.sorted { $0.filmCount > $1.filmCount }
+    }
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 8) {
+                    if type == .mostInDay {
+                        if mostInDayEntries.isEmpty {
+                            ContentUnavailableView("No Data", systemImage: "chart.bar.doc.horizontal")
+                                .padding(.top, 40)
+                        } else {
+                            ForEach(Array(mostInDayEntries.prefix(10).enumerated()), id: \.element.id) { index, entry in
+                                TopMostInDayRow(index: index + 1, entry: entry)
+                            }
+                        }
+                    } else if type == .bestMonth {
+                        if bestMonthEntries.isEmpty {
+                            ContentUnavailableView("No Data", systemImage: "chart.bar.doc.horizontal")
+                                .padding(.top, 40)
+                        } else {
+                            ForEach(Array(bestMonthEntries.prefix(10).enumerated()), id: \.element.id) { index, entry in
+                                TopBestMonthRow(index: index + 1, entry: entry)
+                            }
+                        }
+                    } else if type == .mostActiveMonth {
+                        if mostActiveMonthEntries.isEmpty {
+                            ContentUnavailableView("No Data", systemImage: "chart.bar.doc.horizontal")
+                                .padding(.top, 40)
+                        } else {
+                            ForEach(Array(mostActiveMonthEntries.prefix(10).enumerated()), id: \.offset) { index, entry in
+                                TopMostActiveMonthRow(index: index + 1, entry: entry, selectedYear: selectedYear)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle(
+                type == .mostInDay ? "Most in a Day" :
+                type == .bestMonth ? "Best Month" : "Most Films"
+            )
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        expandedStatType = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct TopMostInDayRow: View {
+    let index: Int
+    let entry: MostMoviesInDayStat
+    
+    private func formatFullDate(_ dateString: String) -> String {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        if let date = parser.date(from: dateString) {
+            return formatter.string(from: date)
+        }
+        return dateString
+    }
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(index)")
+                .font(.subheadline)
+                .fontWeight(.bold)
+                .foregroundColor(.mint)
+                .frame(width: 24, alignment: .leading)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(formatFullDate(entry.watchDate))
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                Text("\(entry.filmCount) Films")
+                    .font(.caption)
+                    .foregroundColor(.mint.opacity(0.8))
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+}
+
+struct TopBestMonthRow: View {
+    let index: Int
+    let entry: HighestMonthlyAverage
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(index)")
+                .font(.subheadline)
+                .fontWeight(.bold)
+                .foregroundColor(.purple)
+                .frame(width: 24, alignment: .leading)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(entry.monthName.trimmingCharacters(in: .whitespacesAndNewlines)) \(String(entry.year))")
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                Text(String(format: "%.2f Avg. Rating", entry.averageRating))
+                    .font(.caption)
+                    .foregroundColor(.purple.opacity(0.8))
+            }
+            Spacer()
+            
+            Text("\(entry.filmCount) films")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+    }
+}
+
+struct TopMostActiveMonthRow: View {
+    let index: Int
+    let entry: FilmsPerMonth
+    let selectedYear: Int?
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(index)")
+                .font(.subheadline)
+                .fontWeight(.bold)
+                .foregroundColor(.mint)
+                .frame(width: 24, alignment: .leading)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                if let year = selectedYear {
+                    Text("\(entry.monthName.trimmingCharacters(in: .whitespacesAndNewlines)) \(String(year))")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                } else {
+                    Text("\(entry.monthName.trimmingCharacters(in: .whitespacesAndNewlines)) '\(String(entry.year).suffix(2))")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                }
+                Text("\(entry.filmCount)")
+                    .font(.caption)
+                    .foregroundColor(.mint.opacity(0.8))
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
     }
 }
 

@@ -32,7 +32,7 @@ class LocationHelper: NSObject, ObservableObject {
         let completerDel = CompleterDelegate()
         self.completerDelegate = completerDel
         self.searchCompleter.delegate = completerDel
-        self.searchCompleter.resultTypes = .pointOfInterest
+        self.searchCompleter.resultTypes = [.pointOfInterest, .address]
         
         // Set up location manager
         let locationDel = LocationDelegate()

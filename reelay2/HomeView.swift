@@ -1702,17 +1702,6 @@ struct UnifiedStatTile: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(
-                    LinearGradient(
-                        colors: borderGradient.map { $0.opacity(0.4) },
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1.2
-                )
-        )
     }
 }
 

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SDWebImageSwiftUI
+import MapKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -18,6 +19,7 @@ struct MovieDetailsView: View {
     @ObservedObject private var movieService = SupabaseMovieService.shared
     @ObservedObject private var listService = SupabaseListService.shared
     @ObservedObject private var streamingService = StreamingService.shared
+    private let locationService = SupabaseLocationService.shared
     @State private var previousWatches: [Movie] = []
     @State private var showingPreviousWatches = false
     @State private var isEditingReview = false
@@ -47,6 +49,8 @@ struct MovieDetailsView: View {
     @State private var plexAvailability: PlexMovie?
     @State private var isLoadingPlex = false
     @State private var plexChecked = false
+    @State private var movieLocation: MovieLocation?
+    @State private var isLoadingMovieLocation = false
     
     #if os(macOS)
     @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
@@ -108,6 +112,10 @@ struct MovieDetailsView: View {
                             // Tags Section
                             if hasVisibleTags {
                                 tagsSection
+                            }
+
+                            if movieLocation != nil || (isLoadingMovieLocation && currentMovie.location_id != nil) {
+                                locationSection
                             }
                             
                             // Lists Section
@@ -193,6 +201,7 @@ struct MovieDetailsView: View {
             Task(priority: .userInitiated) {
                 // Load previous watches quickly (usually small dataset)
                 await loadPreviousWatches()
+                await loadMovieLocation()
 
                 // Load movie lists in parallel
                 async let listSync = listService.syncListsFromSupabase()
@@ -213,11 +222,19 @@ struct MovieDetailsView: View {
             Task {
                 await loadStreamingData()
             }
+            Task {
+                await loadMovieLocation()
+            }
             // Load Plex availability if configured
             if plexService.isConfigured {
                 Task {
                     await loadPlexData()
                 }
+            }
+        }
+        .onChange(of: currentMovie.location_id) { _, _ in
+            Task {
+                await loadMovieLocation()
             }
         }
         .sheet(isPresented: $isEditingReview) {
@@ -238,6 +255,7 @@ struct MovieDetailsView: View {
                 // Reload previous watches in case the edit affected them
                 Task {
                     await loadPreviousWatches()
+                    await loadMovieLocation()
                 }
             }
         }
@@ -277,6 +295,7 @@ struct MovieDetailsView: View {
                 currentMovie = updatedMovie
                 Task {
                     await loadPreviousWatches()
+                    await loadMovieLocation()
                 }
             }
         }
@@ -763,6 +782,72 @@ struct MovieDetailsView: View {
         .padding(.horizontal, 16)
         .glassEffect(in: .rect(cornerRadius: 24.0))
     }
+
+    private var locationSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "location")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.blue)
+
+                Text("LOCATION")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.gray)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+
+                Spacer()
+            }
+
+            if let movieLocation {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(movieLocation.display_name)
+                        .font(.headline)
+                        .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+
+                    if let groupName = movieLocation.location_group_name, !groupName.isEmpty {
+                        Text("Group: \(groupName)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if let address = movieLocation.formatted_address, !address.isEmpty {
+                        Text(address)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if let lat = movieLocation.latitude, let lon = movieLocation.longitude {
+                    Map(initialPosition: .region(MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+                    ))) {
+                        Marker(movieLocation.display_name, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
+                    }
+                    .frame(height: 150)
+                    .cornerRadius(12)
+                    .allowsHitTesting(false)
+                }
+            } else if isLoadingMovieLocation {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Loading location...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                Text("No location saved")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 20)
+        .padding(.horizontal, 16)
+        .glassEffect(in: .rect(cornerRadius: 24.0))
+    }
     
     private var listsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1138,7 +1223,34 @@ struct MovieDetailsView: View {
     }
     
     // Use AppColorHelpers.starColor() and AppColorHelpers.detailedRatingColor() instead
-    
+
+    private func loadMovieLocation() async {
+        guard let locationId = currentMovie.location_id else {
+            await MainActor.run {
+                movieLocation = nil
+                isLoadingMovieLocation = false
+            }
+            return
+        }
+
+        await MainActor.run {
+            isLoadingMovieLocation = true
+        }
+
+        do {
+            let location = try await locationService.getLocation(id: locationId)
+            await MainActor.run {
+                movieLocation = location
+                isLoadingMovieLocation = false
+            }
+        } catch {
+            await MainActor.run {
+                movieLocation = nil
+                isLoadingMovieLocation = false
+            }
+        }
+    }
+
     private func loadPreviousWatches() async {
         guard let tmdbId = currentMovie.tmdb_id else { return }
         
@@ -1209,7 +1321,8 @@ struct MovieDetailsView: View {
                 revenue: nil,
                 imdb_id: nil,
                 homepage: nil,
-                genres: nil
+                genres: nil,
+                location_id: nil
             )
             
             let updatedMovie = try await movieService.updateMovie(id: currentMovie.id, with: updateRequest)
@@ -2093,7 +2206,8 @@ struct AddMovieFromListView: View {
                 revenue: movieDetails?.revenue,
                 imdb_id: movieDetails?.imdbId,
                 homepage: movieDetails?.homepage,
-                genres: genres
+                genres: genres,
+                location_id: nil
             )
             
             let _ = try await supabaseService.addMovie(movieRequest)
@@ -2462,7 +2576,8 @@ struct ChangeFilmView: View {
                     revenue: movieDetails.revenue,
                     imdb_id: movieDetails.imdbId,
                     homepage: movieDetails.homepage,
-                    genres: movieDetails.genreNames
+                    genres: movieDetails.genreNames,
+                    location_id: nil
                 )
                 
                 let updatedMovie = try await movieService.updateMovie(id: currentMovie.id, with: updateRequest)
@@ -2506,7 +2621,8 @@ struct ChangeFilmView: View {
                 genres: currentMovie.genres,
                 created_at: currentMovie.created_at,
                 updated_at: currentMovie.updated_at,
-                favorited: currentMovie.favorited
+                favorited: currentMovie.favorited,
+                location_id: currentMovie.location_id
             )
             
             await MainActor.run {

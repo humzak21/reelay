@@ -100,7 +100,6 @@ struct FilmsByReleaseYearChart: View {
         }
         .padding(12)
         .background(cardBackground)
-        .overlay(cardBorder)
     }
 
     // MARK: - Subviews

@@ -7,6 +7,8 @@
 
 import SwiftUI
 import SDWebImageSwiftUI
+import MapKit
+import Contacts
 
 struct AddMoviesView: View {
     @Environment(\.dismiss) private var dismiss
@@ -18,6 +20,7 @@ struct AddMoviesView: View {
     private let watchlistService = SupabaseWatchlistService.shared
     private let dataManager = DataManager.shared
     private let draftManager = DraftManager.shared
+    private let locationService = SupabaseLocationService.shared
     
     // Optional pre-selected movie for "Log Again" functionality
     let preSelectedMovie: TMDBMovie?
@@ -92,6 +95,26 @@ struct AddMoviesView: View {
     @State private var autoSaveTask: Task<Void, Never>?
     @State private var currentDraftTmdbId: Int?
     @State private var isShortFilm = false
+    @StateObject private var locationHelper = LocationHelper()
+
+    // Location state
+    @State private var locationSearchText = ""
+    @State private var selectedLocationId: Int?
+    @State private var selectedLocationName: String?
+    @State private var selectedLocationAddress: String?
+    @State private var selectedLocationLatitude: Double?
+    @State private var selectedLocationLongitude: Double?
+    @State private var selectedLocationNormalizedKey: String?
+    @State private var selectedLocationCity: String?
+    @State private var selectedLocationAdminArea: String?
+    @State private var selectedLocationCountry: String?
+    @State private var selectedLocationPostalCode: String?
+    @State private var selectedLocationGroupId: Int?
+    @State private var selectedLocationGroupName: String?
+    @State private var locationGroups: [LocationGroup] = []
+    @State private var isCreatingNewLocationGroup = false
+    @State private var newLocationGroupName = ""
+    @State private var isResolvingLocation = false
     
     var body: some View {
         NavigationView {
@@ -193,6 +216,11 @@ struct AddMoviesView: View {
                 }
                 if let presetTagsValue = presetTags, !presetTagsValue.isEmpty {
                     tags = presetTagsValue
+                }
+
+                locationHelper.requestLocationPermission()
+                Task {
+                    await loadLocationGroups()
                 }
             }
             .onDisappear {
@@ -431,6 +459,9 @@ struct AddMoviesView: View {
                     .sectionCard()
                 
                 tagsSection
+                    .sectionCard()
+
+                locationSection
                     .sectionCard()
                 
                 Spacer(minLength: 100)
@@ -875,6 +906,54 @@ struct AddMoviesView: View {
                 .foregroundColor(.secondary)
         }
     }
+
+    // MARK: - Location Section
+    private var locationSection: some View {
+        MovieLocationSelectionSection(
+            title: "Location",
+            searchText: $locationSearchText,
+            isSearching: locationHelper.isSearching,
+            isResolvingSelection: isResolvingLocation,
+            searchResults: locationHelper.searchResults,
+            selectedLocationName: selectedLocationName,
+            selectedLocationAddress: selectedLocationAddress,
+            selectedLatitude: selectedLocationLatitude,
+            selectedLongitude: selectedLocationLongitude,
+            groups: locationGroups,
+            selectedGroupId: $selectedLocationGroupId,
+            isCreatingNewGroup: $isCreatingNewLocationGroup,
+            newGroupName: $newLocationGroupName,
+            onSearchTextChanged: { newText in
+                locationHelper.searchLocations(query: newText)
+            },
+            onSelectSearchResult: { completion in
+                selectLocation(completion)
+            },
+            onClearSearch: {
+                locationHelper.clearSearch()
+            },
+            onClearLocation: {
+                clearLocationSelection()
+            }
+        )
+        .onChange(of: selectedLocationGroupId) { _, newValue in
+            if let group = locationGroups.first(where: { $0.id == newValue }) {
+                selectedLocationGroupName = group.name
+            } else {
+                selectedLocationGroupName = nil
+            }
+            scheduleDraftSave()
+        }
+        .onChange(of: isCreatingNewLocationGroup) { _, newValue in
+            if !newValue {
+                newLocationGroupName = ""
+            }
+            scheduleDraftSave()
+        }
+        .onChange(of: newLocationGroupName) { _, _ in
+            scheduleDraftSave()
+        }
+    }
     
     // MARK: - Short Film Section
     private var shortFilmSection: some View {
@@ -1063,6 +1142,156 @@ struct AddMoviesView: View {
             }
         }
     }
+
+    private func loadLocationGroups() async {
+        do {
+            let groups = try await locationService.getLocationGroups()
+            await MainActor.run {
+                locationGroups = groups
+            }
+        } catch {
+            // Location grouping is optional; continue if it fails.
+        }
+    }
+
+    private func selectLocation(_ completion: MKLocalSearchCompletion) {
+        Task {
+            await MainActor.run {
+                isResolvingLocation = true
+            }
+
+            guard let mapItem = await locationHelper.resolveLocation(completion) else {
+                await MainActor.run {
+                    isResolvingLocation = false
+                }
+                return
+            }
+
+            let address = completion.subtitle.isEmpty
+                ? mapItem.placemark.title
+                : completion.subtitle
+            let displayName = completion.title.isEmpty
+                ? (mapItem.name ?? mapItem.placemark.name ?? "Saved Location")
+                : completion.title
+            let coordinate = mapItem.placemark.coordinate
+            let normalizedKey = SupabaseLocationService.normalizedKey(
+                displayName: displayName,
+                formattedAddress: address,
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude
+            )
+
+            let postal = mapItem.placemark.postalAddress
+            let existing = (try? await locationService.findLocation(byNormalizedKey: normalizedKey)) ?? nil
+
+            await MainActor.run {
+                selectedLocationName = displayName
+                selectedLocationAddress = address
+                selectedLocationLatitude = coordinate.latitude
+                selectedLocationLongitude = coordinate.longitude
+                selectedLocationNormalizedKey = normalizedKey
+                selectedLocationCity = postal?.city
+                selectedLocationAdminArea = postal?.state
+                selectedLocationCountry = postal?.country
+                selectedLocationPostalCode = postal?.postalCode
+
+                if let existing {
+                    selectedLocationId = existing.id
+                    selectedLocationGroupId = existing.location_group_id
+                    selectedLocationGroupName = existing.location_group_name
+                    isCreatingNewLocationGroup = false
+                    newLocationGroupName = ""
+                } else {
+                    selectedLocationId = nil
+                    selectedLocationGroupId = nil
+                    selectedLocationGroupName = nil
+                }
+
+                locationSearchText = ""
+                locationHelper.clearSearch()
+                isResolvingLocation = false
+                scheduleDraftSave()
+            }
+        }
+    }
+
+    private func clearLocationSelection() {
+        selectedLocationId = nil
+        selectedLocationName = nil
+        selectedLocationAddress = nil
+        selectedLocationLatitude = nil
+        selectedLocationLongitude = nil
+        selectedLocationNormalizedKey = nil
+        selectedLocationCity = nil
+        selectedLocationAdminArea = nil
+        selectedLocationCountry = nil
+        selectedLocationPostalCode = nil
+        selectedLocationGroupId = nil
+        selectedLocationGroupName = nil
+        isCreatingNewLocationGroup = false
+        newLocationGroupName = ""
+        locationSearchText = ""
+        locationHelper.clearSearch()
+        scheduleDraftSave()
+    }
+
+    private func resolveLocationIdForSave() async throws -> Int? {
+        var resolvedGroupId = selectedLocationGroupId
+        if isCreatingNewLocationGroup {
+            let trimmed = newLocationGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let group = try await locationService.getOrCreateLocationGroup(named: trimmed)
+                resolvedGroupId = group.id
+                await MainActor.run {
+                    selectedLocationGroupId = group.id
+                    selectedLocationGroupName = group.name
+                    isCreatingNewLocationGroup = false
+                    newLocationGroupName = ""
+                    if !locationGroups.contains(where: { $0.id == group.id }) {
+                        locationGroups.append(group)
+                        locationGroups.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                    }
+                }
+            }
+        }
+
+        if let existingId = selectedLocationId {
+            let updatedLocation = try await locationService.updateLocationGroup(locationId: existingId, groupId: resolvedGroupId)
+            await MainActor.run {
+                selectedLocationGroupId = updatedLocation.location_group_id
+                selectedLocationGroupName = updatedLocation.location_group_name
+            }
+            return existingId
+        }
+
+        guard let selectedLocationName,
+              let selectedLocationNormalizedKey,
+              let selectedLocationLatitude,
+              let selectedLocationLongitude else {
+            return nil
+        }
+
+        let request = AddLocationRequest(
+            display_name: selectedLocationName,
+            formatted_address: selectedLocationAddress,
+            normalized_key: selectedLocationNormalizedKey,
+            latitude: selectedLocationLatitude,
+            longitude: selectedLocationLongitude,
+            city: selectedLocationCity,
+            admin_area: selectedLocationAdminArea,
+            country: selectedLocationCountry,
+            postal_code: selectedLocationPostalCode,
+            location_group_id: resolvedGroupId
+        )
+
+        let location = try await locationService.createLocation(request)
+        await MainActor.run {
+            selectedLocationId = location.id
+            selectedLocationGroupId = location.location_group_id
+            selectedLocationGroupName = location.location_group_name
+        }
+        return location.id
+    }
     
     /// Check if a movie has the "short" tag
     private func movieHasShortTag(_ movie: Movie) -> Bool {
@@ -1236,6 +1465,7 @@ struct AddMoviesView: View {
                 formatter.dateFormat = "yyyy-MM-dd"
 
                 let genres = movieDetails?.genreNames ?? []
+                let resolvedLocationId = try await resolveLocationIdForSave()
 
                 let movieRequest = AddMovieRequest(
                     title: selectedMovie.title,
@@ -1264,7 +1494,8 @@ struct AddMoviesView: View {
                     revenue: movieDetails?.revenue,
                     imdb_id: movieDetails?.imdbId,
                     homepage: movieDetails?.homepage,
-                    genres: genres
+                    genres: genres,
+                    location_id: resolvedLocationId
                 )
 
                 let addedMovie = try await supabaseService.addMovie(movieRequest)
@@ -1340,6 +1571,22 @@ struct AddMoviesView: View {
         showingMovieLists = false
         comparisonMoviesPool = []
         showingComparisonTool = false
+        locationSearchText = ""
+        selectedLocationId = nil
+        selectedLocationName = nil
+        selectedLocationAddress = nil
+        selectedLocationLatitude = nil
+        selectedLocationLongitude = nil
+        selectedLocationNormalizedKey = nil
+        selectedLocationCity = nil
+        selectedLocationAdminArea = nil
+        selectedLocationCountry = nil
+        selectedLocationPostalCode = nil
+        selectedLocationGroupId = nil
+        selectedLocationGroupName = nil
+        isCreatingNewLocationGroup = false
+        newLocationGroupName = ""
+        locationHelper.clearSearch()
     }
     
     // MARK: - Draft Methods
@@ -1352,7 +1599,10 @@ struct AddMoviesView: View {
                           !review.isEmpty ||
                           !tags.isEmpty ||
                           isRewatch ||
-                          isFavorited
+                          isFavorited ||
+                          selectedLocationId != nil ||
+                          selectedLocationName != nil ||
+                          !newLocationGroupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         
         if hasDraftData && currentDraftTmdbId != nil {
             // Save draft before showing dialog
@@ -1373,6 +1623,16 @@ struct AddMoviesView: View {
         isRewatch = draft.isRewatch
         isFavorited = draft.isFavorited
         isShortFilm = draft.isShortFilm
+        selectedLocationId = draft.selectedLocationId
+        selectedLocationName = draft.selectedLocationName
+        selectedLocationAddress = draft.selectedLocationAddress
+        selectedLocationLatitude = draft.selectedLocationLatitude
+        selectedLocationLongitude = draft.selectedLocationLongitude
+        selectedLocationNormalizedKey = draft.selectedLocationNormalizedKey
+        selectedLocationGroupId = draft.selectedLocationGroupId
+        selectedLocationGroupName = draft.selectedLocationGroupName
+        isCreatingNewLocationGroup = draft.isCreatingNewLocationGroup
+        newLocationGroupName = draft.newLocationGroupName ?? ""
         
         // Check for similar ratings if detailed rating exists
         if let ratingStr = draft.detailedRating, let rating = Double(ratingStr), rating > 0 {
@@ -1440,7 +1700,17 @@ struct AddMoviesView: View {
             watchDate: watchDate,
             isRewatch: isRewatch,
             isFavorited: isFavorited,
-            isShortFilm: isShortFilm
+            isShortFilm: isShortFilm,
+            selectedLocationId: selectedLocationId,
+            selectedLocationName: selectedLocationName,
+            selectedLocationAddress: selectedLocationAddress,
+            selectedLocationLatitude: selectedLocationLatitude,
+            selectedLocationLongitude: selectedLocationLongitude,
+            selectedLocationNormalizedKey: selectedLocationNormalizedKey,
+            selectedLocationGroupId: selectedLocationGroupId,
+            selectedLocationGroupName: selectedLocationGroupName,
+            isCreatingNewLocationGroup: isCreatingNewLocationGroup,
+            newLocationGroupName: newLocationGroupName.isEmpty ? nil : newLocationGroupName
         )
         
         // Update draft count

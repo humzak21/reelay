@@ -368,6 +368,23 @@ class SupabaseMovieService: ObservableObject {
             throw SupabaseMovieError.updateFailed(error)
         }
     }
+
+    nonisolated func setMovieLocation(movieId: Int, locationId: Int?) async throws -> Movie {
+        do {
+            let payload: [String: Int?] = ["location_id": locationId]
+            let response: Movie = try await supabase
+                .from("diary")
+                .update(payload)
+                .eq("id", value: movieId)
+                .single()
+                .execute()
+                .value
+
+            return response
+        } catch {
+            throw SupabaseMovieError.updateFailed(error)
+        }
+    }
     
     nonisolated func getFavoriteMovies() async throws -> [Movie] {
         do {
@@ -489,6 +506,7 @@ struct AddMovieRequest: Codable, @unchecked Sendable {
     let imdb_id: String?
     let homepage: String?
     let genres: [String]?
+    let location_id: Int?
 }
 
 struct UpdateMovieRequest: Codable, @unchecked Sendable {
@@ -519,6 +537,7 @@ struct UpdateMovieRequest: Codable, @unchecked Sendable {
     let imdb_id: String?
     let homepage: String?
     let genres: [String]?
+    let location_id: Int?
 }
 
 enum MovieSortField: String, CaseIterable {
@@ -578,6 +597,7 @@ struct OnThisDayMovie: Codable, Identifiable, @unchecked Sendable {
     let imdb_id: String?
     let homepage: String?
     let genres: [String]?
+    let location_id: Int?
     let created_at: String?
     let updated_at: String?
     let favorited: Bool?
@@ -633,7 +653,8 @@ struct OnThisDayMovie: Codable, Identifiable, @unchecked Sendable {
             genres: genres,
             created_at: created_at,
             updated_at: updated_at,
-            favorited: favorited
+            favorited: favorited,
+            location_id: location_id
         )
     }
 
@@ -694,6 +715,7 @@ extension OnThisDayMovie {
         self.imdb_id = movie.imdb_id
         self.homepage = movie.homepage
         self.genres = movie.genres
+        self.location_id = movie.location_id
         self.created_at = movie.created_at
         self.updated_at = movie.updated_at
         self.favorited = movie.favorited

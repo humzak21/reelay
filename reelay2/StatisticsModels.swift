@@ -50,6 +50,40 @@ struct RatingDistribution: Codable, Sendable {
     }
 }
 
+// MARK: - Detailed Rating Distribution (0-100)
+struct DetailedRatingDistribution: Codable, Sendable {
+    let ratingValue: Int
+    let countFilms: Int
+
+    enum CodingKeys: String, CodingKey {
+        case ratingValue = "rating_value"
+        case countFilms = "count_films"
+    }
+
+    var count: Int {
+        return countFilms
+    }
+}
+
+struct LocationMapPoint: Codable, Identifiable, Sendable {
+    let location_id: Int
+    let location_name: String
+    let latitude: Double
+    let longitude: Double
+    let entry_count: Int
+
+    var id: Int { location_id }
+    var count: Int { entry_count }
+}
+
+struct LocationCountRow: Codable, Identifiable, Sendable {
+    let label: String
+    let entry_count: Int
+
+    var id: String { label }
+    var count: Int { entry_count }
+}
+
 // MARK: - Simple Rating Stats
 struct RatingStats: Codable, Sendable {
     let averageRating: Double?
@@ -513,18 +547,23 @@ struct TopWatchedFilm: Codable, Sendable {
 struct AdvancedFilmJourneyStats: Codable, Sendable {
     let daysWith2PlusFilms: Int
     let averageMoviesPerYear: Double
+    let mustWatchCompletion: MustWatchCompletion?
     let unique5StarFilms: Int
-    let highestMonthlyAverage: HighestMonthlyAverage?
+    let mostMoviesInDay: [MostMoviesInDayStat]?
+    let highestMonthlyAverage: [HighestMonthlyAverage]?
     
     enum CodingKeys: String, CodingKey {
         case daysWith2PlusFilms = "days_with_2plus_films"
         case averageMoviesPerYear = "average_movies_per_year"
+        case mustWatchCompletion = "must_watch_completion"
         case unique5StarFilms = "unique_5star_films"
+        case mostMoviesInDay = "most_movies_in_day"
         case highestMonthlyAverage = "highest_monthly_average"
     }
 }
 
-struct HighestMonthlyAverage: Codable, Sendable {
+struct HighestMonthlyAverage: Codable, Sendable, Identifiable {
+    var id: String { "\(year)-\(month)" }
     let year: Int
     let month: Int
     let monthName: String
@@ -546,12 +585,14 @@ struct YearFilteredAdvancedJourneyStats: Codable, Sendable {
     let daysWith2PlusFilms: Int
     let mustWatchCompletion: MustWatchCompletion?
     let unique5StarFilms: Int
-    let highestMonthlyAverage: HighestMonthlyAverage?
+    let mostMoviesInDay: [MostMoviesInDayStat]?
+    let highestMonthlyAverage: [HighestMonthlyAverage]?
     
     enum CodingKeys: String, CodingKey {
         case daysWith2PlusFilms = "days_with_2plus_films"
         case mustWatchCompletion = "must_watch_completion"
         case unique5StarFilms = "unique_5star_films"
+        case mostMoviesInDay = "most_movies_in_day"
         case highestMonthlyAverage = "highest_monthly_average"
     }
 }
@@ -569,6 +610,17 @@ struct MustWatchCompletion: Codable, Sendable {
         case watchedFilms = "watched_films"
         case completionPercentage = "completion_percentage"
         case unwatchedFilms = "unwatched_films"
+    }
+}
+
+struct MostMoviesInDayStat: Codable, Sendable, Identifiable {
+    var id: String { watchDate }
+    let watchDate: String
+    let filmCount: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case watchDate = "watch_date"
+        case filmCount = "film_count"
     }
 }
 

@@ -29,6 +29,9 @@ struct TagConfiguration {
         "scavenger hunt": TagData(icon: "magnifyingglass", color: .white),
     ]
     
+    /// Dedicated location tag data used when a diary entry has a location_id
+    static let locationTagData = TagData(icon: "location.fill", color: .blue)
+    
     /// Get icon and color data for tags from a tag string
     /// - Parameter tagsString: Comma or space separated string of tags
     /// - Returns: Array of tuples containing icon name and color for each recognized tag
@@ -54,6 +57,24 @@ struct TagConfiguration {
             }
             return nil
         }
+    }
+    
+    /// Get tag icons and colors, optionally including a location icon
+    /// - Parameters:
+    ///   - tagsString: Comma separated tags string from diary entry
+    ///   - hasLocation: Whether the diary entry has a location_id
+    /// - Returns: Array of tuples containing icon name and color
+    static func getTagIconsWithColors(
+        for tagsString: String?,
+        hasLocation: Bool
+    ) -> [(icon: String, color: Color)] {
+        var icons = getTagIconsWithColors(for: tagsString)
+        
+        if hasLocation {
+            icons.insert((icon: locationTagData.icon, color: locationTagData.color), at: 0)
+        }
+        
+        return icons
     }
     
     /// Get icon for a specific tag

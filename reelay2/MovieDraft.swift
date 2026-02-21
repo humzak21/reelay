@@ -29,6 +29,16 @@ class MovieDraft {
     var isRewatch: Bool
     var isFavorited: Bool
     var isShortFilm: Bool
+    var selectedLocationId: Int?
+    var selectedLocationName: String?
+    var selectedLocationAddress: String?
+    var selectedLocationLatitude: Double?
+    var selectedLocationLongitude: Double?
+    var selectedLocationNormalizedKey: String?
+    var selectedLocationGroupId: Int?
+    var selectedLocationGroupName: String?
+    var isCreatingNewLocationGroup: Bool
+    var newLocationGroupName: String?
     
     /// Timestamps
     var createdAt: Date
@@ -47,6 +57,16 @@ class MovieDraft {
         isRewatch: Bool = false,
         isFavorited: Bool = false,
         isShortFilm: Bool = false,
+        selectedLocationId: Int? = nil,
+        selectedLocationName: String? = nil,
+        selectedLocationAddress: String? = nil,
+        selectedLocationLatitude: Double? = nil,
+        selectedLocationLongitude: Double? = nil,
+        selectedLocationNormalizedKey: String? = nil,
+        selectedLocationGroupId: Int? = nil,
+        selectedLocationGroupName: String? = nil,
+        isCreatingNewLocationGroup: Bool = false,
+        newLocationGroupName: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -62,6 +82,16 @@ class MovieDraft {
         self.isRewatch = isRewatch
         self.isFavorited = isFavorited
         self.isShortFilm = isShortFilm
+        self.selectedLocationId = selectedLocationId
+        self.selectedLocationName = selectedLocationName
+        self.selectedLocationAddress = selectedLocationAddress
+        self.selectedLocationLatitude = selectedLocationLatitude
+        self.selectedLocationLongitude = selectedLocationLongitude
+        self.selectedLocationNormalizedKey = selectedLocationNormalizedKey
+        self.selectedLocationGroupId = selectedLocationGroupId
+        self.selectedLocationGroupName = selectedLocationGroupName
+        self.isCreatingNewLocationGroup = isCreatingNewLocationGroup
+        self.newLocationGroupName = newLocationGroupName
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -81,7 +111,10 @@ class MovieDraft {
                !(tags ?? "").isEmpty ||
                isRewatch ||
                isFavorited ||
-               isShortFilm
+               isShortFilm ||
+               selectedLocationId != nil ||
+               !(selectedLocationName ?? "").isEmpty ||
+               !(newLocationGroupName ?? "").isEmpty
     }
     
     /// Update this draft from user input values
@@ -93,7 +126,17 @@ class MovieDraft {
         watchDate: Date,
         isRewatch: Bool,
         isFavorited: Bool,
-        isShortFilm: Bool
+        isShortFilm: Bool,
+        selectedLocationId: Int?,
+        selectedLocationName: String?,
+        selectedLocationAddress: String?,
+        selectedLocationLatitude: Double?,
+        selectedLocationLongitude: Double?,
+        selectedLocationNormalizedKey: String?,
+        selectedLocationGroupId: Int?,
+        selectedLocationGroupName: String?,
+        isCreatingNewLocationGroup: Bool,
+        newLocationGroupName: String?
     ) {
         self.starRating = starRating
         self.detailedRating = detailedRating
@@ -103,6 +146,16 @@ class MovieDraft {
         self.isRewatch = isRewatch
         self.isFavorited = isFavorited
         self.isShortFilm = isShortFilm
+        self.selectedLocationId = selectedLocationId
+        self.selectedLocationName = selectedLocationName
+        self.selectedLocationAddress = selectedLocationAddress
+        self.selectedLocationLatitude = selectedLocationLatitude
+        self.selectedLocationLongitude = selectedLocationLongitude
+        self.selectedLocationNormalizedKey = selectedLocationNormalizedKey
+        self.selectedLocationGroupId = selectedLocationGroupId
+        self.selectedLocationGroupName = selectedLocationGroupName
+        self.isCreatingNewLocationGroup = isCreatingNewLocationGroup
+        self.newLocationGroupName = newLocationGroupName
         self.updatedAt = Date()
     }
 }

@@ -78,7 +78,17 @@ class DraftManager {
         watchDate: Date,
         isRewatch: Bool,
         isFavorited: Bool,
-        isShortFilm: Bool
+        isShortFilm: Bool,
+        selectedLocationId: Int?,
+        selectedLocationName: String?,
+        selectedLocationAddress: String?,
+        selectedLocationLatitude: Double?,
+        selectedLocationLongitude: Double?,
+        selectedLocationNormalizedKey: String?,
+        selectedLocationGroupId: Int?,
+        selectedLocationGroupName: String?,
+        isCreatingNewLocationGroup: Bool,
+        newLocationGroupName: String?
     ) {
         // Check if draft already exists
         if let existingDraft = getDraftByTmdbId(tmdbId) {
@@ -91,7 +101,17 @@ class DraftManager {
                 watchDate: watchDate,
                 isRewatch: isRewatch,
                 isFavorited: isFavorited,
-                isShortFilm: isShortFilm
+                isShortFilm: isShortFilm,
+                selectedLocationId: selectedLocationId,
+                selectedLocationName: selectedLocationName,
+                selectedLocationAddress: selectedLocationAddress,
+                selectedLocationLatitude: selectedLocationLatitude,
+                selectedLocationLongitude: selectedLocationLongitude,
+                selectedLocationNormalizedKey: selectedLocationNormalizedKey,
+                selectedLocationGroupId: selectedLocationGroupId,
+                selectedLocationGroupName: selectedLocationGroupName,
+                isCreatingNewLocationGroup: isCreatingNewLocationGroup,
+                newLocationGroupName: newLocationGroupName
             )
         } else {
             // Create new draft
@@ -107,7 +127,17 @@ class DraftManager {
                 watchDate: watchDate,
                 isRewatch: isRewatch,
                 isFavorited: isFavorited,
-                isShortFilm: isShortFilm
+                isShortFilm: isShortFilm,
+                selectedLocationId: selectedLocationId,
+                selectedLocationName: selectedLocationName,
+                selectedLocationAddress: selectedLocationAddress,
+                selectedLocationLatitude: selectedLocationLatitude,
+                selectedLocationLongitude: selectedLocationLongitude,
+                selectedLocationNormalizedKey: selectedLocationNormalizedKey,
+                selectedLocationGroupId: selectedLocationGroupId,
+                selectedLocationGroupName: selectedLocationGroupName,
+                isCreatingNewLocationGroup: isCreatingNewLocationGroup,
+                newLocationGroupName: newLocationGroupName
             )
             modelContext.insert(newDraft)
         }

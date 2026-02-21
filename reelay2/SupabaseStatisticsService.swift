@@ -214,6 +214,90 @@ class SupabaseStatisticsService: ObservableObject {
             return []
         }
     }
+
+    /// Get detailed rating distribution data (0-100)
+    nonisolated func getDetailedRatingDistribution(year: Int? = nil) async throws -> [DetailedRatingDistribution] {
+        struct DetailedRatingRow: Codable {
+            let id: Int
+            let detailedRating: Double?
+            let tmdbId: Int?
+            let title: String?
+            let releaseYear: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case detailedRating = "ratings100"
+                case tmdbId = "tmdb_id"
+                case title
+                case releaseYear = "release_year"
+            }
+        }
+
+        do {
+            let responseData: Data
+            if let year = year {
+                let startDate = "\(year)-01-01"
+                let endDate = "\(year)-12-31"
+
+                responseData = try await supabase
+                    .from("diary")
+                    .select("id,ratings100,tmdb_id,title,release_year")
+                    .not("ratings100", operator: .is, value: AnyJSON.null)
+                    .gte("watched_date", value: startDate)
+                    .lte("watched_date", value: endDate)
+                    .order("watched_date", ascending: false)
+                    .order("id", ascending: false)
+                    .limit(10_000)
+                    .execute()
+                    .data
+            } else {
+                responseData = try await supabase
+                    .from("diary")
+                    .select("id,ratings100,tmdb_id,title,release_year")
+                    .not("ratings100", operator: .is, value: AnyJSON.null)
+                    .order("watched_date", ascending: false)
+                    .order("id", ascending: false)
+                    .limit(10_000)
+                    .execute()
+                    .data
+            }
+
+            let rows = try JSONDecoder().decode([DetailedRatingRow].self, from: responseData)
+            var counts = Array(repeating: 0, count: 101)
+            var seenKeys = Set<String>()
+
+            for row in rows {
+                guard let rating = row.detailedRating else { continue }
+                let uniqueKey: String
+                if let tmdbId = row.tmdbId {
+                    uniqueKey = "tmdb:\(tmdbId)"
+                } else {
+                    let normalizedTitle = (row.title ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .lowercased()
+                    if normalizedTitle.isEmpty {
+                        uniqueKey = "id:\(row.id)"
+                    } else {
+                        uniqueKey = "title:\(normalizedTitle)|year:\(row.releaseYear ?? -1)"
+                    }
+                }
+
+                guard !seenKeys.contains(uniqueKey) else { continue }
+                seenKeys.insert(uniqueKey)
+
+                let normalized = min(100, max(0, Int(rating.rounded())))
+                counts[normalized] += 1
+            }
+
+            return (0...100).map { rating in
+                DetailedRatingDistribution(ratingValue: rating, countFilms: counts[rating])
+            }
+        } catch {
+            return (0...100).map { rating in
+                DetailedRatingDistribution(ratingValue: rating, countFilms: 0)
+            }
+        }
+    }
     
     /// Get detailed rating statistics
     nonisolated func getRatingStats(year: Int? = nil) async throws -> RatingStats {
@@ -487,6 +571,43 @@ class SupabaseStatisticsService: ObservableObject {
         
         let stats: [DirectorStats] = try JSONDecoder().decode([DirectorStats].self, from: response.data)
         return stats
+    }
+
+    // MARK: - Location Statistics
+
+    nonisolated func getLocationMapPoints(year: Int? = nil) async throws -> [LocationMapPoint] {
+        struct Params: Encodable {
+            let target_year: Int?
+        }
+
+        do {
+            let response = try await supabase
+                .rpc("get_location_map_points", params: Params(target_year: year))
+                .execute()
+
+            let points: [LocationMapPoint] = try JSONDecoder().decode([LocationMapPoint].self, from: response.data)
+            return points
+        } catch {
+            return []
+        }
+    }
+
+    nonisolated func getLocationCounts(year: Int? = nil, groupMode: Bool = false) async throws -> [LocationCountRow] {
+        struct Params: Encodable {
+            let target_year: Int?
+            let group_mode: Bool
+        }
+
+        do {
+            let response = try await supabase
+                .rpc("get_location_counts", params: Params(target_year: year, group_mode: groupMode))
+                .execute()
+
+            let counts: [LocationCountRow] = try JSONDecoder().decode([LocationCountRow].self, from: response.data)
+            return counts
+        } catch {
+            return []
+        }
     }
     
     // MARK: - Unique Films and Counts
@@ -867,18 +988,40 @@ class SupabaseStatisticsService: ObservableObject {
         }
     }
     
+    /// Get must watch completion percentage across all "Must Watches%" lists (all-time only)
+    nonisolated func getMustWatchCompletionAllTime() async throws -> MustWatchCompletion? {
+        do {
+            let response = try await supabase.rpc("get_must_watch_completion_all_time").execute()
+            
+            do {
+                let completions = try JSONDecoder().decode([MustWatchCompletion].self, from: response.data)
+                return completions.first
+            } catch {
+                if let completion = try? JSONDecoder().decode(MustWatchCompletion.self, from: response.data) {
+                    return completion
+                }
+                print("Decode error in getMustWatchCompletionAllTime: \\(error)")
+                let str = String(data: response.data, encoding: .utf8) ?? ""
+                print("Response data: \\(str)")
+            }
+            return nil
+            
+        } catch {
+            print("RPC error in getMustWatchCompletionAllTime: \\(error)")
+            return nil
+        }
+    }
+    
     /// Get unique 5-star films count (all-time only)
     nonisolated func getUnique5StarFilms() async throws -> Int {
         do {
             let response = try await supabase.rpc("get_unique_5star_films").execute()
-            
             
             // The function returns an integer directly
             if let dataString = String(data: response.data, encoding: .utf8),
                let count = Int(dataString.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)) {
                 return count
             }
-            
             return 0
             
         } catch {
@@ -886,14 +1029,35 @@ class SupabaseStatisticsService: ObservableObject {
         }
     }
     
+    /// Get highest movies logged in a single day (all-time only)
+    nonisolated func getMostMoviesInDay() async throws -> [MostMoviesInDayStat]? {
+        do {
+            let response = try await supabase.rpc("get_most_movies_in_day").execute()
+            
+            do {
+                let rows = try JSONDecoder().decode([MostMoviesInDayStat].self, from: response.data)
+                return rows
+            } catch {
+                print("Decode error in getMostMoviesInDay: \(error)")
+                let str = String(data: response.data, encoding: .utf8) ?? ""
+                print("Response data: \(str)")
+            }
+            return nil
+            
+        } catch {
+            print("RPC error in getMostMoviesInDay: \(error)")
+            return nil
+        }
+    }
+    
     /// Get highest monthly average rating (all-time only)
-    nonisolated func getHighestMonthlyAverage() async throws -> HighestMonthlyAverage? {
+    nonisolated func getHighestMonthlyAverage() async throws -> [HighestMonthlyAverage]? {
         do {
             let response = try await supabase.rpc("get_highest_monthly_average_rating").execute()
             
             
             let monthlyAverages: [HighestMonthlyAverage] = try JSONDecoder().decode([HighestMonthlyAverage].self, from: response.data)
-            return monthlyAverages.first
+            return monthlyAverages
             
         } catch {
             return nil
@@ -955,15 +1119,36 @@ class SupabaseStatisticsService: ObservableObject {
     }
     
     /// Get highest monthly average rating for specific year (minimum 2 films)
-    nonisolated func getHighestMonthlyAverageByYear(year: Int) async throws -> HighestMonthlyAverage? {
+    nonisolated func getHighestMonthlyAverageByYear(year: Int) async throws -> [HighestMonthlyAverage]? {
         do {
             let response = try await supabase.rpc("get_highest_monthly_average_rating_by_year", params: ["target_year": year]).execute()
             
             
             let monthlyAverages: [HighestMonthlyAverage] = try JSONDecoder().decode([HighestMonthlyAverage].self, from: response.data)
-            return monthlyAverages.first
+            return monthlyAverages
             
         } catch {
+            return nil
+        }
+    }
+    
+    /// Get highest movies logged in a single day for specific year
+    nonisolated func getMostMoviesInDayByYear(year: Int) async throws -> [MostMoviesInDayStat]? {
+        do {
+            let response = try await supabase.rpc("get_most_movies_in_day_by_year", params: ["target_year": year]).execute()
+            
+            do {
+                let rows = try JSONDecoder().decode([MostMoviesInDayStat].self, from: response.data)
+                return rows
+            } catch {
+                print("Decode error in getMostMoviesInDayByYear: \(error)")
+                let str = String(data: response.data, encoding: .utf8) ?? ""
+                print("Response data: \(str)")
+            }
+            return nil
+            
+        } catch {
+            print("RPC error in getMostMoviesInDayByYear: \(error)")
             return nil
         }
     }

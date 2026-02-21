@@ -36,11 +36,12 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
     let imdb_id: String?
     let homepage: String?
     let genres: [String]?
+    let location_id: Int?
     let created_at: String?
     let updated_at: String?
     let favorited: Bool?
     
-    init(id: Int, title: String, release_year: Int?, release_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, watch_date: String?, is_rewatch: Bool?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, director: String?, runtime: Int?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_title: String?, tagline: String?, status: String?, budget: Int?, revenue: Int?, imdb_id: String?, homepage: String?, genres: [String]?, created_at: String?, updated_at: String?, favorited: Bool? = nil) {
+    init(id: Int, title: String, release_year: Int?, release_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, watch_date: String?, is_rewatch: Bool?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, director: String?, runtime: Int?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_title: String?, tagline: String?, status: String?, budget: Int?, revenue: Int?, imdb_id: String?, homepage: String?, genres: [String]?, created_at: String?, updated_at: String?, favorited: Bool? = nil, location_id: Int? = nil) {
         self.id = id
         self.title = title
         self.release_year = release_year
@@ -69,6 +70,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         self.imdb_id = imdb_id
         self.homepage = homepage
         self.genres = genres
+        self.location_id = location_id
         self.created_at = created_at
         self.updated_at = updated_at
         self.favorited = favorited
@@ -103,6 +105,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         case imdb_id
         case homepage
         case genres
+        case location_id
         case created_at
         case updated_at
         case favorited
@@ -138,6 +141,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         imdb_id = try container.decodeIfPresent(String.self, forKey: .imdb_id)
         homepage = try container.decodeIfPresent(String.self, forKey: .homepage)
         genres = try container.decodeIfPresent([String].self, forKey: .genres)
+        location_id = try container.decodeIfPresent(Int.self, forKey: .location_id)
         created_at = try container.decodeIfPresent(String.self, forKey: .created_at)
         updated_at = try container.decodeIfPresent(String.self, forKey: .updated_at)
         favorited = try container.decodeIfPresent(Bool.self, forKey: .favorited)
@@ -182,6 +186,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         try container.encodeIfPresent(imdb_id, forKey: .imdb_id)
         try container.encodeIfPresent(homepage, forKey: .homepage)
         try container.encodeIfPresent(genres, forKey: .genres)
+        try container.encodeIfPresent(location_id, forKey: .location_id)
         try container.encodeIfPresent(created_at, forKey: .created_at)
         try container.encodeIfPresent(updated_at, forKey: .updated_at)
         try container.encodeIfPresent(favorited, forKey: .favorited)
