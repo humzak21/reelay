@@ -369,7 +369,7 @@ struct StatisticsView: View {
                             advancedJourneyStats: advancedJourneyStats,
                             yearFilteredAdvancedStats: yearFilteredAdvancedStats
                         )
-                        
+
                         // Modular Bar Chart
                         ModularBarChartView(
                             ratingDistribution: ratingDistribution,
@@ -384,47 +384,13 @@ struct StatisticsView: View {
                             filmsPerMonth: filmsPerMonth,
                             selectedYear: selectedYear
                         )
-                        
-                        // Top Watched Films Section - only show for all-time view
-                        if selectedYear == nil && !topWatchedFilms.isEmpty {
-                            TopWatchedFilmsSection(topWatchedFilms: topWatchedFilms)
-                        }
-                        
-                        // Rewatch Pie Chart
-                        if let rewatchStats = rewatchStats {
-                            RewatchPieChart(rewatchStats: rewatchStats)
-                        }
-                        
-                        // Total Runtime Section
-                        TimeSinceFirstFilmSection(watchSpan: watchSpan, runtimeStats: runtimeStats)
-                        
-                        // Combined Streaks Section - only show for all-time view
-                        if selectedYear == nil {
-                            CombinedStreaksSection(
-                                streakStats: streakStats,
-                                weeklyStreakStats: weeklyStreakStats,
-                                selectedYear: selectedYear
-                            )
-                        }
-                        
-                        // Year Release Date Pie Chart - only show for year-filtered views
-                        if let year = selectedYear, let yearReleaseStats = yearReleaseStats {
-                            YearReleasePieChart(yearReleaseStats: yearReleaseStats, selectedYear: year)
-                        }
-                        
-                        if selectedYear != nil {
-                            // On Pace Chart - for year-filtered views
-                            if let paceStats = yearlyPaceStats {
-                                OnPaceChart(yearlyPaceStats: paceStats)
-                            }
-                        }
-                        
-                        // Rating Distribution Chart
-                        RatingDistributionChart(distribution: ratingDistribution)
 
-                        // Detailed Rating Distribution Chart
-                        DetailedRatingDistributionChart(distribution: detailedRatingDistribution)
+                        // On Pace Chart - yearly only
+                        if selectedYear != nil, let paceStats = yearlyPaceStats {
+                            OnPaceChart(yearlyPaceStats: paceStats)
+                        }
 
+                        // Location Map & Counts
                         LocationStatisticsSection(
                             mapPoints: locationMapPoints,
                             specificCounts: specificLocationCounts,
@@ -432,32 +398,65 @@ struct StatisticsView: View {
                             selectedMode: $locationCountMode,
                             selectedYear: selectedYear
                         )
-                        
-                        // Films Per Year Chart
+
+                        // Combined Streaks Section
+                        if selectedYear == nil {
+                            CombinedStreaksSection(
+                                streakStats: streakStats,
+                                weeklyStreakStats: weeklyStreakStats,
+                                selectedYear: selectedYear
+                            )
+                        }
+
+                        // Year Release Date Pie Chart - yearly only
+                        if let year = selectedYear, let yearReleaseStats = yearReleaseStats {
+                            YearReleasePieChart(yearReleaseStats: yearReleaseStats, selectedYear: year)
+                        }
+
+                        // Rewatch Pie Chart
+                        if let rewatchStats = rewatchStats {
+                            RewatchPieChart(rewatchStats: rewatchStats)
+                        }
+
+                        // Top Watched Films - all-time only
+                        if selectedYear == nil && !topWatchedFilms.isEmpty {
+                            TopWatchedFilmsSection(topWatchedFilms: topWatchedFilms)
+                        }
+
+                        // Total Runtime / Time Since First Film
+                        TimeSinceFirstFilmSection(watchSpan: watchSpan, runtimeStats: runtimeStats)
+
+                        // Rating Distribution Chart
+                        RatingDistributionChart(distribution: ratingDistribution)
+
+                        // Detailed Rating Distribution Chart
+                        DetailedRatingDistributionChart(distribution: detailedRatingDistribution)
+
+                        // Films Per Year Chart - all-time only
                         if selectedYear == nil {
                             FilmsPerYearChart(filmsPerYear: filmsPerYear)
                         }
-                        
+
                         // Films Per Month Chart
                         FilmsPerMonthChart(filmsPerMonth: filmsPerMonth)
-                        
-                        // Weekly Films Chart
+
+                        // Weekly Films Chart - yearly only
                         if let year = selectedYear, !weeklyFilmsData.isEmpty {
                             WeeklyFilmsChart(weeklyData: weeklyFilmsData, selectedYear: year)
                         }
-                        
+
                         // Day of Week Chart
                         DayOfWeekChart(dayOfWeekPatterns: dayOfWeekPatterns)
-                        
-                        // Average Rating Per Year Charts
+
+                        // Average Rating Per Year Charts - all-time only
                         if selectedYear == nil && !averageStarRatingsPerYear.isEmpty {
                             AverageStarRatingPerYearChart(averageStarRatings: averageStarRatingsPerYear)
                         }
-                        
+
                         if selectedYear == nil && !averageDetailedRatingsPerYear.isEmpty {
                             AverageDetailedRatingPerYearChart(averageDetailedRatings: averageDetailedRatingsPerYear)
                         }
-                        
+
                         // Films by Release Year Chart
                         if !filmsByReleaseYear.isEmpty {
                             if let year = selectedYear {
@@ -466,7 +465,7 @@ struct StatisticsView: View {
                                 FilmsByReleaseYearChart(filmsByReleaseYear: filmsByReleaseYear)
                             }
                         }
-                        
+
                         // Films by Decade Chart
                         FilmsByDecadeChart(filmsByDecade: filmsByDecade)
                     }
@@ -5848,8 +5847,13 @@ private struct FullscreenLocationMapView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
+                    Button {
                         dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            // .symbolRenderingMode(.hierarchical)
+                            // .foregroundStyle(.secondary)
+                            // .font(.title2)
                     }
                 }
             }
