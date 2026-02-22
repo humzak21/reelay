@@ -28,23 +28,6 @@ class FilterViewModel: ObservableObject {
     @Published var hasReview: Bool? = nil
     @Published var showFavoritesOnly: Bool = false
     
-    // MARK: - Staging Properties (for UI editing, update UI but don't trigger filtering)
-    @Published var stagingSelectedTags: Set<String> = []
-    @Published var stagingMinStarRating: Double? = nil
-    @Published var stagingMaxStarRating: Double? = nil
-    @Published var stagingMinDetailedRating: Double? = nil
-    @Published var stagingMaxDetailedRating: Double? = nil
-    @Published var stagingSelectedGenres: Set<String> = []
-    @Published var stagingStartDate: Date? = nil
-    @Published var stagingEndDate: Date? = nil
-    @Published var stagingShowRewatchesOnly: Bool = false
-    @Published var stagingHideRewatches: Bool = false
-    @Published var stagingMinRuntime: Int? = nil
-    @Published var stagingMaxRuntime: Int? = nil
-    @Published var stagingSelectedDecades: Set<String> = []
-    @Published var stagingHasReview: Bool? = nil
-    @Published var stagingShowFavoritesOnly: Bool = false
-    
     // MARK: - Computed Properties
     var hasActiveFilters: Bool {
         return !selectedTags.isEmpty ||
@@ -80,6 +63,44 @@ class FilterViewModel: ObservableObject {
     }
     
     // MARK: - Methods
+    var appliedFiltersState: AppliedMovieFilters {
+        AppliedMovieFilters(
+            selectedTags: selectedTags,
+            minStarRating: minStarRating,
+            maxStarRating: maxStarRating,
+            minDetailedRating: minDetailedRating,
+            maxDetailedRating: maxDetailedRating,
+            selectedGenres: selectedGenres,
+            startDate: startDate,
+            endDate: endDate,
+            showRewatchesOnly: showRewatchesOnly,
+            hideRewatches: hideRewatches,
+            minRuntime: minRuntime,
+            maxRuntime: maxRuntime,
+            selectedDecades: selectedDecades,
+            hasReview: hasReview,
+            showFavoritesOnly: showFavoritesOnly
+        )
+    }
+
+    func apply(filters: AppliedMovieFilters) {
+        selectedTags = filters.selectedTags
+        minStarRating = filters.minStarRating
+        maxStarRating = filters.maxStarRating
+        minDetailedRating = filters.minDetailedRating
+        maxDetailedRating = filters.maxDetailedRating
+        selectedGenres = filters.selectedGenres
+        startDate = filters.startDate
+        endDate = filters.endDate
+        showRewatchesOnly = filters.showRewatchesOnly
+        hideRewatches = filters.hideRewatches
+        minRuntime = filters.minRuntime
+        maxRuntime = filters.maxRuntime
+        selectedDecades = filters.selectedDecades
+        hasReview = filters.hasReview
+        showFavoritesOnly = filters.showFavoritesOnly
+    }
+
     func clearAllFilters() {
         selectedTags.removeAll()
         minStarRating = nil
@@ -96,63 +117,6 @@ class FilterViewModel: ObservableObject {
         selectedDecades.removeAll()
         hasReview = nil
         showFavoritesOnly = false
-        
-        // Also clear staging
-        clearStagingFilters()
-    }
-    
-    func clearStagingFilters() {
-        stagingSelectedTags.removeAll()
-        stagingMinStarRating = nil
-        stagingMaxStarRating = nil
-        stagingMinDetailedRating = nil
-        stagingMaxDetailedRating = nil
-        stagingSelectedGenres.removeAll()
-        stagingStartDate = nil
-        stagingEndDate = nil
-        stagingShowRewatchesOnly = false
-        stagingHideRewatches = false
-        stagingMinRuntime = nil
-        stagingMaxRuntime = nil
-        stagingSelectedDecades.removeAll()
-        stagingHasReview = nil
-        stagingShowFavoritesOnly = false
-    }
-    
-    func loadCurrentFiltersToStaging() {
-        stagingSelectedTags = selectedTags
-        stagingMinStarRating = minStarRating
-        stagingMaxStarRating = maxStarRating
-        stagingMinDetailedRating = minDetailedRating
-        stagingMaxDetailedRating = maxDetailedRating
-        stagingSelectedGenres = selectedGenres
-        stagingStartDate = startDate
-        stagingEndDate = endDate
-        stagingShowRewatchesOnly = showRewatchesOnly
-        stagingHideRewatches = hideRewatches
-        stagingMinRuntime = minRuntime
-        stagingMaxRuntime = maxRuntime
-        stagingSelectedDecades = selectedDecades
-        stagingHasReview = hasReview
-        stagingShowFavoritesOnly = showFavoritesOnly
-    }
-    
-    func applyStagingFilters() {
-        selectedTags = stagingSelectedTags
-        minStarRating = stagingMinStarRating
-        maxStarRating = stagingMaxStarRating
-        minDetailedRating = stagingMinDetailedRating
-        maxDetailedRating = stagingMaxDetailedRating
-        selectedGenres = stagingSelectedGenres
-        startDate = stagingStartDate
-        endDate = stagingEndDate
-        showRewatchesOnly = stagingShowRewatchesOnly
-        hideRewatches = stagingHideRewatches
-        minRuntime = stagingMinRuntime
-        maxRuntime = stagingMaxRuntime
-        selectedDecades = stagingSelectedDecades
-        hasReview = stagingHasReview
-        showFavoritesOnly = stagingShowFavoritesOnly
     }
     
     func toggleTag(_ tag: String) {
@@ -176,31 +140,6 @@ class FilterViewModel: ObservableObject {
             selectedDecades.remove(decade)
         } else {
             selectedDecades.insert(decade)
-        }
-    }
-    
-    // MARK: - Staging Toggle Methods
-    func toggleStagingTag(_ tag: String) {
-        if stagingSelectedTags.contains(tag) {
-            stagingSelectedTags.remove(tag)
-        } else {
-            stagingSelectedTags.insert(tag)
-        }
-    }
-    
-    func toggleStagingGenre(_ genre: String) {
-        if stagingSelectedGenres.contains(genre) {
-            stagingSelectedGenres.remove(genre)
-        } else {
-            stagingSelectedGenres.insert(genre)
-        }
-    }
-    
-    func toggleStagingDecade(_ decade: String) {
-        if stagingSelectedDecades.contains(decade) {
-            stagingSelectedDecades.remove(decade)
-        } else {
-            stagingSelectedDecades.insert(decade)
         }
     }
     

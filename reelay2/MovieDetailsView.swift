@@ -8,6 +8,7 @@
 import SwiftUI
 import SDWebImageSwiftUI
 import MapKit
+import Combine
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -51,6 +52,7 @@ struct MovieDetailsView: View {
     @State private var plexChecked = false
     @State private var movieLocation: MovieLocation?
     @State private var isLoadingMovieLocation = false
+    @State private var isSynchronizingDetail = false
     
     #if os(macOS)
     @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
@@ -197,19 +199,16 @@ struct MovieDetailsView: View {
             }
         }
         .task {
-            // Load data in background without blocking UI
-            Task(priority: .userInitiated) {
-                // Load previous watches quickly (usually small dataset)
-                await loadPreviousWatches()
-                await loadMovieLocation()
+            // Ensure details view always has the full diary row (reviews, etc.),
+            // even when opened from lightweight list/search projections.
+            await refreshCurrentMovieSnapshotFromServer()
 
-                // Load movie lists in parallel
-                async let listSync = listService.syncListsFromSupabase()
-                await listSync
-                await loadMovieLists()
+            // Load data in background without blocking UI.
+            Task(priority: .userInitiated) {
+                await refreshMovieDependentState()
             }
 
-            // Load heavy color calculation data with lower priority after view is interactive
+            // Load heavy color calculation data with lower priority after view is interactive.
             Task(priority: .utility) {
                 await loadAllMoviesForColorCalculation()
                 await MainActor.run {
@@ -218,14 +217,11 @@ struct MovieDetailsView: View {
             }
         }
         .onAppear {
-            // Load streaming data separately and lazily to avoid initial blocking
+            // Load streaming data separately and lazily to avoid initial blocking.
             Task {
                 await loadStreamingData()
             }
-            Task {
-                await loadMovieLocation()
-            }
-            // Load Plex availability if configured
+            // Load Plex availability if configured.
             if plexService.isConfigured {
                 Task {
                     await loadPlexData()
@@ -235,6 +231,19 @@ struct MovieDetailsView: View {
         .onChange(of: currentMovie.location_id) { _, _ in
             Task {
                 await loadMovieLocation()
+            }
+        }
+        .onReceive(movieService.$lastMovieMutationAt.dropFirst()) { mutationDate in
+            guard mutationDate != nil, !isUnloggedMovie else { return }
+            Task {
+                await refreshCurrentMovieSnapshotFromServer()
+                await refreshMovieDependentState()
+            }
+        }
+        .onReceive(listService.$movieLists.dropFirst()) { _ in
+            guard !isUnloggedMovie else { return }
+            Task {
+                await loadMovieLists()
             }
         }
         .sheet(isPresented: $isEditingReview) {
@@ -251,11 +260,8 @@ struct MovieDetailsView: View {
         }
         .sheet(isPresented: $showingEditMovie) {
             EditMovieView(movie: currentMovie) { updatedMovie in
-                currentMovie = updatedMovie
-                // Reload previous watches in case the edit affected them
                 Task {
-                    await loadPreviousWatches()
-                    await loadMovieLocation()
+                    await handleLocalMovieMutation(updatedMovie)
                 }
             }
         }
@@ -292,10 +298,8 @@ struct MovieDetailsView: View {
         }
         .sheet(isPresented: $showingChangeFilm) {
             ChangeFilmView(currentMovie: currentMovie) { updatedMovie in
-                currentMovie = updatedMovie
                 Task {
-                    await loadPreviousWatches()
-                    await loadMovieLocation()
+                    await handleLocalMovieMutation(updatedMovie)
                 }
             }
         }
@@ -311,19 +315,10 @@ struct MovieDetailsView: View {
                     currentPosterUrl: currentMovie.poster_url,
                     movieTitle: currentMovie.title
                 ) { newPosterUrl in
-                    // Refresh the movie data from backend to get the updated poster
+                    _ = newPosterUrl
                     Task {
-                        if let tmdbId = currentMovie.tmdb_id {
-                            do {
-                                let updatedMovies = try await movieService.getMoviesByTmdbId(tmdbId: tmdbId)
-                                if let latestMovie = updatedMovies.first(where: { $0.id == currentMovie.id }) {
-                                    currentMovie = latestMovie
-                                }
-                            } catch {
-                                // If refresh fails, just update the poster URL for immediate UI feedback
-                                // The backend has already been updated by PosterChangeView
-                            }
-                        }
+                        await refreshCurrentMovieSnapshotFromServer()
+                        await refreshMovieDependentState()
                     }
                 }
             }
@@ -335,19 +330,10 @@ struct MovieDetailsView: View {
                     currentBackdropUrl: currentMovie.backdrop_path,
                     movieTitle: currentMovie.title
                 ) { newBackdropUrl in
-                    // Refresh the movie data from backend to get the updated backdrop
+                    _ = newBackdropUrl
                     Task {
-                        if let tmdbId = currentMovie.tmdb_id {
-                            do {
-                                let updatedMovies = try await movieService.getMoviesByTmdbId(tmdbId: tmdbId)
-                                if let latestMovie = updatedMovies.first(where: { $0.id == currentMovie.id }) {
-                                    currentMovie = latestMovie
-                                }
-                            } catch {
-                                // If refresh fails, backdrop has already been updated in backend
-                                // The backend has already been updated by BackdropChangeView
-                            }
-                        }
+                        await refreshCurrentMovieSnapshotFromServer()
+                        await refreshMovieDependentState()
                     }
                 }
             }
@@ -1188,24 +1174,14 @@ struct MovieDetailsView: View {
     
     private var formattedWatchDate: String {
         guard let watchDate = currentMovie.watch_date else { return "Unknown Date" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let date = formatter.date(from: watchDate) else { return "Unknown Date" }
-        
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateFormat = "EEEE, MMMM d, yyyy"
-        return displayFormatter.string(from: date)
+        guard let date = DateFormatter.detailsMovieDateFormatter.date(from: watchDate) else { return "Unknown Date" }
+        return DateFormatter.detailsLongDisplayDateFormatter.string(from: date)
     }
     
     private var formattedReleaseDate: String {
         guard let releaseDate = currentMovie.release_date else { return "Unknown" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let date = formatter.date(from: releaseDate) else { return releaseDate }
-        
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateFormat = "MMMM d, yyyy"
-        return displayFormatter.string(from: date)
+        guard let date = DateFormatter.detailsMovieDateFormatter.date(from: releaseDate) else { return releaseDate }
+        return DateFormatter.detailsReleaseDisplayDateFormatter.string(from: date)
     }
     
     private func starType(for index: Int, rating: Double?) -> String {
@@ -1223,6 +1199,53 @@ struct MovieDetailsView: View {
     }
     
     // Use AppColorHelpers.starColor() and AppColorHelpers.detailedRatingColor() instead
+
+    private func refreshCurrentMovieSnapshotFromServer() async {
+        guard !isUnloggedMovie else { return }
+        guard !isSynchronizingDetail else { return }
+
+        await MainActor.run {
+            isSynchronizingDetail = true
+        }
+
+        do {
+            let fullMovie = try await movieService.getMovieDetails(id: currentMovie.id)
+            await MainActor.run {
+                currentMovie = fullMovie
+                isSynchronizingDetail = false
+            }
+        } catch {
+            // Keep the currently available snapshot if details fetch fails.
+            await MainActor.run {
+                isSynchronizingDetail = false
+            }
+        }
+    }
+
+    private func refreshMovieDependentState() async {
+        guard !isUnloggedMovie else { return }
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await loadPreviousWatches()
+            }
+            group.addTask {
+                await loadMovieLocation()
+            }
+            group.addTask {
+                await listService.syncListsFromSupabase()
+            }
+        }
+        await loadMovieLists()
+    }
+
+    private func handleLocalMovieMutation(_ updatedMovie: Movie) async {
+        await MainActor.run {
+            currentMovie = updatedMovie
+        }
+        await refreshCurrentMovieSnapshotFromServer()
+        await refreshMovieDependentState()
+    }
 
     private func loadMovieLocation() async {
         guard let locationId = currentMovie.location_id else {
@@ -1754,7 +1777,29 @@ struct MovieDetailsView: View {
 extension DateFormatter {
     static let detailsMovieDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    static let detailsLongDisplayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEEE, MMMM d, yyyy"
+        return formatter
+    }()
+
+    static let detailsReleaseDisplayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMMM d, yyyy"
+        return formatter
+    }()
+
+    static let detailsShortDisplayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d, yyyy"
         return formatter
     }()
 }
@@ -1863,13 +1908,8 @@ struct PreviousWatchRow: View {
     
     private var formattedWatchDate: String {
         guard let watchDate = movie.watch_date else { return "Unknown Date" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let date = formatter.date(from: watchDate) else { return "Unknown Date" }
-        
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateFormat = "MMM d, yyyy"
-        return displayFormatter.string(from: date)
+        guard let date = DateFormatter.detailsMovieDateFormatter.date(from: watchDate) else { return "Unknown Date" }
+        return DateFormatter.detailsShortDisplayDateFormatter.string(from: date)
     }
     
     private func starType(for index: Int, rating: Double?) -> String {
@@ -1939,6 +1979,7 @@ struct AddMovieFromListView: View {
     @Environment(\.colorScheme) private var colorScheme
     private let tmdbService = TMDBService.shared
     private let supabaseService = SupabaseMovieService.shared
+    private let dataManager = DataManager.shared
 
     // Movie details state
     @State private var movieDetails: TMDBMovieDetails?
@@ -2174,43 +2215,48 @@ struct AddMovieFromListView: View {
         isAddingMovie = true
         
         do {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            
-            let genres = movieDetails?.genreNames ?? []
+            let detailContext = try? await getMovieDetailsForSave()
+            let detailsForSave = detailContext?.details ?? movieDetails
+            let resolvedDirector = detailContext?.director ?? director
+            let genres = detailsForSave?.genreNames ?? []
+            let resolvedPosterURL = posterUrl ?? detailsForSave?.posterPath.map { "https://image.tmdb.org/t/p/w500\($0)" }
+            let resolvedBackdropPath = detailsForSave?.backdropPath ?? backdropUrl
             
             let movieRequest = AddMovieRequest(
                 title: title,
                 release_year: releaseYear,
-                release_date: movieDetails?.releaseDate,
+                release_date: detailsForSave?.releaseDate,
                 rating: starRating > 0 ? starRating : nil,
                 ratings100: Double(detailedRating),
                 reviews: review.isEmpty ? nil : review,
                 tags: tags.isEmpty ? nil : tags,
-                watched_date: formatter.string(from: watchDate),
+                watched_date: DateFormatter.detailsMovieDateFormatter.string(from: watchDate),
                 rewatch: isRewatch ? "yes" : "no",
                 tmdb_id: tmdbId,
-                overview: movieDetails?.overview,
-                poster_url: posterUrl,
-                backdrop_path: backdropUrl,
-                director: director,
-                runtime: movieDetails?.runtime,
-                vote_average: movieDetails?.voteAverage,
-                vote_count: movieDetails?.voteCount,
-                popularity: movieDetails?.popularity,
-                original_language: movieDetails?.originalLanguage,
-                original_title: movieDetails?.originalTitle,
-                tagline: movieDetails?.tagline,
-                status: movieDetails?.status,
-                budget: movieDetails?.budget,
-                revenue: movieDetails?.revenue,
-                imdb_id: movieDetails?.imdbId,
-                homepage: movieDetails?.homepage,
+                overview: detailsForSave?.overview,
+                poster_url: resolvedPosterURL,
+                backdrop_path: resolvedBackdropPath,
+                director: resolvedDirector,
+                runtime: detailsForSave?.runtime,
+                vote_average: detailsForSave?.voteAverage,
+                vote_count: detailsForSave?.voteCount,
+                popularity: detailsForSave?.popularity,
+                original_language: detailsForSave?.originalLanguage,
+                original_title: detailsForSave?.originalTitle,
+                tagline: detailsForSave?.tagline,
+                status: detailsForSave?.status,
+                budget: detailsForSave?.budget,
+                revenue: detailsForSave?.revenue,
+                imdb_id: detailsForSave?.imdbId,
+                homepage: detailsForSave?.homepage,
                 genres: genres,
                 location_id: nil
             )
             
             let _ = try await supabaseService.addMovie(movieRequest)
+            Task(priority: .userInitiated) {
+                await dataManager.refreshMovies()
+            }
             
             // Copy review to clipboard if it exists
             if !review.isEmpty {
@@ -2233,6 +2279,19 @@ struct AddMovieFromListView: View {
                 showingAlert = true
             }
         }
+    }
+
+    private func getMovieDetailsForSave() async throws -> (details: TMDBMovieDetails?, director: String?) {
+        if let movieDetails {
+            return (movieDetails, director)
+        }
+
+        let (details, directorName) = try await tmdbService.getCompleteMovieData(movieId: tmdbId)
+        await MainActor.run {
+            movieDetails = details
+            director = directorName
+        }
+        return (details, directorName)
     }
 }
 

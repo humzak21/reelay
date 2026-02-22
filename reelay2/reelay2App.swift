@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import Combine
+import SDWebImage
 
 @main
 struct reelay2App: App {
@@ -15,6 +16,17 @@ struct reelay2App: App {
     private var selectedAppearanceMode: AppearanceMode {
         AppearanceMode(rawValue: appearanceModeRawValue) ?? .automatic
     }
+
+    init() {
+        let cacheConfig = SDImageCache.shared.config
+        cacheConfig.maxMemoryCost = 120 * 1024 * 1024
+        cacheConfig.maxMemoryCount = 400
+        cacheConfig.maxDiskSize = 750 * 1024 * 1024
+        cacheConfig.shouldUseWeakMemoryCache = true
+
+        SDWebImageDownloader.shared.config.maxConcurrentDownloads = 6
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

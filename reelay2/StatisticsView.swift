@@ -9,6 +9,8 @@ import SwiftUI
 import Charts
 import Auth
 import MapKit
+import Supabase
+import PostgREST
 
 private enum LocationCountMode: String, CaseIterable {
     case specific
@@ -20,6 +22,52 @@ private enum LocationCountMode: String, CaseIterable {
         case .grouped: return "Location Groups"
         }
     }
+}
+
+private enum FilmTypeMode: String, CaseIterable, Identifiable {
+    case all
+    case feature
+    case short
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All"
+        case .feature:
+            return "Feature Films"
+        case .short:
+            return "Short Films"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .all:
+            return "square.stack.3d.up"
+        case .feature:
+            return "film"
+        case .short:
+            return "film.stack"
+        }
+    }
+
+    var nextMode: FilmTypeMode {
+        switch self {
+        case .all:
+            return .feature
+        case .feature:
+            return .short
+        case .short:
+            return .all
+        }
+    }
+}
+
+private struct YearMonthKey: Hashable {
+    let year: Int
+    let month: Int
 }
 
 // MARK: - Selection Info Row
@@ -84,6 +132,8 @@ struct StatisticsView: View {
     @State private var availableYears: [Int] = []
     @State private var selectedYear: Int? = nil
     @State private var showingYearPicker = false
+    @State private var selectedFilmTypeMode: FilmTypeMode = .all
+    @State private var cachedMoviesByFilmType: [FilmTypeMode: [Movie]] = [:]
     
     // MARK: - Efficient Loading States
     @State private var hasLoadedInitially = false
@@ -139,6 +189,35 @@ struct StatisticsView: View {
             return "All Time"
         }
     }
+
+    private struct DatedMovieEntry {
+        let movie: Movie
+        let date: Date
+        let watchYear: Int
+        let month: Int
+        let weekday: Int
+        let weekOfYear: Int
+        let dateString: String
+    }
+
+    private struct StreakWindow {
+        let start: Date
+        let end: Date
+        let length: Int
+    }
+
+    private static let watchDateParser: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let shortMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        return formatter
+    }()
     
     var body: some View {
         #if os(iOS)
@@ -165,6 +244,15 @@ struct StatisticsView: View {
                 await loadStatisticsIfNeeded(force: false)
             }
         }
+        .onChange(of: selectedFilmTypeMode) {
+            Task {
+                await loadAvailableYears()
+                if let currentYear = selectedYear, !availableYears.contains(currentYear) {
+                    selectedYear = nil
+                }
+                await loadStatisticsIfNeeded(force: true)
+            }
+        }
         #else
         statisticsContent
         .task {
@@ -185,6 +273,15 @@ struct StatisticsView: View {
         .onChange(of: selectedYear) {
             Task {
                 await loadStatisticsIfNeeded(force: false)
+            }
+        }
+        .onChange(of: selectedFilmTypeMode) {
+            Task {
+                await loadAvailableYears()
+                if let currentYear = selectedYear, !availableYears.contains(currentYear) {
+                    selectedYear = nil
+                }
+                await loadStatisticsIfNeeded(force: true)
             }
         }
         #endif
@@ -224,6 +321,12 @@ struct StatisticsView: View {
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItemGroup {
+                filmTypeFilterButton
+            }
+
+            ToolbarSpacer(.fixed)
+
             ToolbarItem(placement: .confirmationAction) {
                 yearPickerButton
             }
@@ -373,6 +476,23 @@ struct StatisticsView: View {
         }
     
     // MARK: - Year Picker UI Components
+
+    private var filmTypeFilterButton: some View {
+        Button {
+            cycleFilmTypeMode()
+        } label: {
+            Image(systemName: selectedFilmTypeMode.nextMode.iconName)
+                .font(.system(size: 16, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("statistics.filmTypeSwapButton")
+        .accessibilityLabel("Switch film mode")
+        .accessibilityValue(selectedFilmTypeMode.title)
+    }
+
+    private func cycleFilmTypeMode() {
+        selectedFilmTypeMode = selectedFilmTypeMode.nextMode
+    }
     
     private var yearPickerButton: some View {
         Button(action: {
@@ -502,7 +622,8 @@ struct StatisticsView: View {
     }
     
     private func getCacheKey() -> String {
-        return selectedYear?.description ?? "all-time"
+        let yearKey = selectedYear?.description ?? "all-time"
+        return "\(yearKey)-\(selectedFilmTypeMode.rawValue)"
     }
     
     private func loadStatisticsIfNeeded(force: Bool) async {
@@ -526,6 +647,7 @@ struct StatisticsView: View {
         guard !isRefreshing else { return }
         
         isRefreshing = true
+        cachedMoviesByFilmType.removeAll()
         
         // Clear cache for current selection to force fresh data
         let cacheKey = getCacheKey()
@@ -614,6 +736,21 @@ struct StatisticsView: View {
     }
     
     private func loadAvailableYears() async {
+        if selectedFilmTypeMode != .all {
+            do {
+                let movies = try await getMoviesForSelectedFilmType(forceRefresh: false)
+                let years = Array(Set(movies.compactMap { extractYear(from: $0.watch_date) })).sorted(by: >)
+                await MainActor.run {
+                    self.availableYears = years
+                }
+            } catch {
+                await MainActor.run {
+                    self.availableYears = []
+                }
+            }
+            return
+        }
+
         do {
             let years = try await statisticsService.getLoggedYears()
             
@@ -632,6 +769,11 @@ struct StatisticsView: View {
     }
     
     private func loadStatistics() async {
+        if selectedFilmTypeMode != .all {
+            await loadLocalFilteredStatistics(showLoading: true)
+            return
+        }
+
         await MainActor.run {
             isLoading = true
             errorMessage = nil
@@ -765,6 +907,11 @@ struct StatisticsView: View {
     }
     
     private func loadStatisticsForRefresh() async {
+        if selectedFilmTypeMode != .all {
+            await loadLocalFilteredStatistics(showLoading: false)
+            return
+        }
+
         // Don't set isLoading = true during refresh to keep existing data visible
         await MainActor.run {
             errorMessage = nil
@@ -936,6 +1083,1015 @@ struct StatisticsView: View {
             mostMoviesInDay: results.mostMoviesInDay,
             highestMonthlyAverage: results.highestMonthly
         )
+    }
+
+    private func loadLocalFilteredStatistics(showLoading: Bool) async {
+        if showLoading {
+            await MainActor.run {
+                isLoading = true
+                errorMessage = nil
+            }
+        } else {
+            await MainActor.run {
+                errorMessage = nil
+            }
+        }
+
+        do {
+            let modeMovies = try await getMoviesForSelectedFilmType(forceRefresh: false)
+            let allEntries = buildDatedEntries(from: modeMovies)
+            let scopedEntries: [DatedMovieEntry]
+            if let year = selectedYear {
+                scopedEntries = allEntries.filter { $0.watchYear == year }
+            } else {
+                scopedEntries = allEntries
+            }
+
+            let allYearsFilmsPerYear = computeFilmsPerYear(entries: allEntries)
+            let allYearsFilmsPerMonth = computeFilmsPerMonth(entries: allEntries)
+            let scopedFilmsPerMonth: [FilmsPerMonth]
+            if let year = selectedYear {
+                scopedFilmsPerMonth = allYearsFilmsPerMonth.filter { $0.year == year }
+            } else {
+                scopedFilmsPerMonth = allYearsFilmsPerMonth
+            }
+
+            let scopedWeeklyFilms: [WeeklyFilmsData]
+            if let year = selectedYear {
+                scopedWeeklyFilms = computeWeeklyFilmsData(entries: scopedEntries, year: year)
+            } else {
+                scopedWeeklyFilms = []
+            }
+
+            let dashboard = computeDashboardStats(entries: scopedEntries)
+            let rating = computeRatingDistribution(entries: scopedEntries)
+            let detailedRating = computeDetailedRatingDistribution(entries: scopedEntries)
+            let decade = computeFilmsByDecade(entries: scopedEntries)
+            let releaseYear = computeFilmsByReleaseYear(entries: scopedEntries)
+            let dayOfWeek = computeDayOfWeekPatterns(entries: scopedEntries)
+            let runtime = computeRuntimeStats(entries: scopedEntries)
+            let unique = computeUniqueFilmsCount(entries: scopedEntries)
+            let watchSpanData = computeWatchSpan(entries: scopedEntries)
+            let ratingStats = computeRatingStats(entries: scopedEntries)
+            let rewatch = computeRewatchStats(entries: scopedEntries)
+            let streak = computeStreakStats(entries: allEntries)
+            let weeklyStreak = selectedYear == nil ? computeWeeklyStreakStats(entries: allEntries) : nil
+            let yearRelease = selectedYear == nil ? nil : computeYearReleaseStats(entries: scopedEntries, targetYear: selectedYear!)
+            let topWatched = selectedYear == nil ? computeTopWatchedFilms(entries: allEntries) : []
+            let advanced = selectedYear == nil ? computeAdvancedJourneyStats(entries: allEntries) : nil
+            let yearAdvanced = selectedYear == nil ? nil : computeYearFilteredAdvancedJourneyStats(entries: scopedEntries)
+            let averageStarRatings = selectedYear == nil ? computeAverageStarRatingsPerYear(entries: allEntries) : []
+            let averageDetailedRatings = selectedYear == nil ? computeAverageDetailedRatingsPerYear(entries: allEntries) : []
+            let locationData = try await computeLocationStatistics(entries: scopedEntries)
+
+            await MainActor.run {
+                self.dashboardStats = dashboard
+                self.ratingDistribution = rating
+                self.detailedRatingDistribution = detailedRating
+                self.filmsByDecade = decade
+                self.filmsByReleaseYear = releaseYear
+                self.filmsPerYear = allYearsFilmsPerYear
+                self.filmsPerMonth = scopedFilmsPerMonth
+                self.weeklyFilmsData = scopedWeeklyFilms
+                self.dayOfWeekPatterns = dayOfWeek
+                self.runtimeStats = runtime
+                self.uniqueFilmsCount = unique
+                self.watchSpan = watchSpanData
+                self.rewatchStats = rewatch
+                self.streakStats = streak
+                self.weeklyStreakStats = weeklyStreak
+                self.yearReleaseStats = yearRelease
+                self.topWatchedFilms = topWatched
+                self.advancedJourneyStats = advanced
+                self.yearFilteredAdvancedStats = yearAdvanced
+                self.averageStarRatingsPerYear = averageStarRatings
+                self.averageDetailedRatingsPerYear = averageDetailedRatings
+                self.resolvedAverageRating = dashboard.averageRating ?? ratingStats.averageRating
+                self.locationMapPoints = locationData.mapPoints
+                self.specificLocationCounts = locationData.specificCounts
+                self.groupLocationCounts = locationData.groupCounts
+
+                if let year = self.selectedYear {
+                    self.allFilmsPerMonth = allYearsFilmsPerMonth
+                    self.yearlyPaceStats = self.statisticsService.calculateYearlyPaceStats(
+                        targetYear: year,
+                        allFilmsPerMonth: allYearsFilmsPerMonth,
+                        allFilmsPerYear: allYearsFilmsPerYear
+                    )
+                } else {
+                    self.allFilmsPerMonth = []
+                    self.yearlyPaceStats = nil
+                }
+
+                if showLoading {
+                    self.isLoading = false
+                }
+                self.cacheCurrentData()
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                if showLoading {
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    private func getMoviesForSelectedFilmType(forceRefresh: Bool) async throws -> [Movie] {
+        if !forceRefresh, let cached = cachedMoviesByFilmType[selectedFilmTypeMode] {
+            return cached
+        }
+
+        let allMovies: [Movie]
+        if !forceRefresh, let cachedAllMovies = cachedMoviesByFilmType[.all] {
+            allMovies = cachedAllMovies
+        } else {
+            allMovies = try await fetchAllDiaryMovies()
+        }
+
+        let shortMovies = allMovies.filter { hasShortTag(tags: $0.tags) }
+        let featureMovies = allMovies.filter { !hasShortTag(tags: $0.tags) }
+
+        await MainActor.run {
+            self.cachedMoviesByFilmType[.all] = allMovies
+            self.cachedMoviesByFilmType[.short] = shortMovies
+            self.cachedMoviesByFilmType[.feature] = featureMovies
+        }
+
+        switch selectedFilmTypeMode {
+        case .all:
+            return allMovies
+        case .feature:
+            return featureMovies
+        case .short:
+            return shortMovies
+        }
+    }
+
+    private func fetchAllDiaryMovies() async throws -> [Movie] {
+        let batchSize = 2000
+        var offset = 0
+        var allMovies: [Movie] = []
+
+        while true {
+            let batch = try await movieService.getMovies(
+                sortBy: .watchDate,
+                ascending: false,
+                limit: batchSize,
+                offset: offset
+            )
+            allMovies.append(contentsOf: batch)
+
+            if batch.count < batchSize {
+                break
+            }
+            offset += batchSize
+        }
+
+        return allMovies
+    }
+
+    private func hasShortTag(tags: String?) -> Bool {
+        normalizedTags(from: tags).contains("short")
+    }
+
+    private func normalizedTags(from tags: String?) -> Set<String> {
+        guard let tags, !tags.isEmpty else { return [] }
+        let primaryTokens = tags
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+
+        var results: Set<String> = []
+        for token in primaryTokens {
+            results.insert(token)
+            for nested in token.split(whereSeparator: \.isWhitespace) {
+                let clean = nested.trimmingCharacters(in: .punctuationCharacters)
+                if !clean.isEmpty {
+                    results.insert(clean)
+                }
+            }
+        }
+        return results
+    }
+
+    private func extractYear(from watchedDate: String?) -> Int? {
+        guard let watchedDate, watchedDate.count >= 4 else { return nil }
+        return Int(watchedDate.prefix(4))
+    }
+
+    private func buildDatedEntries(from movies: [Movie]) -> [DatedMovieEntry] {
+        let calendar = Calendar.current
+        return movies.compactMap { movie in
+            guard
+                let dateString = movie.watch_date,
+                let watchDate = Self.watchDateParser.date(from: dateString)
+            else {
+                return nil
+            }
+
+            return DatedMovieEntry(
+                movie: movie,
+                date: watchDate,
+                watchYear: calendar.component(.year, from: watchDate),
+                month: calendar.component(.month, from: watchDate),
+                weekday: calendar.component(.weekday, from: watchDate),
+                weekOfYear: calendar.component(.weekOfYear, from: watchDate),
+                dateString: dateString
+            )
+        }
+    }
+
+    private func uniqueMovieKey(for movie: Movie) -> String {
+        if let tmdbId = movie.tmdb_id {
+            return "tmdb:\(tmdbId)"
+        }
+
+        let normalizedTitle = movie.title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalizedTitle.isEmpty {
+            return "id:\(movie.id)"
+        }
+        return "title:\(normalizedTitle)|year:\(movie.release_year ?? -1)"
+    }
+
+    private func computeDashboardStats(entries: [DatedMovieEntry]) -> DashboardStats {
+        let totalFilms = entries.count
+        let uniqueFilms = Set(entries.map { uniqueMovieKey(for: $0.movie) }).count
+        let ratings = entries.compactMap(\.movie.rating)
+        let averageRating = ratings.isEmpty ? nil : ratings.reduce(0, +) / Double(ratings.count)
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let filmsThisYear = entries.filter { $0.watchYear == currentYear }.count
+
+        var genreCounts: [String: Int] = [:]
+        for entry in entries {
+            for genre in entry.movie.genres ?? [] {
+                let normalized = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !normalized.isEmpty {
+                    genreCounts[normalized, default: 0] += 1
+                }
+            }
+        }
+        let topGenre = genreCounts.max { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key > rhs.key : lhs.value < rhs.value
+        }?.key
+
+        var directorCounts: [String: Int] = [:]
+        for entry in entries {
+            let director = (entry.movie.director ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !director.isEmpty {
+                directorCounts[director, default: 0] += 1
+            }
+        }
+        let topDirector = directorCounts.max { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key > rhs.key : lhs.value < rhs.value
+        }?.key
+
+        var weekdayCounts: [Int: Int] = [:]
+        for entry in entries {
+            weekdayCounts[entry.weekday, default: 0] += 1
+        }
+        let favoriteDayNumber = weekdayCounts.max { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key > rhs.key : lhs.value < rhs.value
+        }?.key
+        let favoriteDay = favoriteDayNumber.map { Calendar.current.weekdaySymbols[$0 - 1] }
+
+        return DashboardStats(
+            totalFilms: totalFilms,
+            uniqueFilms: uniqueFilms,
+            averageRating: averageRating,
+            filmsThisYear: filmsThisYear,
+            topGenre: topGenre,
+            topDirector: topDirector,
+            favoriteDay: favoriteDay
+        )
+    }
+
+    private func computeRatingDistribution(entries: [DatedMovieEntry]) -> [RatingDistribution] {
+        let ratings = entries.compactMap(\.movie.rating)
+        guard !ratings.isEmpty else { return [] }
+
+        var counts: [Double: Int] = [:]
+        for rating in ratings {
+            counts[rating, default: 0] += 1
+        }
+
+        let total = ratings.count
+        return counts.keys.sorted().map { key in
+            let count = counts[key, default: 0]
+            return RatingDistribution(
+                ratingValue: key,
+                countFilms: count,
+                percentage: (Double(count) / Double(max(total, 1))) * 100.0
+            )
+        }
+    }
+
+    private func computeDetailedRatingDistribution(entries: [DatedMovieEntry]) -> [DetailedRatingDistribution] {
+        let sorted = entries.sorted {
+            if $0.date == $1.date {
+                return $0.movie.id > $1.movie.id
+            }
+            return $0.date > $1.date
+        }
+
+        var seenKeys: Set<String> = []
+        var counts = Array(repeating: 0, count: 101)
+
+        for entry in sorted {
+            guard let rating = entry.movie.detailed_rating else { continue }
+            let key = uniqueMovieKey(for: entry.movie)
+            if seenKeys.contains(key) {
+                continue
+            }
+            seenKeys.insert(key)
+
+            let index = min(100, max(0, Int(rating.rounded())))
+            counts[index] += 1
+        }
+
+        return (0...100).map { value in
+            DetailedRatingDistribution(ratingValue: value, countFilms: counts[value])
+        }
+    }
+
+    private func computeFilmsByDecade(entries: [DatedMovieEntry]) -> [FilmsByDecade] {
+        let releaseYears = entries.compactMap(\.movie.release_year)
+        guard !releaseYears.isEmpty else { return [] }
+
+        var counts: [Int: Int] = [:]
+        for year in releaseYears {
+            let decade = (year / 10) * 10
+            counts[decade, default: 0] += 1
+        }
+
+        let total = releaseYears.count
+        return counts.keys.sorted().map { decade in
+            let count = counts[decade, default: 0]
+            return FilmsByDecade(
+                decade: decade,
+                filmCount: count,
+                percentage: (Double(count) / Double(max(total, 1))) * 100.0
+            )
+        }
+    }
+
+    private func computeFilmsByReleaseYear(entries: [DatedMovieEntry]) -> [FilmsByReleaseYear] {
+        let releaseYears = entries.compactMap(\.movie.release_year)
+        guard !releaseYears.isEmpty else { return [] }
+
+        var counts: [Int: Int] = [:]
+        for year in releaseYears {
+            counts[year, default: 0] += 1
+        }
+
+        let total = releaseYears.count
+        return counts.keys.sorted().map { year in
+            let count = counts[year, default: 0]
+            return FilmsByReleaseYear(
+                releaseYear: year,
+                filmCount: count,
+                percentage: (Double(count) / Double(max(total, 1))) * 100.0
+            )
+        }
+    }
+
+    private func computeFilmsPerYear(entries: [DatedMovieEntry]) -> [FilmsPerYear] {
+        let grouped = Dictionary(grouping: entries, by: \.watchYear)
+        return grouped.keys.sorted().map { year in
+            let yearEntries = grouped[year] ?? []
+            let uniqueFilms = Set(yearEntries.map { uniqueMovieKey(for: $0.movie) }).count
+            return FilmsPerYear(year: year, filmCount: yearEntries.count, uniqueFilms: uniqueFilms)
+        }
+    }
+
+    private func computeFilmsPerMonth(entries: [DatedMovieEntry]) -> [FilmsPerMonth] {
+        let grouped = Dictionary(grouping: entries) { YearMonthKey(year: $0.watchYear, month: $0.month) }
+
+        let keys = grouped.keys.sorted {
+            if $0.year == $1.year {
+                return $0.month < $1.month
+            }
+            return $0.year < $1.year
+        }
+
+        return keys.map { key in
+            let year = key.year
+            let month = key.month
+            let count = grouped[key]?.count ?? 0
+            let monthName = shortMonthLabel(for: month)
+            return FilmsPerMonth(year: year, month: month, monthName: monthName, filmCount: count)
+        }
+    }
+
+    private func computeWeeklyFilmsData(entries: [DatedMovieEntry], year: Int) -> [WeeklyFilmsData] {
+        let grouped = Dictionary(grouping: entries, by: \.weekOfYear)
+        let sortedWeeks = grouped.keys.sorted()
+
+        return sortedWeeks.map { week in
+            let weekEntries = grouped[week] ?? []
+            let sortedEntries = weekEntries.sorted { $0.date < $1.date }
+            let startDate = sortedEntries.first?.dateString ?? ""
+            let endDate = sortedEntries.last?.dateString ?? ""
+
+            return WeeklyFilmsData(
+                year: year,
+                weekNumber: week,
+                weekStartDate: startDate,
+                weekEndDate: endDate,
+                filmCount: weekEntries.count
+            )
+        }
+    }
+
+    private func computeDayOfWeekPatterns(entries: [DatedMovieEntry]) -> [DayOfWeekPattern] {
+        var counts: [Int: Int] = [:] // backend format: 0=Sunday ... 6=Saturday
+        for entry in entries {
+            let backendDay = entry.weekday - 1
+            counts[backendDay, default: 0] += 1
+        }
+
+        let total = entries.count
+        let dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+        return (0...6).map { day in
+            let count = counts[day, default: 0]
+            return DayOfWeekPattern(
+                dayOfWeek: dayNames[day],
+                dayNumber: day,
+                filmCount: count,
+                percentage: total == 0 ? 0.0 : (Double(count) / Double(total)) * 100.0
+            )
+        }
+    }
+
+    private func computeRuntimeStats(entries: [DatedMovieEntry]) -> RuntimeStats {
+        let runtimeEntries = entries.compactMap { entry -> (Movie, Int)? in
+            guard let runtime = entry.movie.runtime, runtime > 0 else { return nil }
+            return (entry.movie, runtime)
+        }
+
+        guard !runtimeEntries.isEmpty else {
+            return RuntimeStats(
+                totalRuntime: 0,
+                averageRuntime: 0.0,
+                medianRuntime: 0.0,
+                longestRuntime: 0,
+                longestTitle: nil,
+                shortestRuntime: 0,
+                shortestTitle: nil
+            )
+        }
+
+        let runtimes = runtimeEntries.map(\.1)
+        let totalRuntime = runtimes.reduce(0, +)
+        let averageRuntime = Double(totalRuntime) / Double(runtimes.count)
+        let sorted = runtimes.sorted()
+        let medianRuntime: Double
+        if sorted.count.isMultiple(of: 2) {
+            let mid = sorted.count / 2
+            medianRuntime = Double(sorted[mid - 1] + sorted[mid]) / 2.0
+        } else {
+            medianRuntime = Double(sorted[sorted.count / 2])
+        }
+
+        let longest = runtimeEntries.max { $0.1 < $1.1 }
+        let shortest = runtimeEntries.min { $0.1 < $1.1 }
+
+        return RuntimeStats(
+            totalRuntime: totalRuntime,
+            averageRuntime: averageRuntime,
+            medianRuntime: medianRuntime,
+            longestRuntime: longest?.1,
+            longestTitle: longest?.0.title,
+            shortestRuntime: shortest?.1,
+            shortestTitle: shortest?.0.title
+        )
+    }
+
+    private func computeUniqueFilmsCount(entries: [DatedMovieEntry]) -> Int {
+        Set(entries.map { uniqueMovieKey(for: $0.movie) }).count
+    }
+
+    private func computeWatchSpan(entries: [DatedMovieEntry]) -> WatchSpan {
+        guard let first = entries.min(by: { $0.date < $1.date }),
+              let last = entries.max(by: { $0.date < $1.date }) else {
+            return WatchSpan(firstWatchDate: nil, lastWatchDate: nil, watchSpan: nil, totalDays: 0)
+        }
+
+        let days = Calendar.current.dateComponents([.day], from: first.date, to: last.date).day ?? 0
+        let totalDays = max(0, days + 1)
+        return WatchSpan(
+            firstWatchDate: first.dateString,
+            lastWatchDate: last.dateString,
+            watchSpan: "\(totalDays) days",
+            totalDays: totalDays
+        )
+    }
+
+    private func computeRatingStats(entries: [DatedMovieEntry]) -> RatingStats {
+        let ratings = entries.compactMap(\.movie.rating).sorted()
+        guard !ratings.isEmpty else {
+            return RatingStats(
+                averageRating: nil,
+                medianRating: nil,
+                modeRating: nil,
+                standardDeviation: nil,
+                totalRated: 0,
+                fiveStarPercentage: nil
+            )
+        }
+
+        let total = ratings.count
+        let average = ratings.reduce(0, +) / Double(total)
+        let median: Double
+        if total.isMultiple(of: 2) {
+            median = (ratings[(total / 2) - 1] + ratings[total / 2]) / 2.0
+        } else {
+            median = ratings[total / 2]
+        }
+
+        var counts: [Double: Int] = [:]
+        for rating in ratings {
+            counts[rating, default: 0] += 1
+        }
+        let modeRating = counts.max { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key > rhs.key : lhs.value < rhs.value
+        }?.key
+
+        let variance = ratings.reduce(0.0) { partial, value in
+            let delta = value - average
+            return partial + (delta * delta)
+        } / Double(total)
+
+        let fiveStarCount = ratings.filter { $0 >= 5.0 }.count
+        let fiveStarPercentage = (Double(fiveStarCount) / Double(total)) * 100.0
+
+        return RatingStats(
+            averageRating: average,
+            medianRating: median,
+            modeRating: modeRating.map { Int($0.rounded()) },
+            standardDeviation: sqrt(variance),
+            totalRated: total,
+            fiveStarPercentage: fiveStarPercentage
+        )
+    }
+
+    private func computeRewatchStats(entries: [DatedMovieEntry]) -> RewatchStats {
+        let rewatchEntries = entries.filter { $0.movie.is_rewatch == true }
+        let totalFilms = entries.count
+        let totalRewatches = rewatchEntries.count
+        let nonRewatches = max(0, totalFilms - totalRewatches)
+        let rewatchPercentage = totalFilms == 0 ? 0.0 : (Double(totalRewatches) / Double(totalFilms)) * 100.0
+        let uniqueFilmsRewatched = Set(rewatchEntries.map { uniqueMovieKey(for: $0.movie) }).count
+
+        var rewatchCounts: [String: (title: String, count: Int)] = [:]
+        for entry in rewatchEntries {
+            let key = uniqueMovieKey(for: entry.movie)
+            let current = rewatchCounts[key] ?? (title: entry.movie.title, count: 0)
+            rewatchCounts[key] = (title: current.title, count: current.count + 1)
+        }
+        let topRewatchedMovie = rewatchCounts.max { lhs, rhs in
+            lhs.value.count == rhs.value.count ? lhs.value.title > rhs.value.title : lhs.value.count < rhs.value.count
+        }?.value.title
+
+        return RewatchStats(
+            totalRewatches: totalRewatches,
+            totalFilms: totalFilms,
+            nonRewatches: nonRewatches,
+            rewatchPercentage: rewatchPercentage,
+            uniqueFilmsRewatched: uniqueFilmsRewatched,
+            topRewatchedMovie: topRewatchedMovie
+        )
+    }
+
+    private func computeStreakStats(entries: [DatedMovieEntry]) -> StreakStats {
+        let calendar = Calendar.current
+        let groupedByDate = Dictionary(grouping: entries, by: \.dateString)
+        let uniqueDates = Set(entries.map { calendar.startOfDay(for: $0.date) }).sorted()
+
+        guard let lastDate = uniqueDates.last else {
+            return StreakStats(
+                longestStreakDays: 0,
+                longestStreakStartDate: nil,
+                longestStreakEndDate: nil,
+                longestStreakStartTitle: nil,
+                longestStreakStartPoster: nil,
+                longestStreakEndTitle: nil,
+                longestStreakEndPoster: nil,
+                currentStreakDays: 0,
+                currentStreakStartDate: nil,
+                currentStreakEndDate: nil,
+                currentStreakStartTitle: nil,
+                currentStreakStartPoster: nil,
+                currentStreakEndTitle: nil,
+                currentStreakEndPoster: nil,
+                isCurrentStreakActive: false
+            )
+        }
+
+        var longest = StreakWindow(start: uniqueDates[0], end: uniqueDates[0], length: 1)
+        var currentStart = uniqueDates[0]
+        var currentLength = 1
+        for index in 1..<uniqueDates.count {
+            let previous = uniqueDates[index - 1]
+            let current = uniqueDates[index]
+            let daysBetween = calendar.dateComponents([.day], from: previous, to: current).day ?? 0
+            if daysBetween == 1 {
+                currentLength += 1
+            } else {
+                if currentLength > longest.length {
+                    longest = StreakWindow(start: currentStart, end: previous, length: currentLength)
+                }
+                currentStart = current
+                currentLength = 1
+            }
+        }
+        if currentLength > longest.length {
+            longest = StreakWindow(start: currentStart, end: uniqueDates.last ?? currentStart, length: currentLength)
+        }
+
+        var currentStreakLength = 1
+        var currentStreakStart = lastDate
+        if uniqueDates.count > 1 {
+            for index in stride(from: uniqueDates.count - 1, to: 0, by: -1) {
+                let current = uniqueDates[index]
+                let previous = uniqueDates[index - 1]
+                let daysBetween = calendar.dateComponents([.day], from: previous, to: current).day ?? 0
+                if daysBetween == 1 {
+                    currentStreakLength += 1
+                    currentStreakStart = previous
+                } else {
+                    break
+                }
+            }
+        }
+
+        let today = calendar.startOfDay(for: Date())
+        let daysSinceLast = calendar.dateComponents([.day], from: lastDate, to: today).day ?? Int.max
+        let isCurrentActive = daysSinceLast <= 1
+
+        let longestStartString = Self.watchDateParser.string(from: longest.start)
+        let longestEndString = Self.watchDateParser.string(from: longest.end)
+        let currentStartString = Self.watchDateParser.string(from: currentStreakStart)
+        let currentEndString = Self.watchDateParser.string(from: lastDate)
+
+        let longestStartMovie = groupedByDate[longestStartString]?.sorted(by: { $0.movie.id < $1.movie.id }).first?.movie
+        let longestEndMovie = groupedByDate[longestEndString]?.sorted(by: { $0.movie.id > $1.movie.id }).first?.movie
+        let currentStartMovie = groupedByDate[currentStartString]?.sorted(by: { $0.movie.id < $1.movie.id }).first?.movie
+        let currentEndMovie = groupedByDate[currentEndString]?.sorted(by: { $0.movie.id > $1.movie.id }).first?.movie
+
+        return StreakStats(
+            longestStreakDays: longest.length,
+            longestStreakStartDate: longestStartString,
+            longestStreakEndDate: longestEndString,
+            longestStreakStartTitle: longestStartMovie?.title,
+            longestStreakStartPoster: longestStartMovie?.poster_url,
+            longestStreakEndTitle: longestEndMovie?.title,
+            longestStreakEndPoster: longestEndMovie?.poster_url,
+            currentStreakDays: currentStreakLength,
+            currentStreakStartDate: currentStartString,
+            currentStreakEndDate: currentEndString,
+            currentStreakStartTitle: currentStartMovie?.title,
+            currentStreakStartPoster: currentStartMovie?.poster_url,
+            currentStreakEndTitle: currentEndMovie?.title,
+            currentStreakEndPoster: currentEndMovie?.poster_url,
+            isCurrentStreakActive: isCurrentActive
+        )
+    }
+
+    private func computeWeeklyStreakStats(entries: [DatedMovieEntry]) -> WeeklyStreakStats {
+        var isoCalendar = Calendar(identifier: .iso8601)
+        isoCalendar.locale = Locale(identifier: "en_US_POSIX")
+
+        let uniqueWeekStarts = Set(entries.compactMap { isoCalendar.dateInterval(of: .weekOfYear, for: $0.date)?.start }).sorted()
+        guard let lastWeekStart = uniqueWeekStarts.last else {
+            return WeeklyStreakStats(
+                longestWeeklyStreakWeeks: 0,
+                longestWeeklyStreakStartDate: nil,
+                longestWeeklyStreakEndDate: nil,
+                currentWeeklyStreakWeeks: 0,
+                currentWeeklyStreakStartDate: nil,
+                currentWeeklyStreakEndDate: nil,
+                isCurrentWeeklyStreakActive: false
+            )
+        }
+
+        var longest = StreakWindow(start: uniqueWeekStarts[0], end: uniqueWeekStarts[0], length: 1)
+        var currentStart = uniqueWeekStarts[0]
+        var currentLength = 1
+        for index in 1..<uniqueWeekStarts.count {
+            let previous = uniqueWeekStarts[index - 1]
+            let current = uniqueWeekStarts[index]
+            let days = isoCalendar.dateComponents([.day], from: previous, to: current).day ?? 0
+            if days == 7 {
+                currentLength += 1
+            } else {
+                if currentLength > longest.length {
+                    longest = StreakWindow(start: currentStart, end: previous, length: currentLength)
+                }
+                currentStart = current
+                currentLength = 1
+            }
+        }
+        if currentLength > longest.length {
+            longest = StreakWindow(start: currentStart, end: uniqueWeekStarts.last ?? currentStart, length: currentLength)
+        }
+
+        var currentWeeklyLength = 1
+        var currentWeeklyStart = lastWeekStart
+        if uniqueWeekStarts.count > 1 {
+            for index in stride(from: uniqueWeekStarts.count - 1, to: 0, by: -1) {
+                let current = uniqueWeekStarts[index]
+                let previous = uniqueWeekStarts[index - 1]
+                let days = isoCalendar.dateComponents([.day], from: previous, to: current).day ?? 0
+                if days == 7 {
+                    currentWeeklyLength += 1
+                    currentWeeklyStart = previous
+                } else {
+                    break
+                }
+            }
+        }
+
+        let currentWeekStart = isoCalendar.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
+        let daysSinceLastWeek = isoCalendar.dateComponents([.day], from: lastWeekStart, to: currentWeekStart).day ?? Int.max
+        let isCurrentWeeklyActive = daysSinceLastWeek <= 7
+
+        return WeeklyStreakStats(
+            longestWeeklyStreakWeeks: longest.length,
+            longestWeeklyStreakStartDate: Self.watchDateParser.string(from: longest.start),
+            longestWeeklyStreakEndDate: Self.watchDateParser.string(from: longest.end),
+            currentWeeklyStreakWeeks: currentWeeklyLength,
+            currentWeeklyStreakStartDate: Self.watchDateParser.string(from: currentWeeklyStart),
+            currentWeeklyStreakEndDate: Self.watchDateParser.string(from: lastWeekStart),
+            isCurrentWeeklyStreakActive: isCurrentWeeklyActive
+        )
+    }
+
+    private func computeYearReleaseStats(entries: [DatedMovieEntry], targetYear: Int) -> YearReleaseStats {
+        let total = entries.count
+        let fromYear = entries.filter { $0.movie.release_year == targetYear }.count
+        let otherYears = max(0, total - fromYear)
+        let yearPercentage = total == 0 ? 0.0 : (Double(fromYear) / Double(total)) * 100.0
+        let otherPercentage = total == 0 ? 0.0 : (Double(otherYears) / Double(total)) * 100.0
+
+        return YearReleaseStats(
+            totalFilms: total,
+            filmsFromYear: fromYear,
+            filmsFromOtherYears: otherYears,
+            yearPercentage: yearPercentage,
+            otherYearsPercentage: otherPercentage
+        )
+    }
+
+    private func computeTopWatchedFilms(entries: [DatedMovieEntry], limit: Int = 6) -> [TopWatchedFilm] {
+        struct Aggregate {
+            var title: String
+            var posterUrl: String?
+            var watchCount: Int
+            var tmdbId: Int?
+            var lastWatchedDate: String?
+        }
+
+        var grouped: [String: Aggregate] = [:]
+        for entry in entries {
+            let key = uniqueMovieKey(for: entry.movie)
+            if var existing = grouped[key] {
+                existing.watchCount += 1
+                if (entry.movie.watch_date ?? "") > (existing.lastWatchedDate ?? "") {
+                    existing.lastWatchedDate = entry.movie.watch_date
+                    existing.posterUrl = entry.movie.poster_url ?? existing.posterUrl
+                }
+                grouped[key] = existing
+            } else {
+                grouped[key] = Aggregate(
+                    title: entry.movie.title,
+                    posterUrl: entry.movie.poster_url,
+                    watchCount: 1,
+                    tmdbId: entry.movie.tmdb_id,
+                    lastWatchedDate: entry.movie.watch_date
+                )
+            }
+        }
+
+        return grouped.values
+            .sorted { lhs, rhs in
+                if lhs.watchCount == rhs.watchCount {
+                    return (lhs.lastWatchedDate ?? "") > (rhs.lastWatchedDate ?? "")
+                }
+                return lhs.watchCount > rhs.watchCount
+            }
+            .prefix(limit)
+            .map {
+                TopWatchedFilm(
+                    title: $0.title,
+                    posterUrl: $0.posterUrl,
+                    watchCount: $0.watchCount,
+                    tmdbId: $0.tmdbId,
+                    lastWatchedDate: $0.lastWatchedDate
+                )
+            }
+    }
+
+    private func computeMostMoviesInDay(entries: [DatedMovieEntry]) -> [MostMoviesInDayStat] {
+        let grouped = Dictionary(grouping: entries, by: \.dateString)
+        return grouped.map { key, value in
+            MostMoviesInDayStat(watchDate: key, filmCount: value.count)
+        }
+        .sorted { lhs, rhs in
+            if lhs.filmCount == rhs.filmCount {
+                return lhs.watchDate > rhs.watchDate
+            }
+            return lhs.filmCount > rhs.filmCount
+        }
+    }
+
+    private func computeHighestMonthlyAverage(entries: [DatedMovieEntry]) -> [HighestMonthlyAverage] {
+        let ratedEntries = entries.filter { $0.movie.rating != nil }
+        let grouped = Dictionary(grouping: ratedEntries) { YearMonthKey(year: $0.watchYear, month: $0.month) }
+
+        return grouped.compactMap { key, values in
+            let ratings = values.compactMap { $0.movie.rating }
+            guard ratings.count >= 2 else { return nil }
+            let average = ratings.reduce(0, +) / Double(ratings.count)
+
+            return HighestMonthlyAverage(
+                year: key.year,
+                month: key.month,
+                monthName: shortMonthLabel(for: key.month),
+                averageRating: average,
+                filmCount: ratings.count
+            )
+        }
+        .sorted { lhs, rhs in
+            if abs(lhs.averageRating - rhs.averageRating) < 0.0001 {
+                if lhs.filmCount == rhs.filmCount {
+                    if lhs.year == rhs.year {
+                        return lhs.month > rhs.month
+                    }
+                    return lhs.year > rhs.year
+                }
+                return lhs.filmCount > rhs.filmCount
+            }
+            return lhs.averageRating > rhs.averageRating
+        }
+    }
+
+    private func shortMonthLabel(for month: Int) -> String {
+        let symbols = Self.shortMonthFormatter.shortMonthSymbols
+            ?? ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        guard month >= 1 && month <= symbols.count else {
+            return "M\(month)"
+        }
+        return symbols[month - 1]
+    }
+
+    private func computeAdvancedJourneyStats(entries: [DatedMovieEntry]) -> AdvancedFilmJourneyStats {
+        let groupedByDate = Dictionary(grouping: entries, by: \.dateString)
+        let daysWith2PlusFilms = groupedByDate.values.filter { $0.count >= 2 }.count
+        let uniqueYears = Set(entries.map(\.watchYear)).count
+        let averageMoviesPerYear = uniqueYears == 0 ? 0.0 : Double(entries.count) / Double(uniqueYears)
+
+        let unique5StarFilms = Set(
+            entries.filter { ($0.movie.rating ?? 0.0) >= 5.0 }.map { uniqueMovieKey(for: $0.movie) }
+        ).count
+
+        return AdvancedFilmJourneyStats(
+            daysWith2PlusFilms: daysWith2PlusFilms,
+            averageMoviesPerYear: averageMoviesPerYear,
+            mustWatchCompletion: nil,
+            unique5StarFilms: unique5StarFilms,
+            mostMoviesInDay: computeMostMoviesInDay(entries: entries),
+            highestMonthlyAverage: computeHighestMonthlyAverage(entries: entries)
+        )
+    }
+
+    private func computeYearFilteredAdvancedJourneyStats(entries: [DatedMovieEntry]) -> YearFilteredAdvancedJourneyStats {
+        let groupedByDate = Dictionary(grouping: entries, by: \.dateString)
+        let daysWith2PlusFilms = groupedByDate.values.filter { $0.count >= 2 }.count
+        let unique5StarFilms = Set(
+            entries.filter { ($0.movie.rating ?? 0.0) >= 5.0 }.map { uniqueMovieKey(for: $0.movie) }
+        ).count
+
+        return YearFilteredAdvancedJourneyStats(
+            daysWith2PlusFilms: daysWith2PlusFilms,
+            mustWatchCompletion: nil,
+            unique5StarFilms: unique5StarFilms,
+            mostMoviesInDay: computeMostMoviesInDay(entries: entries),
+            highestMonthlyAverage: computeHighestMonthlyAverage(entries: entries)
+        )
+    }
+
+    private func computeAverageStarRatingsPerYear(entries: [DatedMovieEntry]) -> [AverageStarRatingPerYear] {
+        let rated = entries.filter { $0.movie.rating != nil }
+        let grouped = Dictionary(grouping: rated, by: \.watchYear)
+
+        return grouped.keys.sorted().compactMap { year in
+            let values = grouped[year] ?? []
+            let ratings = values.compactMap(\.movie.rating)
+            guard !ratings.isEmpty else { return nil }
+            let average = ratings.reduce(0, +) / Double(ratings.count)
+            return AverageStarRatingPerYear(year: year, averageStarRating: average, filmCount: ratings.count)
+        }
+    }
+
+    private func computeAverageDetailedRatingsPerYear(entries: [DatedMovieEntry]) -> [AverageDetailedRatingPerYear] {
+        let rated = entries.filter { $0.movie.detailed_rating != nil }
+        let grouped = Dictionary(grouping: rated, by: \.watchYear)
+
+        return grouped.keys.sorted().compactMap { year in
+            let values = grouped[year] ?? []
+            let ratings = values.compactMap(\.movie.detailed_rating)
+            guard !ratings.isEmpty else { return nil }
+            let average = ratings.reduce(0, +) / Double(ratings.count)
+            return AverageDetailedRatingPerYear(year: year, averageDetailedRating: average, filmCount: ratings.count)
+        }
+    }
+
+    private func computeLocationStatistics(entries: [DatedMovieEntry]) async throws -> (
+        mapPoints: [LocationMapPoint],
+        specificCounts: [LocationCountRow],
+        groupCounts: [LocationCountRow]
+    ) {
+        let locationIds = entries.compactMap(\.movie.location_id)
+        guard !locationIds.isEmpty else {
+            return ([], [], [])
+        }
+
+        var countByLocationId: [Int: Int] = [:]
+        for locationId in locationIds {
+            countByLocationId[locationId, default: 0] += 1
+        }
+
+        let uniqueIds = Array(Set(locationIds))
+        let selectColumns = "id,user_id,display_name,formatted_address,normalized_key,latitude,longitude,city,admin_area,country,postal_code,location_group_id,location_groups(name),created_at,updated_at"
+        let response = try await movieService.client
+            .from("locations")
+            .select(selectColumns)
+            .in("id", values: uniqueIds)
+            .execute()
+
+        let locations: [MovieLocation]
+        if response.data.isEmpty {
+            locations = []
+        } else {
+            locations = try JSONDecoder().decode([MovieLocation].self, from: response.data)
+        }
+
+        let locationsById = Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0) })
+
+        let specificCounts = countByLocationId.map { locationId, count in
+            let label = locationsById[locationId]?.display_name ?? "Location \(locationId)"
+            return LocationCountRow(label: label, entry_count: count)
+        }
+        .sorted {
+            if $0.entry_count == $1.entry_count {
+                return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+            }
+            return $0.entry_count > $1.entry_count
+        }
+
+        var groupedCountsMap: [String: Int] = [:]
+        for (locationId, count) in countByLocationId {
+            let location = locationsById[locationId]
+            let groupName = location?.location_group_name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let label = (groupName?.isEmpty == false) ? groupName! : "Ungrouped"
+            groupedCountsMap[label, default: 0] += count
+        }
+
+        let groupedCounts = groupedCountsMap.map { label, count in
+            LocationCountRow(label: label, entry_count: count)
+        }
+        .sorted {
+            if $0.entry_count == $1.entry_count {
+                return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+            }
+            return $0.entry_count > $1.entry_count
+        }
+
+        let mapPoints = locations.compactMap { location -> LocationMapPoint? in
+            guard
+                let count = countByLocationId[location.id],
+                let latitude = location.latitude,
+                let longitude = location.longitude
+            else {
+                return nil
+            }
+
+            return LocationMapPoint(
+                location_id: location.id,
+                location_name: location.display_name,
+                latitude: latitude,
+                longitude: longitude,
+                entry_count: count
+            )
+        }
+        .sorted { $0.entry_count > $1.entry_count }
+
+        return (mapPoints, specificCounts, groupedCounts)
     }
 }
 
@@ -4644,24 +5800,10 @@ private struct LocationStatisticsSection: View {
                     .foregroundColor(.secondary)
                     .padding(.vertical, 8)
             } else {
-                LazyVStack(spacing: 8) {
-                    ForEach(activeCounts) { row in
-                        HStack {
-                            Text(row.label)
-                                .font(.subheadline)
-                                .foregroundColor(Color.adaptiveText(scheme: colorScheme))
-                                .lineLimit(1)
-                            Spacer()
-                            Text("\(row.count)")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 10)
-                        .background(Color.white.opacity(0.05))
-                        .cornerRadius(10)
-                    }
-                }
+                LocationCountsList(
+                    counts: activeCounts,
+                    colorScheme: colorScheme
+                )
             }
         }
         .padding(16)
@@ -4711,6 +5853,77 @@ private struct FullscreenLocationMapView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Paginated Location Counts List
+
+private struct LocationCountsList: View {
+    let counts: [LocationCountRow]
+    let colorScheme: ColorScheme
+
+    private let pageSize = 5
+
+    @State private var isExpanded = false
+
+    private var displayedCounts: [LocationCountRow] {
+        isExpanded ? counts : Array(counts.prefix(pageSize))
+    }
+
+    private var hasMore: Bool {
+        counts.count > pageSize
+    }
+
+    private var remainingCount: Int {
+        max(0, counts.count - pageSize)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            LazyVStack(spacing: 8) {
+                ForEach(displayedCounts) { row in
+                    HStack {
+                        Text(row.label)
+                            .font(.subheadline)
+                            .foregroundColor(Color.adaptiveText(scheme: colorScheme))
+                            .lineLimit(1)
+                        Spacer()
+                        Text("\(row.count)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(10)
+                }
+            }
+
+            if hasMore {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                        Text(isExpanded ? "Show fewer" : "Show \(remainingCount) more location\(remainingCount == 1 ? "" : "s")")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .foregroundColor(.blue)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color.blue.opacity(0.08))
+                    .cornerRadius(10)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onChange(of: counts.map(\.id)) { _ in
+            // Reset expansion when the data set changes (mode toggle or year change)
+            isExpanded = false
         }
     }
 }

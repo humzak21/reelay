@@ -15,6 +15,7 @@ class SupabaseMovieService: ObservableObject {
     private let supabase: SupabaseClient
     @Published var isLoggedIn = false
     @Published var currentUser: User?
+    @Published private(set) var lastMovieMutationAt: Date?
     private var isInitialized = false
     private let initializationLock = NSLock()
 
@@ -140,6 +141,149 @@ class SupabaseMovieService: ObservableObject {
         let movies: [Movie] = try JSONDecoder().decode([Movie].self, from: response.data)
         return movies
     }
+
+    /// Fetch a single movie with full details by diary ID.
+    nonisolated func getMovieDetails(id: Int) async throws -> Movie {
+        try await supabase
+            .from("diary")
+            .select()
+            .eq("id", value: id)
+            .single()
+            .execute()
+            .value
+    }
+
+    /// Global-catalog browse API for paginated movie list items.
+    /// Uses RPC when enabled and falls back to full-client filtering/sorting pagination.
+    nonisolated func getMoviesPage(query: MovieBrowseQuery) async throws -> MoviePage<MovieListItem> {
+        if Config.moviesQueryV2Enabled {
+            do {
+                struct Params: Encodable {
+                    let page_number: Int
+                    let page_size: Int
+                    let sort_by: String
+                    let sort_ascending: Bool
+                    let filters: MovieFilterSet
+                }
+
+                let params = Params(
+                    page_number: query.page,
+                    page_size: query.pageSize,
+                    sort_by: query.sortBy.supabaseColumn,
+                    sort_ascending: query.ascending,
+                    filters: query.filters
+                )
+
+                let response = try await supabase
+                    .rpc("get_movies_page_v2", params: params)
+                    .execute()
+
+                if let page = try? decodeMoviePage(MovieListItem.self, from: response.data) {
+                    return page
+                }
+            } catch {
+                // Fall through to legacy compatibility mode.
+            }
+        }
+
+        let allMovies = try await fetchAllMoviesUnbounded(sortBy: query.sortBy, ascending: query.ascending)
+        let filtered = applyFilterSet(query.filters, to: allMovies)
+        let sorted = sortMovies(filtered, by: query.sortBy, ascending: query.ascending)
+        let pageItems = paginate(sorted, page: query.page, pageSize: query.pageSize).map(MovieListItem.init(from:))
+        let hasNext = query.page * query.pageSize < sorted.count
+
+        return MoviePage(
+            items: pageItems,
+            totalCount: sorted.count,
+            page: query.page,
+            pageSize: query.pageSize,
+            hasNextPage: hasNext
+        )
+    }
+
+    /// Global filter facets for browse/sheet controls.
+    nonisolated func getMovieFilterFacets() async throws -> MovieFilterFacets {
+        if Config.moviesQueryV2Enabled {
+            do {
+                let response = try await supabase
+                    .rpc("get_movie_filter_facets_v2")
+                    .execute()
+
+                if let direct = try? JSONDecoder().decode(MovieFilterFacets.self, from: response.data) {
+                    return direct
+                }
+                if let wrapped = try? JSONDecoder().decode([MovieFilterFacets].self, from: response.data),
+                   let first = wrapped.first {
+                    return first
+                }
+            } catch {
+                // Fall through to legacy compatibility mode.
+            }
+        }
+
+        let allMovies = try await fetchAllMoviesUnbounded(sortBy: .watchDate, ascending: false)
+        return buildFacets(from: allMovies)
+    }
+
+    /// Global-catalog search with paging support.
+    nonisolated func searchMoviesPage(query: MovieSearchPageQuery) async throws -> MoviePage<MovieListItem> {
+        if Config.moviesQueryV2Enabled {
+            do {
+                struct Params: Encodable {
+                    let search_text: String
+                    let page_number: Int
+                    let page_size: Int
+                    let sort_by: String
+                    let sort_ascending: Bool
+                    let filters: MovieFilterSet
+                }
+
+                let params = Params(
+                    search_text: query.searchText,
+                    page_number: query.page,
+                    page_size: query.pageSize,
+                    sort_by: query.sortBy.supabaseColumn,
+                    sort_ascending: query.ascending,
+                    filters: query.filters
+                )
+
+                let response = try await supabase
+                    .rpc("search_movies_page_v2", params: params)
+                    .execute()
+
+                if let page = try? decodeMoviePage(MovieListItem.self, from: response.data) {
+                    return page
+                }
+            } catch {
+                // Fall through to legacy compatibility mode.
+            }
+        }
+
+        let allMovies = try await fetchAllMoviesUnbounded(sortBy: .watchDate, ascending: false)
+        let normalizedQuery = query.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        let matching = allMovies.filter { movie in
+            guard !normalizedQuery.isEmpty else { return true }
+            return movie.title.lowercased().contains(normalizedQuery)
+                || (movie.director?.lowercased().contains(normalizedQuery) ?? false)
+                || (movie.overview?.lowercased().contains(normalizedQuery) ?? false)
+                || (movie.review?.lowercased().contains(normalizedQuery) ?? false)
+                || (movie.tags?.lowercased().contains(normalizedQuery) ?? false)
+        }
+
+        let filtered = applyFilterSet(query.filters, to: matching)
+        let sorted = sortMovies(filtered, by: query.sortBy, ascending: query.ascending)
+        let pageItems = paginate(sorted, page: query.page, pageSize: query.pageSize).map(MovieListItem.init(from:))
+        let hasNext = query.page * query.pageSize < sorted.count
+
+        return MoviePage(
+            items: pageItems,
+            totalCount: sorted.count,
+            page: query.page,
+            pageSize: query.pageSize,
+            hasNextPage: hasNext
+        )
+    }
     
     /// Add a new movie to the diary
     nonisolated func addMovie(_ movieData: AddMovieRequest) async throws -> Movie {
@@ -170,6 +314,7 @@ class SupabaseMovieService: ObservableObject {
             }
         }
 
+        publishMovieMutationEvent()
         return movie
     }
     
@@ -186,7 +331,8 @@ class SupabaseMovieService: ObservableObject {
         guard let movie = movies.first else {
             throw SupabaseMovieError.noMovieReturned
         }
-        
+
+        publishMovieMutationEvent()
         return movie
     }
     
@@ -197,6 +343,7 @@ class SupabaseMovieService: ObservableObject {
             .delete()
             .eq("id", value: id)
             .execute()
+        publishMovieMutationEvent()
     }
     
     /// Check if a movie with the given TMDB ID already exists
@@ -235,6 +382,7 @@ class SupabaseMovieService: ObservableObject {
             .update(["poster_url": newPosterUrl])
             .eq("tmdb_id", value: tmdbId)
             .execute()
+        publishMovieMutationEvent()
     }
     
     /// Update backdrop URL for all movies with the given TMDB ID
@@ -247,6 +395,7 @@ class SupabaseMovieService: ObservableObject {
             .update(["backdrop_path": newBackdropUrl])
             .eq("tmdb_id", value: tmdbId)
             .execute()
+        publishMovieMutationEvent()
     }
     
     /// Get movies with detailed ratings in the specified range
@@ -341,7 +490,7 @@ class SupabaseMovieService: ObservableObject {
                 .single()
                 .execute()
                 .value
-            
+            publishMovieMutationEvent()
 
             
             return response
@@ -362,7 +511,7 @@ class SupabaseMovieService: ObservableObject {
                 .single()
                 .execute()
                 .value
-            
+            publishMovieMutationEvent()
             return response
         } catch {
             throw SupabaseMovieError.updateFailed(error)
@@ -380,9 +529,16 @@ class SupabaseMovieService: ObservableObject {
                 .execute()
                 .value
 
+            publishMovieMutationEvent()
             return response
         } catch {
             throw SupabaseMovieError.updateFailed(error)
+        }
+    }
+
+    private nonisolated func publishMovieMutationEvent() {
+        Task { @MainActor [weak self] in
+            self?.lastMovieMutationAt = Date()
         }
     }
     
@@ -474,6 +630,304 @@ class SupabaseMovieService: ObservableObject {
         let movies = try JSONDecoder().decode([OnThisDayMovie].self, from: response.data)
         return movies
     }
+
+    // MARK: - Query Engine Helpers
+
+    private nonisolated func decodeMoviePage<T: Codable & Sendable>(
+        _ type: T.Type,
+        from data: Data
+    ) throws -> MoviePage<T> {
+        if let direct = try? JSONDecoder().decode(MoviePage<T>.self, from: data) {
+            return direct
+        }
+
+        if let wrapped = try? JSONDecoder().decode([MoviePage<T>].self, from: data),
+           let first = wrapped.first {
+            return first
+        }
+
+        let rows = try JSONDecoder().decode([MoviePageRpcRow<T>].self, from: data)
+        guard let first = rows.first else {
+            return MoviePage(items: [], totalCount: 0, page: 1, pageSize: 0, hasNextPage: false)
+        }
+
+        let page = first.page ?? 1
+        let pageSize = first.pageSize ?? first.items.count
+        let totalCount = first.totalCount ?? first.items.count
+        let hasNextPage = first.hasNextPage ?? (page * max(pageSize, 1) < totalCount)
+
+        return MoviePage(
+            items: first.items,
+            totalCount: totalCount,
+            page: page,
+            pageSize: pageSize,
+            hasNextPage: hasNextPage
+        )
+    }
+
+    private nonisolated func fetchAllMoviesUnbounded(
+        sortBy: MovieSortField,
+        ascending: Bool,
+        batchSize: Int = 2000
+    ) async throws -> [Movie] {
+        var allMovies: [Movie] = []
+        var offset = 0
+
+        while true {
+            let batch = try await getMovies(
+                sortBy: sortBy,
+                ascending: ascending,
+                limit: batchSize,
+                offset: offset
+            )
+            allMovies.append(contentsOf: batch)
+
+            if batch.count < batchSize {
+                break
+            }
+            offset += batchSize
+        }
+
+        return allMovies
+    }
+
+    private nonisolated func paginate<T>(_ items: [T], page: Int, pageSize: Int) -> [T] {
+        guard !items.isEmpty else { return [] }
+        let safePage = max(1, page)
+        let safePageSize = max(1, pageSize)
+        let start = (safePage - 1) * safePageSize
+        guard start < items.count else { return [] }
+        let end = min(start + safePageSize, items.count)
+        return Array(items[start..<end])
+    }
+
+    private nonisolated func sortMovies(
+        _ movies: [Movie],
+        by sortBy: MovieSortField,
+        ascending: Bool
+    ) -> [Movie] {
+        movies.sorted { lhs, rhs in
+            switch sortBy {
+            case .title:
+                let a = lhs.title.lowercased()
+                let b = rhs.title.lowercased()
+                if a == b {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: ascending)
+                }
+                return ascending ? a < b : a > b
+
+            case .watchDate:
+                let a = lhs.watch_date ?? ""
+                let b = rhs.watch_date ?? ""
+                if a == b {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: ascending)
+                }
+                return ascending ? a < b : a > b
+
+            case .releaseDate:
+                let a = lhs.release_year ?? Int.min
+                let b = rhs.release_year ?? Int.min
+                if a == b {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: ascending)
+                }
+                return ascending ? a < b : a > b
+
+            case .rating:
+                let a = lhs.rating ?? -1
+                let b = rhs.rating ?? -1
+                if a == b {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: ascending)
+                }
+                return ascending ? a < b : a > b
+
+            case .detailedRating:
+                let a = lhs.detailed_rating ?? -1
+                let b = rhs.detailed_rating ?? -1
+                if a == b {
+                    return tieBreak(lhs: lhs, rhs: rhs, ascending: ascending)
+                }
+                return ascending ? a < b : a > b
+
+            case .dateAdded:
+                let a = lhs.created_at ?? ""
+                let b = rhs.created_at ?? ""
+                if a == b {
+                    return ascending ? lhs.id < rhs.id : lhs.id > rhs.id
+                }
+                return ascending ? a < b : a > b
+            }
+        }
+    }
+
+    private nonisolated func tieBreak(lhs: Movie, rhs: Movie, ascending: Bool) -> Bool {
+        let lhsCreated = lhs.created_at ?? ""
+        let rhsCreated = rhs.created_at ?? ""
+        if lhsCreated == rhsCreated {
+            return ascending ? lhs.id < rhs.id : lhs.id > rhs.id
+        }
+        return ascending ? lhsCreated < rhsCreated : lhsCreated > rhsCreated
+    }
+
+    private nonisolated func applyFilterSet(_ filters: MovieFilterSet, to movies: [Movie]) -> [Movie] {
+        guard !filters.isEmpty else { return movies }
+
+        return movies.filter { movie in
+            if !filters.tags.isEmpty {
+                guard let movieTags = movie.tags else { return false }
+                let tags = movieTags.components(separatedBy: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                let requestedTags = Set(filters.tags.map { $0.lowercased() })
+                if requestedTags.isDisjoint(with: tags) {
+                    return false
+                }
+            }
+
+            if !filters.genres.isEmpty {
+                guard let movieGenres = movie.genres else { return false }
+                if Set(filters.genres).isDisjoint(with: movieGenres) {
+                    return false
+                }
+            }
+
+            if !filters.decades.isEmpty {
+                guard let year = movie.release_year else { return false }
+                let decade = "\(year / 10 * 10)s"
+                if !filters.decades.contains(decade) {
+                    return false
+                }
+            }
+
+            if !filters.releaseYears.isEmpty {
+                guard let year = movie.release_year else { return false }
+                if !filters.releaseYears.contains(year) {
+                    return false
+                }
+            }
+
+            if let minRating = filters.minRating {
+                guard let value = movie.rating, value >= minRating else { return false }
+            }
+            if let maxRating = filters.maxRating {
+                guard let value = movie.rating, value <= maxRating else { return false }
+            }
+            if let minDetailed = filters.minDetailedRating {
+                guard let value = movie.detailed_rating, value >= minDetailed else { return false }
+            }
+            if let maxDetailed = filters.maxDetailedRating {
+                guard let value = movie.detailed_rating, value <= maxDetailed else { return false }
+            }
+            if let minRuntime = filters.minRuntime {
+                guard let value = movie.runtime, value >= minRuntime else { return false }
+            }
+            if let maxRuntime = filters.maxRuntime {
+                guard let value = movie.runtime, value <= maxRuntime else { return false }
+            }
+
+            if filters.showRewatchesOnly && !movie.isRewatchMovie {
+                return false
+            }
+            if filters.hideRewatches && movie.isRewatchMovie {
+                return false
+            }
+            if filters.favoritesOnly && !movie.isFavorited {
+                return false
+            }
+
+            if let hasReview = filters.hasReview {
+                let reviewExists = !(movie.review?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                if hasReview != reviewExists {
+                    return false
+                }
+            }
+
+            if filters.startWatchDate != nil || filters.endWatchDate != nil {
+                guard let watchDateString = movie.watch_date,
+                      let watchDate = DateFormatter.movieDateFormatter.date(from: watchDateString) else {
+                    return false
+                }
+
+                if let startString = filters.startWatchDate,
+                   let start = DateFormatter.movieDateFormatter.date(from: startString),
+                   watchDate < start {
+                    return false
+                }
+                if let endString = filters.endWatchDate,
+                   let end = DateFormatter.movieDateFormatter.date(from: endString),
+                   watchDate > end {
+                    return false
+                }
+            }
+
+            return true
+        }
+    }
+
+    private nonisolated func buildFacets(from movies: [Movie]) -> MovieFilterFacets {
+        let tags: Set<String> = Set(movies.compactMap { $0.tags }
+            .flatMap { $0.components(separatedBy: ",") }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty })
+
+        let genres: Set<String> = Set(movies.compactMap { $0.genres }.flatMap { $0 })
+        let decades: Set<String> = Set(movies.compactMap { movie in
+            guard let year = movie.release_year else { return nil }
+            return "\(year / 10 * 10)s"
+        })
+
+        let ratings = movies.compactMap(\.rating)
+        let detailedRatings = movies.compactMap(\.detailed_rating)
+        let runtimes = movies.compactMap(\.runtime)
+        let watchDates = movies.compactMap { movie -> String? in
+            guard let watchDate = movie.watch_date,
+                  DateFormatter.movieDateFormatter.date(from: watchDate) != nil else {
+                return nil
+            }
+            return watchDate
+        }.sorted()
+
+        return MovieFilterFacets(
+            availableTags: Array(tags).sorted(),
+            availableGenres: Array(genres).sorted(),
+            availableDecades: Array(decades).sorted {
+                (Int($0.dropLast()) ?? 0) > (Int($1.dropLast()) ?? 0)
+            },
+            ratingMin: ratings.min() ?? 0,
+            ratingMax: ratings.max() ?? 5,
+            detailedRatingMin: detailedRatings.min() ?? 0,
+            detailedRatingMax: detailedRatings.max() ?? 100,
+            runtimeMin: runtimes.min() ?? 0,
+            runtimeMax: runtimes.max() ?? 300,
+            earliestWatchDate: watchDates.first,
+            latestWatchDate: watchDates.last
+        )
+    }
+}
+
+private struct MoviePageRpcRow<T: Codable & Sendable>: Decodable {
+    let items: [T]
+    let totalCount: Int?
+    let page: Int?
+    let pageSize: Int?
+    let hasNextPage: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case totalCount = "total_count"
+        case page
+        case pageSize = "page_size"
+        case pageSizeOut = "page_size_out"
+        case hasNextPage = "has_next_page"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decodeIfPresent([T].self, forKey: .items) ?? []
+        totalCount = try container.decodeIfPresent(Int.self, forKey: .totalCount)
+        page = try container.decodeIfPresent(Int.self, forKey: .page)
+        pageSize = try container.decodeIfPresent(Int.self, forKey: .pageSize)
+            ?? (try container.decodeIfPresent(Int.self, forKey: .pageSizeOut))
+        hasNextPage = try container.decodeIfPresent(Bool.self, forKey: .hasNextPage)
+    }
 }
 
 // MARK: - Supporting Types
@@ -540,7 +994,7 @@ struct UpdateMovieRequest: Codable, @unchecked Sendable {
     let location_id: Int?
 }
 
-enum MovieSortField: String, CaseIterable {
+enum MovieSortField: String, CaseIterable, Codable, Sendable {
     case title = "title"
     case watchDate = "watched_date"
     case releaseDate = "release_year"
@@ -570,6 +1024,7 @@ enum MovieSortField: String, CaseIterable {
 /// Includes all movie fields plus the computed watched_year field
 struct OnThisDayMovie: Codable, Identifiable, @unchecked Sendable {
     let id: Int
+    let user_id: String?
     let title: String
     let release_year: Int?
     let release_date: String?
@@ -654,7 +1109,8 @@ struct OnThisDayMovie: Codable, Identifiable, @unchecked Sendable {
             created_at: created_at,
             updated_at: updated_at,
             favorited: favorited,
-            location_id: location_id
+            location_id: location_id,
+            user_id: user_id
         )
     }
 
@@ -684,6 +1140,7 @@ struct OnThisDayMovie: Codable, Identifiable, @unchecked Sendable {
 extension OnThisDayMovie {
     init(from movie: Movie, watchedYear: Int) {
         self.id = movie.id
+        self.user_id = movie.user_id
         self.title = movie.title
         self.release_year = movie.release_year
         self.release_date = movie.release_date

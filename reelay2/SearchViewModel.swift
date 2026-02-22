@@ -18,9 +18,11 @@ class SearchViewModel: ObservableObject {
     @Published var hasSearched = false
     @Published var parsedSearchType: SearchType?
     
-    private let movieService = SupabaseMovieService.shared
+    private let repository = MoviesRepository()
     private var searchCancellable: AnyCancellable?
+    private var filtersCancellable: AnyCancellable?
     private var searchTask: Task<Void, Never>?
+    private var lastSubmittedQuery: String?
     
     // Available tags from centralized configuration
     private var availableTags: [String] {
@@ -63,45 +65,7 @@ class SearchViewModel: ObservableObject {
     }
     
     var filteredAndSortedResults: [Movie] {
-        var results = searchResults
-        
-        // Apply filters
-        if let year = filterByYear {
-            results = results.filter { $0.release_year == year }
-        }
-        
-        if let minRating = filterByRating {
-            results = results.filter { ($0.rating ?? 0) >= minRating }
-        }
-        
-        if showOnlyRewatches {
-            results = results.filter { $0.isRewatchMovie }
-        }
-        
-        // Apply sorting
-        switch sortBy {
-        case .relevance:
-            // Keep original order from search (most relevant)
-            break
-        case .watchDateNewest:
-            results.sort { ($0.watch_date ?? "") > ($1.watch_date ?? "") }
-        case .watchDateOldest:
-            results.sort { ($0.watch_date ?? "") < ($1.watch_date ?? "") }
-        case .ratingHighest:
-            results.sort { ($0.detailed_rating ?? 0) > ($1.detailed_rating ?? 0) }
-        case .ratingLowest:
-            results.sort { ($0.detailed_rating ?? 0) < ($1.detailed_rating ?? 0) }
-        case .titleAZ:
-            results.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        case .titleZA:
-            results.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
-        case .yearNewest:
-            results.sort { ($0.release_year ?? 0) > ($1.release_year ?? 0) }
-        case .yearOldest:
-            results.sort { ($0.release_year ?? 0) < ($1.release_year ?? 0) }
-        }
-        
-        return results
+        searchResults
     }
     
     var availableYears: [Int] {
@@ -115,6 +79,7 @@ class SearchViewModel: ObservableObject {
     
     init() {
         setupSearchDebouncing()
+        setupFilterAndSortObservers()
     }
     
     private func setupSearchDebouncing() {
@@ -137,46 +102,59 @@ class SearchViewModel: ObservableObject {
                 }
             }
     }
+
+    private func setupFilterAndSortObservers() {
+        filtersCancellable = Publishers.CombineLatest4(
+            $sortBy.removeDuplicates(),
+            $filterByYear.removeDuplicates(),
+            $filterByRating.removeDuplicates(),
+            $showOnlyRewatches.removeDuplicates()
+        )
+        .dropFirst()
+        .sink { [weak self] _, _, _, _ in
+            guard let self = self,
+                  let existingQuery = self.lastSubmittedQuery,
+                  !existingQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+            self.searchTask?.cancel()
+            self.searchTask = Task {
+                await self.performSearch(query: existingQuery)
+            }
+        }
+    }
     
     func performSearch(query: String) async {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else {
             clearSearch()
             return
         }
         
+        lastSubmittedQuery = trimmedQuery
         isSearching = true
         errorMessage = nil
         hasSearched = true
         
         // Parse the search query to determine search type
-        let searchType = parseSearchQuery(query)
+        let searchType = parseSearchQuery(trimmedQuery)
         parsedSearchType = searchType
         
         do {
-            // Get all movies first with a higher limit
-            let allResults = try await movieService.getMovies(
-                searchQuery: nil, // Get all movies
-                sortBy: .watchDate,
-                ascending: false,
-                limit: 5000
-            )
-            
-            // Filter results based on parsed search type
-            let filteredResults = filterMovies(allResults, by: searchType)
-            
-            // Calculate relevance scores and sort by relevance
-            let scoredResults = filteredResults.map { movie -> (movie: Movie, score: Double) in
-                let score = calculateRelevanceScore(for: movie, query: query, searchType: searchType)
-                return (movie, score)
+            let request = buildSearchRequest(for: trimmedQuery, searchType: searchType)
+            var results = try await fetchAllSearchResults(request: request)
+
+            if sortBy == .relevance {
+                let scoredResults = results.map { movie -> (movie: Movie, score: Double) in
+                    let score = calculateRelevanceScore(for: movie, query: trimmedQuery, searchType: searchType)
+                    return (movie, score)
+                }
+                results = scoredResults
+                    .sorted { $0.score > $1.score }
+                    .map(\.movie)
             }
-            
-            // Sort by relevance score (highest first)
-            let sortedResults = scoredResults
-                .sorted { $0.score > $1.score }
-                .map { $0.movie }
-            
+
             await MainActor.run {
-                self.searchResults = sortedResults
+                self.searchResults = results
                 self.isSearching = false
             }
             
@@ -186,6 +164,148 @@ class SearchViewModel: ObservableObject {
                 self.searchResults = []
                 self.isSearching = false
             }
+        }
+    }
+
+    private func buildSearchRequest(for query: String, searchType: SearchType) -> MovieSearchPageQuery {
+        let (searchSortField, ascending) = mapSortOption(sortBy)
+        var parsedFilters = MovieFilterSet()
+        var serverSearchText = query
+
+        switch searchType {
+        case .general(let text):
+            serverSearchText = text
+        case .year(let year):
+            parsedFilters.releaseYears = [year]
+            serverSearchText = ""
+        case .tag(let tag):
+            parsedFilters.tags = [tag]
+            serverSearchText = ""
+        case .starRating(let stars):
+            parsedFilters.minRating = Double(stars)
+            parsedFilters.maxRating = Double(stars) + 0.99
+            serverSearchText = ""
+        case .combined(let parts):
+            var generalTerms: [String] = []
+            for part in parts {
+                switch part {
+                case .general(let text):
+                    generalTerms.append(text)
+                case .year(let year):
+                    parsedFilters.releaseYears.append(year)
+                case .tag(let tag):
+                    parsedFilters.tags.append(tag)
+                case .starRating(let stars):
+                    parsedFilters.minRating = Double(stars)
+                    parsedFilters.maxRating = Double(stars) + 0.99
+                case .combined:
+                    break
+                }
+            }
+            serverSearchText = generalTerms.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let uiFilters = MovieFilterSet(
+            releaseYears: filterByYear.map { [$0] } ?? [],
+            showRewatchesOnly: showOnlyRewatches,
+            minRating: filterByRating
+        )
+
+        let merged = mergeFilters(parsed: parsedFilters, ui: uiFilters)
+
+        return MovieSearchPageQuery(
+            searchText: serverSearchText,
+            sortBy: searchSortField,
+            ascending: ascending,
+            filters: merged,
+            page: 1,
+            pageSize: 250
+        )
+    }
+
+    private func fetchAllSearchResults(request: MovieSearchPageQuery) async throws -> [Movie] {
+        var query = request
+        var page = 1
+        var all: [Movie] = []
+
+        while true {
+            query.page = page
+            let response = try await repository.searchPage(query: query, forceRefresh: page == 1)
+            all.append(contentsOf: response.items.map { $0.toMovie() })
+
+            if !response.hasNextPage {
+                break
+            }
+            page += 1
+        }
+
+        return all
+    }
+
+    private func mergeFilters(parsed: MovieFilterSet, ui: MovieFilterSet) -> MovieFilterSet {
+        var merged = parsed
+
+        merged.tags = Array(Set(parsed.tags + ui.tags))
+        merged.genres = Array(Set(parsed.genres + ui.genres))
+        merged.releaseYears = Array(Set(parsed.releaseYears + ui.releaseYears))
+        merged.decades = Array(Set(parsed.decades + ui.decades))
+
+        merged.showRewatchesOnly = parsed.showRewatchesOnly || ui.showRewatchesOnly
+        merged.hideRewatches = parsed.hideRewatches || ui.hideRewatches
+        merged.favoritesOnly = parsed.favoritesOnly || ui.favoritesOnly
+
+        merged.startWatchDate = parsed.startWatchDate ?? ui.startWatchDate
+        merged.endWatchDate = parsed.endWatchDate ?? ui.endWatchDate
+        merged.minRuntime = parsed.minRuntime ?? ui.minRuntime
+        merged.maxRuntime = parsed.maxRuntime ?? ui.maxRuntime
+        merged.hasReview = parsed.hasReview ?? ui.hasReview
+
+        merged.minRating = maxOptional(parsed.minRating, ui.minRating)
+        merged.maxRating = minOptional(parsed.maxRating, ui.maxRating)
+        merged.minDetailedRating = maxOptional(parsed.minDetailedRating, ui.minDetailedRating)
+        merged.maxDetailedRating = minOptional(parsed.maxDetailedRating, ui.maxDetailedRating)
+
+        return merged
+    }
+
+    private func mapSortOption(_ option: SearchSortOption) -> (MovieSortField, Bool) {
+        switch option {
+        case .relevance:
+            return (.watchDate, false)
+        case .watchDateNewest:
+            return (.watchDate, false)
+        case .watchDateOldest:
+            return (.watchDate, true)
+        case .ratingHighest:
+            return (.detailedRating, false)
+        case .ratingLowest:
+            return (.detailedRating, true)
+        case .titleAZ:
+            return (.title, true)
+        case .titleZA:
+            return (.title, false)
+        case .yearNewest:
+            return (.releaseDate, false)
+        case .yearOldest:
+            return (.releaseDate, true)
+        }
+    }
+
+    private func maxOptional(_ lhs: Double?, _ rhs: Double?) -> Double? {
+        switch (lhs, rhs) {
+        case let (l?, r?): return max(l, r)
+        case let (l?, nil): return l
+        case let (nil, r?): return r
+        default: return nil
+        }
+    }
+
+    private func minOptional(_ lhs: Double?, _ rhs: Double?) -> Double? {
+        switch (lhs, rhs) {
+        case let (l?, r?): return min(l, r)
+        case let (l?, nil): return l
+        case let (nil, r?): return r
+        default: return nil
         }
     }
     
@@ -247,44 +367,6 @@ class SearchViewModel: ObservableObject {
         
         // Default to general search
         return .general(trimmedQuery)
-    }
-    
-    private func filterMovies(_ movies: [Movie], by searchType: SearchType) -> [Movie] {
-        switch searchType {
-        case .general(let query):
-            return movies.filter { movie in
-                let lowercaseQuery = query.lowercased()
-                return movie.title.lowercased().contains(lowercaseQuery) ||
-                       movie.director?.lowercased().contains(lowercaseQuery) == true ||
-                       movie.overview?.lowercased().contains(lowercaseQuery) == true ||
-                       movie.tags?.lowercased().contains(lowercaseQuery) == true ||
-                       movie.review?.lowercased().contains(lowercaseQuery) == true
-            }
-            
-        case .year(let year):
-            return movies.filter { $0.release_year == year }
-            
-        case .tag(let tag):
-            return movies.filter { movie in
-                guard let tags = movie.tags?.lowercased() else { return false }
-                return tags.contains(tag.lowercased())
-            }
-            
-        case .starRating(let stars):
-            return movies.filter { movie in
-                guard let rating = movie.rating else { return false }
-                return Int(rating) == stars
-            }
-            
-        case .combined(let searchTypes):
-            return movies.filter { movie in
-                // Movie must match ALL search criteria
-                return searchTypes.allSatisfy { type in
-                    let filtered = filterMovies([movie], by: type)
-                    return !filtered.isEmpty
-                }
-            }
-        }
     }
     
     private func calculateRelevanceScore(for movie: Movie, query: String, searchType: SearchType) -> Double {
@@ -393,6 +475,7 @@ class SearchViewModel: ObservableObject {
         hasSearched = false
         errorMessage = nil
         parsedSearchType = nil
+        lastSubmittedQuery = nil
         clearFilters()
     }
     

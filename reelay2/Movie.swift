@@ -7,8 +7,19 @@
 
 import Foundation
 
+enum TMDBPosterSize: String {
+    case w92
+    case w154
+    case w185
+    case w342
+    case w500
+    case w780
+    case original
+}
+
 struct Movie: Codable, Identifiable, @unchecked Sendable {
     let id: Int
+    let user_id: String?
     let title: String
     let release_year: Int?
     let release_date: String?
@@ -41,8 +52,9 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
     let updated_at: String?
     let favorited: Bool?
     
-    init(id: Int, title: String, release_year: Int?, release_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, watch_date: String?, is_rewatch: Bool?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, director: String?, runtime: Int?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_title: String?, tagline: String?, status: String?, budget: Int?, revenue: Int?, imdb_id: String?, homepage: String?, genres: [String]?, created_at: String?, updated_at: String?, favorited: Bool? = nil, location_id: Int? = nil) {
+    init(id: Int, title: String, release_year: Int?, release_date: String?, rating: Double?, detailed_rating: Double?, review: String?, tags: String?, watch_date: String?, is_rewatch: Bool?, tmdb_id: Int?, overview: String?, poster_url: String?, backdrop_path: String?, director: String?, runtime: Int?, vote_average: Double?, vote_count: Int?, popularity: Double?, original_language: String?, original_title: String?, tagline: String?, status: String?, budget: Int?, revenue: Int?, imdb_id: String?, homepage: String?, genres: [String]?, created_at: String?, updated_at: String?, favorited: Bool? = nil, location_id: Int? = nil, user_id: String? = nil) {
         self.id = id
+        self.user_id = user_id
         self.title = title
         self.release_year = release_year
         self.release_date = release_date
@@ -78,6 +90,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
     
     enum CodingKeys: String, CodingKey {
         case id
+        case user_id
         case title
         case release_year
         case release_date
@@ -115,6 +128,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
         id = try container.decode(Int.self, forKey: .id)
+        user_id = try container.decodeIfPresent(String.self, forKey: .user_id)
         title = try container.decode(String.self, forKey: .title)
         release_year = try container.decodeIfPresent(Int.self, forKey: .release_year)
         release_date = try container.decodeIfPresent(String.self, forKey: .release_date)
@@ -160,6 +174,7 @@ struct Movie: Codable, Identifiable, @unchecked Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(user_id, forKey: .user_id)
         try container.encode(title, forKey: .title)
         try container.encodeIfPresent(release_year, forKey: .release_year)
         try container.encodeIfPresent(release_date, forKey: .release_date)
@@ -246,6 +261,20 @@ extension Movie {
         // Fallback: try to use as-is
         return URL(string: urlString)
     }
+
+    func posterURL(for size: TMDBPosterSize) -> URL? {
+        guard let urlString = poster_url, !urlString.isEmpty else { return nil }
+
+        if let relativePath = normalizedTMDBPosterPath(from: urlString) {
+            return URL(string: "https://image.tmdb.org/t/p/\(size.rawValue)\(relativePath)")
+        }
+
+        if urlString.hasPrefix("http") {
+            return URL(string: urlString)
+        }
+
+        return URL(string: urlString)
+    }
     
     var backdropURL: URL? {
         guard let urlString = backdrop_path, !urlString.isEmpty else { return nil }
@@ -270,5 +299,28 @@ extension Movie {
     
     var isFavorited: Bool {
         return favorited ?? false
+    }
+
+    private func normalizedTMDBPosterPath(from rawValue: String) -> String? {
+        if rawValue.hasPrefix("/") {
+            return rawValue
+        }
+
+        guard let components = URLComponents(string: rawValue),
+              let host = components.host?.lowercased(),
+              host.contains("image.tmdb.org") else {
+            return nil
+        }
+
+        let path = components.path
+        if let sizeRange = path.range(of: #"/t/p/(w\d+|original)/"#, options: .regularExpression) {
+            return "/" + String(path[sizeRange.upperBound...])
+        }
+
+        if path.hasPrefix("/t/p/"), let lastSlash = path.lastIndex(of: "/") {
+            return String(path[lastSlash...])
+        }
+
+        return nil
     }
 }

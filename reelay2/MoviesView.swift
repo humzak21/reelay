@@ -7,13 +7,13 @@
 
 import SDWebImageSwiftUI
 import SwiftUI
+import Combine
 
 struct MoviesView: View {
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @ObservedObject private var movieService = SupabaseMovieService.shared
-  @State private var movies: [Movie] = []
-  @State private var isLoading = false
-  @State private var errorMessage: String?
+  @StateObject private var viewModel = MoviesViewModel()
   @State private var showingAddMovie = false
   @State private var showingAddTelevision = false
   @State private var showingAddAlbum = false
@@ -33,9 +33,8 @@ struct MoviesView: View {
   @State private var selectedDate: Date = Date()
   @State private var currentCalendarMonth: Date = Date()
   @State private var longPressedMovieId: Int?
-  @ObservedObject private var listService = SupabaseListService.shared
+  private let listService = SupabaseListService.shared
   @StateObject private var filterViewModel = FilterViewModel()
-  @ObservedObject private var monthDescriptorService = MonthDescriptorService.shared
   @State private var movieToAddToLists: Movie?
   @State private var movieToChangePoster: Movie?
   @State private var movieToChangeBackdrop: Movie?
@@ -43,14 +42,6 @@ struct MoviesView: View {
   #if os(macOS)
   @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
   #endif
-
-  // MARK: - Efficient Loading States
-  @State private var hasLoadedInitially = false
-  @State private var isInitialLoad = true
-  @State private var lastRefreshTime: Date = Date.distantPast
-  @State private var isRefreshing = false
-
-  private let refreshInterval: TimeInterval = 300  // 5 minutes
 
   private var appBackground: Color {
     #if canImport(UIKit)
@@ -64,21 +55,8 @@ struct MoviesView: View {
     case list, tile, calendar
   }
 
-  private var filteredMovies: [Movie] {
-    let filtered = filterViewModel.filterMovies(movies)
-    return sortMovies(filtered)
-  }
-
-  private var groupedMovies: [(String, [Movie])] {
-    let grouped = Dictionary(grouping: filteredMovies) { movie in
-      getMonthYearFromWatchDate(movie.watch_date)
-    }
-    return grouped.sorted { first, second in
-      let date1 = getDateFromMonthYear(first.key)
-      let date2 = getDateFromMonthYear(second.key)
-      return date1 > date2  // Most recent first
-    }
-  }
+  private var movies: [Movie] { viewModel.allMovies }
+  private var filteredMovies: [Movie] { viewModel.filteredMovies }
 
   private var viewModeIcon: String {
     switch viewMode {
@@ -93,6 +71,27 @@ struct MoviesView: View {
 
   private var navigationTitle: String {
     return "Movies"
+  }
+
+  private func cycleViewMode() {
+    switch viewMode {
+    case .list:
+      viewMode = .tile
+    case .tile:
+      viewMode = .calendar
+    case .calendar:
+      viewMode = .list
+    }
+  }
+
+  private func syncViewModelInputs() {
+    viewModel.configure(
+      sortBy: sortBy,
+      sortAscending: sortAscending,
+      filters: filterViewModel.appliedFiltersState,
+      selectedDate: selectedDate,
+      currentCalendarMonth: currentCalendarMonth
+    )
   }
 
   // MARK: - Local Sorting Logic
@@ -159,13 +158,14 @@ struct MoviesView: View {
   }
 
   var body: some View {
+    presentedView
+  }
+
+  private var baseView: some View {
     VStack(spacing: 0) {
-      // Filter summary bar
       if filterViewModel.hasActiveFilters {
         filterSummaryBar
       }
-
-      // Main content
       contentView
     }
     .navigationTitle(navigationTitle)
@@ -176,245 +176,253 @@ struct MoviesView: View {
     .background(Color(.windowBackgroundColor))
     #endif
     .toolbar {
-      ToolbarItemGroup {
-        Button(action: {
+      moviesToolbar
+    }
+  }
+
+  @ToolbarContentBuilder
+  private var moviesToolbar: some ToolbarContent {
+    ToolbarItemGroup {
+      Button(action: {
+        if reduceMotion {
+          cycleViewMode()
+        } else {
           withAnimation(.easeInOut(duration: 0.3)) {
-            switch viewMode {
-            case .list:
-              viewMode = .tile
-            case .tile:
-              viewMode = .calendar
-            case .calendar:
-              viewMode = .list
-            }
-          }
-        }) {
-          Image(systemName: viewModeIcon)
-            .font(.system(size: 16, weight: .medium))
-        }
-        
-        Button(action: {
-          showingFilters = true
-        }) {
-          ZStack {
-            Image(systemName: "line.3.horizontal.decrease")
-            if filterViewModel.hasActiveFilters {
-              Circle()
-                .fill(.red)
-                .frame(width: 8, height: 8)
-                .offset(x: 8, y: -8)
-            }
+            cycleViewMode()
           }
         }
-
-        Button(action: {
-          showingSortOptions = true
-        }) {
-          Image(
-            systemName: sortAscending
-              ? "arrow.up" : "arrow.down"
-          )
+      }) {
+        Image(systemName: viewModeIcon)
           .font(.system(size: 16, weight: .medium))
-        }
       }
-      
-      ToolbarSpacer(.fixed)
+      .accessibilityIdentifier("movies.viewModeButton")
 
-      ToolbarItem(placement: .confirmationAction) {
-        Menu {
-          Button(action: {
-            showingAddMovie = true
-          }) {
-            Label("Add Movie", systemImage: "film")
+      Button(action: {
+        showingFilters = true
+      }) {
+        ZStack {
+          Image(systemName: "line.3.horizontal.decrease")
+          if filterViewModel.hasActiveFilters {
+            Circle()
+              .fill(.red)
+              .frame(width: 8, height: 8)
+              .offset(x: 8, y: -8)
           }
+        }
+      }
+      .accessibilityIdentifier("movies.filterButton")
 
-          Button(action: {
-            showingAddTelevision = true
-          }) {
-            Label("Add TV Show", systemImage: "tv")
-          }
+      Button(action: {
+        showingSortOptions = true
+      }) {
+        Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+          .font(.system(size: 16, weight: .medium))
+      }
+      .accessibilityIdentifier("movies.sortButton")
+    }
 
-          Button(action: {
-            showingAddAlbum = true
-          }) {
-            Label("Add Album", systemImage: "music.note")
+    ToolbarSpacer(.fixed)
+
+    ToolbarItem(placement: .confirmationAction) {
+      Menu {
+        Button(action: {
+          showingAddMovie = true
+        }) {
+          Label("Add Movie", systemImage: "film")
+        }
+
+        Button(action: {
+          showingAddTelevision = true
+        }) {
+          Label("Add TV Show", systemImage: "tv")
+        }
+
+        Button(action: {
+          showingAddAlbum = true
+        }) {
+          Label("Add Album", systemImage: "music.note")
+        }
+      } label: {
+        Image(systemName: "plus")
+      }
+      .accessibilityIdentifier("movies.addMenuButton")
+    }
+  }
+
+  private var lifecycleBoundView: some View {
+    baseView
+      .task {
+        syncViewModelInputs()
+        if movieService.isLoggedIn && !viewModel.hasLoadedInitially {
+          await DataManager.shared.refreshListsOptimized()
+          await viewModel.loadMoviesIfNeeded(force: true)
+        }
+      }
+      .onChange(of: movieService.isLoggedIn) { _, isLoggedIn in
+        if isLoggedIn {
+          Task {
+            syncViewModelInputs()
+            await DataManager.shared.refreshListsOptimized()
+            await viewModel.loadMoviesIfNeeded(force: true)
           }
-        } label: {
-          Image(systemName: "plus")
+        } else {
+          viewModel.clearForLogout()
         }
       }
-    }
-    .task {
-      if movieService.isLoggedIn && !hasLoadedInitially {
-        await loadMoviesIfNeeded(force: true)
-        // Ensure lists are loaded for border detection using optimized sync
-        await listService.syncListsFromSupabaseOptimized()
-        // Load month descriptors
-        try? await monthDescriptorService.loadMonthDescriptors()
-        hasLoadedInitially = true
-      }
-    }
-    .onChange(of: movieService.isLoggedIn) { _, isLoggedIn in
-      if isLoggedIn {
-        Task {
-          await loadMoviesIfNeeded(force: true)
-          try? await monthDescriptorService.loadMonthDescriptors()
-          hasLoadedInitially = true
-        }
-      } else {
-        movies = []
-        errorMessage = nil
-        hasLoadedInitially = false
-        isInitialLoad = true
-        lastRefreshTime = Date.distantPast
-      }
-    }
-    .onAppear {
-      // Only load if we haven't loaded initially or data is stale
-      if movieService.isLoggedIn && shouldRefreshData() {
-        Task {
-          await loadMoviesIfNeeded(force: false)
-        }
-      }
-    }
-    .sheet(isPresented: $showingAddMovie) {
-      AddMoviesView()
-    }
-    .sheet(isPresented: $showingAddTelevision) {
-      AddTelevisionView()
-    }
-    .sheet(isPresented: $showingAddAlbum) {
-      AddAlbumsView()
-    }
-    .onChange(of: showingAddMovie) { _, isShowing in
-      if !isShowing && movieService.isLoggedIn {
-        // Refresh movies list when add movie sheet is dismissed
-        Task {
-          await loadMoviesIfNeeded(force: true)
-        }
-      }
-    }
-    .onChange(of: showingAddTelevision) { _, isShowing in
-      if !isShowing && movieService.isLoggedIn {
-        // Refresh data when add television sheet is dismissed
-        Task {
-          await DataManager.shared.refreshTelevision()
-        }
-      }
-    }
-    .onChange(of: showingAddAlbum) { _, isShowing in
-      if !isShowing && movieService.isLoggedIn {
-        // Refresh data when add album sheet is dismissed
-        Task {
-          await DataManager.shared.refreshAlbums()
-        }
-      }
-    }
-    .onChange(of: showingLogAgain) { _, isShowing in
-      if !isShowing && movieService.isLoggedIn {
-        // Refresh movies list when log again sheet is dismissed
-        Task {
-          await loadMoviesIfNeeded(force: true)
-        }
-      }
-    }
-    .onChange(of: sortBy) { _, _ in
-      // Trigger UI refresh when sort field changes
-    }
-    .onChange(of: sortAscending) { _, _ in
-      // Trigger UI refresh when sort direction changes
-    }
-    .sheet(isPresented: $showingFilters) {
-      FilterSortView(
-        sortBy: $sortBy,
-        filterViewModel: filterViewModel,
-        movies: movies
-      )
       .onAppear {
-        filterViewModel.loadCurrentFiltersToStaging()
-      }
-    }
-    .confirmationDialog("Sort By", isPresented: $showingSortOptions) {
-      ForEach(MovieSortField.allCases, id: \.rawValue) { field in
-        Button(field.displayName) {
-          if sortBy == field {
-            sortAscending.toggle()
-          } else {
-            sortBy = field
-            sortAscending = false
-          }
-        }
-      }
-    }
-    #if os(iOS)
-    .sheet(item: $selectedMovie) { movie in
-      MovieDetailsView(movie: movie)
-    }
-    #else
-    .onChange(of: selectedMovie) { _, newMovie in
-      if let movie = newMovie {
-        navigationCoordinator.showMovieDetails(movie)
-        selectedMovie = nil
-      }
-    }
-    #endif
-    .sheet(item: $movieToEdit) { movie in
-      EditMovieView(movie: movie) { updated in
-        updateMovieInPlace(updated)
-      }
-    }
-    .sheet(isPresented: $showingLogAgain) {
-      if let movie = movieToLogAgain, movie.tmdb_id != nil {
-        AddMoviesView(preSelectedMovie: TMDBMovie(from: movie))
-      }
-    }
-    .sheet(item: $movieToAddToLists) { movie in
-      AddToListsView(movie: movie)
-    }
-    .sheet(item: $movieToChangePoster) { movie in
-      if let tmdbId = movie.tmdb_id {
-        PosterChangeView(
-          tmdbId: tmdbId,
-          currentPosterUrl: movie.poster_url,
-          movieTitle: movie.title
-        ) { newPosterUrl in
-          // Simply refresh the movies list from backend
-          // The PosterChangeView has already updated the backend data
+        syncViewModelInputs()
+        if movieService.isLoggedIn && viewModel.shouldRefreshData() {
           Task {
-            await loadMoviesIfNeeded(force: true)
+            await viewModel.loadMoviesIfNeeded(force: false)
           }
         }
       }
-    }
-    .sheet(item: $movieToChangeBackdrop) { movie in
-      if let tmdbId = movie.tmdb_id {
-        BackdropChangeView(
-          tmdbId: tmdbId,
-          currentBackdropUrl: movie.backdrop_path,
-          movieTitle: movie.title
-        ) { newBackdropUrl in
-          // Simply refresh the movies list from backend
-          // The BackdropChangeView has already updated the backend data
+      .onChange(of: showingAddMovie) { _, isShowing in
+        if !isShowing && movieService.isLoggedIn {
           Task {
-            await loadMoviesIfNeeded(force: true)
+            await refreshMoviesKeepingPlace()
           }
         }
       }
-    }
-    .alert("Delete Entry", isPresented: $showingDeleteMovieAlert) {
-      Button("Cancel", role: .cancel) {}
-      Button("Delete", role: .destructive) {
+      .onChange(of: showingAddTelevision) { _, isShowing in
+        if !isShowing && movieService.isLoggedIn {
+          Task {
+            await DataManager.shared.refreshTelevision()
+          }
+        }
+      }
+      .onChange(of: showingAddAlbum) { _, isShowing in
+        if !isShowing && movieService.isLoggedIn {
+          Task {
+            await DataManager.shared.refreshAlbums()
+          }
+        }
+      }
+      .onChange(of: showingLogAgain) { _, isShowing in
+        if !isShowing && movieService.isLoggedIn {
+          Task {
+            await refreshMoviesKeepingPlace()
+          }
+        }
+      }
+      .onChange(of: sortBy) { _, _ in
+        syncViewModelInputs()
+      }
+      .onChange(of: sortAscending) { _, _ in
+        syncViewModelInputs()
+      }
+      .onChange(of: selectedDate) { _, _ in
+        syncViewModelInputs()
+      }
+      .onChange(of: currentCalendarMonth) { _, _ in
+        syncViewModelInputs()
+      }
+      .onChange(of: filterViewModel.appliedFiltersState) { _, _ in
+        syncViewModelInputs()
+      }
+      .onReceive(movieService.$lastMovieMutationAt.dropFirst()) { mutationDate in
+        guard mutationDate != nil, movieService.isLoggedIn else { return }
+        Task {
+          await refreshMoviesKeepingPlace()
+        }
+      }
+  }
+
+  private var presentedView: some View {
+    lifecycleBoundView
+      .sheet(isPresented: $showingAddMovie) {
+        AddMoviesView()
+      }
+      .sheet(isPresented: $showingAddTelevision) {
+        AddTelevisionView()
+      }
+      .sheet(isPresented: $showingAddAlbum) {
+        AddAlbumsView()
+      }
+      .sheet(isPresented: $showingFilters) {
+        FilterSortView(
+          sortBy: $sortBy,
+          filterViewModel: filterViewModel,
+          movies: movies
+        )
+      }
+      .confirmationDialog("Sort By", isPresented: $showingSortOptions) {
+        ForEach(MovieSortField.allCases, id: \.rawValue) { field in
+          Button(field.displayName) {
+            if sortBy == field {
+              sortAscending.toggle()
+            } else {
+              sortBy = field
+              sortAscending = false
+            }
+          }
+        }
+      }
+      #if os(iOS)
+      .sheet(item: $selectedMovie) { movie in
+        MovieDetailsView(movie: movie)
+      }
+      #else
+      .onChange(of: selectedMovie) { _, newMovie in
+        if let movie = newMovie {
+          navigationCoordinator.showMovieDetails(movie)
+          selectedMovie = nil
+        }
+      }
+      #endif
+      .sheet(item: $movieToEdit) { movie in
+        EditMovieView(movie: movie) { updated in
+          updateMovieInPlace(updated)
+        }
+      }
+      .sheet(isPresented: $showingLogAgain) {
+        if let movie = movieToLogAgain, movie.tmdb_id != nil {
+          AddMoviesView(preSelectedMovie: TMDBMovie(from: movie))
+        }
+      }
+      .sheet(item: $movieToAddToLists) { movie in
+        AddToListsView(movie: movie)
+      }
+      .sheet(item: $movieToChangePoster) { movie in
+        if let tmdbId = movie.tmdb_id {
+          PosterChangeView(
+            tmdbId: tmdbId,
+            currentPosterUrl: movie.poster_url,
+            movieTitle: movie.title
+          ) { _ in
+            Task {
+              await refreshMoviesKeepingPlace()
+            }
+          }
+        }
+      }
+      .sheet(item: $movieToChangeBackdrop) { movie in
+        if let tmdbId = movie.tmdb_id {
+          BackdropChangeView(
+            tmdbId: tmdbId,
+            currentBackdropUrl: movie.backdrop_path,
+            movieTitle: movie.title
+          ) { _ in
+            Task {
+              await refreshMoviesKeepingPlace()
+            }
+          }
+        }
+      }
+      .alert("Delete Entry", isPresented: $showingDeleteMovieAlert) {
+        Button("Cancel", role: .cancel) {}
+        Button("Delete", role: .destructive) {
+          if let movie = movieToDelete {
+            Task { await deleteMovie(movie) }
+          }
+        }
+      } message: {
         if let movie = movieToDelete {
-          Task { await deleteMovie(movie) }
+          Text("Remove '\(movie.title)' from your diary?")
+        } else {
+          Text("")
         }
       }
-    } message: {
-      if let movie = movieToDelete {
-        Text("Remove '\(movie.title)' from your diary?")
-      } else {
-        Text("")
-      }
-    }
   }
 
   @ViewBuilder
@@ -459,11 +467,11 @@ struct MoviesView: View {
     Group {
       if !movieService.isLoggedIn {
         notLoggedInView
-      } else if isInitialLoad {
+      } else if viewModel.isInitialLoad {
         SkeletonMoviesContent(viewMode: viewMode)
-      } else if isLoading {
+      } else if viewModel.isLoading && viewModel.allMovies.isEmpty {
         loadingView
-      } else if filteredMovies.isEmpty && !isLoading {
+      } else if filteredMovies.isEmpty {
         emptyStateView
       } else {
         switch viewMode {
@@ -525,7 +533,7 @@ struct MoviesView: View {
   @ViewBuilder
   private var emptyStateView: some View {
     VStack(spacing: 16) {
-      if let errorMessage = errorMessage {
+      if let errorMessage = viewModel.errorMessage {
         errorStateView(errorMessage: errorMessage)
       } else {
         noMoviesView
@@ -609,14 +617,14 @@ struct MoviesView: View {
           .frame(height: 1)
 
         // Grouped movie sections
-        ForEach(groupedMovies, id: \.0) { monthYear, monthMovies in
-          movieMonthSection(monthYear: monthYear, movies: monthMovies)
+        ForEach(viewModel.visibleSections) { section in
+          movieMonthSection(section: section)
         }
       }
     }
     .scrollContentBackground(.hidden)
     .refreshable {
-      await refreshMovies()
+      await handleUserRefresh()
     }
   }
 
@@ -629,31 +637,34 @@ struct MoviesView: View {
           .frame(height: 1)
 
         // Grouped movie sections for tile view
-        ForEach(groupedMovies, id: \.0) { monthYear, monthMovies in
-          movieTileMonthSection(
-            monthYear: monthYear,
-            movies: monthMovies
-          )
+        ForEach(viewModel.visibleSections) { section in
+          movieTileMonthSection(section: section)
         }
       }
     }
     .scrollContentBackground(.hidden)
     .refreshable {
-      await refreshMovies()
+      await handleUserRefresh()
     }
   }
 
   @ViewBuilder
-  private func movieMonthSection(monthYear: String, movies: [Movie])
+  private func movieMonthSection(section: MovieSectionSnapshot)
     -> some View
   {
     VStack(spacing: 0) {
-      // Month/Year header with descriptor support
-      MonthHeaderView(monthYear: monthYear)
+      MonthHeaderView(
+        monthYearKey: section.monthYearKey,
+        displayMonthYear: section.displayTitle
+      ) {
+        Task {
+          await viewModel.reloadMonthDescriptors()
+        }
+      }
 
       // Movies for this month
-      LazyVStack(spacing: 12) {
-        ForEach(sortedMoviesForSection(movies)) { movie in
+      VStack(spacing: 12) {
+        ForEach(section.movies) { movie in
           movieButton(for: movie)
         }
       }
@@ -663,96 +674,33 @@ struct MoviesView: View {
 
   @ViewBuilder
   private func movieButton(for movie: Movie) -> some View {
+    let metadata = viewModel.metadata(for: movie)
+
     Button(action: {
       selectedMovie = movie
     }) {
-      let isUniqueFilm = isCentennialUniqueFilm(movie)
-      let isTotalLog = isCentennialTotalLog(movie)
-
-      MovieRowView(
-        movie: movie,
-        rewatchIconColor: getRewatchIconColor(for: movie),
-        shouldHighlightMustWatchTitle: shouldHighlightMustWatchTitle(
-          movie
-        ),
-        shouldHighlightReleaseYearTitle:
-          shouldHighlightReleaseYearTitle(movie),
-        shouldHighlightReleaseYearOnYear:
-          shouldHighlightReleaseYearOnYear(movie)
-      )
-      .padding(.horizontal, 20)
-      .background(
-        RoundedRectangle(cornerRadius: 24)
-          .fill(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
-          .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-      )
-      .overlay(
-        Group {
-          // Prioritize red (total log) over yellow (unique film) if both apply
-          if isTotalLog {
-            RoundedRectangle(cornerRadius: 24)
-              .stroke(
-                LinearGradient(
-                  colors: [.red, .pink, .purple],
-                  startPoint: .topLeading,
-                  endPoint: .bottomTrailing
-                ),
-                lineWidth: 3
-              )
-          } else if isUniqueFilm {
-            RoundedRectangle(cornerRadius: 24)
-              .stroke(
-                LinearGradient(
-                  colors: [.yellow, .orange, .green],
-                  startPoint: .topLeading,
-                  endPoint: .bottomTrailing
-                ),
-                lineWidth: 3
-              )
-          }
-        }
-      )
-      .cornerRadius(24)
-      .padding(.horizontal, 20)
-      // MARK: - Temporarily disabled animated border feature
-      // .overlay(
-      //   AnimatedBorderOverlay(
-      //     isVisible: longPressedMovieId == movie.id,
-      //     colors: getBorderColors(for: movie),
-      //     cornerRadius: 24
-      //   )
-      // )
+      movieRowCard(movie: movie, metadata: metadata)
     }
     .buttonStyle(PlainButtonStyle())
     .contextMenu {
-      Button("Log Again", systemImage: "plus.circle") {
-        movieToLogAgain = movie
-        showingLogAgain = true
-      }
-      Button(movie.isFavorited ? "Remove from Favorites" : "Add to Favorites", 
-             systemImage: movie.isFavorited ? "heart.fill" : "heart") {
-        Task {
-          await toggleMovieFavorite(movie)
-        }
-      }
-      Button("Add to List", systemImage: "list.bullet") {
-        movieToAddToLists = movie
-      }
-      Button("Edit Entry", systemImage: "pencil") {
-        movieToEdit = movie
-      }
-      if movie.tmdb_id != nil {
-        Button("Change Poster", systemImage: "photo") {
-          movieToChangePoster = movie
-        }
-        Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
-          movieToChangeBackdrop = movie
-        }
-      }
-      Button("Remove Entry", systemImage: "trash", role: .destructive) {
-        movieToDelete = movie
-        showingDeleteMovieAlert = true
-      }
+      movieContextMenuItems(for: movie)
+    }
+    .accessibilityAction(named: Text("Log Again")) {
+      handleLogAgain(movie)
+    }
+    .accessibilityAction(
+      named: Text(movie.isFavorited ? "Remove Favorite" : "Add Favorite")
+    ) {
+      handleToggleFavorite(movie)
+    }
+    .accessibilityAction(named: Text("Add to List")) {
+      handleAddToList(movie)
+    }
+    .accessibilityAction(named: Text("Edit Entry")) {
+      handleEditMovie(movie)
+    }
+    .accessibilityAction(named: Text("Delete Entry")) {
+      handleDeleteMovie(movie)
     }
     // MARK: - Temporarily disabled long press gesture
     // .onLongPressGesture(minimumDuration: 0.3, maximumDistance: 20) {
@@ -767,12 +715,119 @@ struct MoviesView: View {
   }
 
   @ViewBuilder
-  private func movieTileMonthSection(monthYear: String, movies: [Movie])
+  private func movieRowCard(movie: Movie, metadata: MovieRowMetadata) -> some View {
+    MovieRowView(
+      movie: movie,
+      rewatchIconColor: metadata.rewatchColorToken.color,
+      shouldHighlightMustWatchTitle: metadata.shouldHighlightMustWatchTitle,
+      shouldHighlightReleaseYearTitle: metadata.shouldHighlightReleaseYearTitle,
+      shouldHighlightReleaseYearOnYear: metadata.shouldHighlightReleaseYearOnYear,
+      watchDay: metadata.watchDay,
+      watchDayOfWeek: metadata.watchDayOfWeek,
+      tagIcons: metadata.tagIcons,
+      accessibilityLabel: metadata.accessibilityLabel,
+      accessibilityValue: metadata.accessibilityValue
+    )
+    .padding(.horizontal, 20)
+    .background(
+      RoundedRectangle(cornerRadius: 24)
+        .fill(colorScheme == .dark ? Color.gray.opacity(0.15) : .white)
+        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+    )
+    .overlay {
+      if metadata.isCentennialTotalLog {
+        RoundedRectangle(cornerRadius: 24)
+          .stroke(
+            LinearGradient(
+              colors: [.red, .pink, .purple],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            ),
+            lineWidth: 3
+          )
+      } else if metadata.isCentennialUniqueFilm {
+        RoundedRectangle(cornerRadius: 24)
+          .stroke(
+            LinearGradient(
+              colors: [.yellow, .orange, .green],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            ),
+            lineWidth: 3
+          )
+      }
+    }
+    .cornerRadius(24)
+    .padding(.horizontal, 20)
+  }
+
+  @ViewBuilder
+  private func movieContextMenuItems(for movie: Movie) -> some View {
+    Button("Log Again", systemImage: "plus.circle") {
+      handleLogAgain(movie)
+    }
+    Button(
+      movie.isFavorited ? "Remove from Favorites" : "Add to Favorites",
+      systemImage: movie.isFavorited ? "heart.fill" : "heart"
+    ) {
+      handleToggleFavorite(movie)
+    }
+    Button("Add to List", systemImage: "list.bullet") {
+      handleAddToList(movie)
+    }
+    Button("Edit Entry", systemImage: "pencil") {
+      handleEditMovie(movie)
+    }
+    if movie.tmdb_id != nil {
+      Button("Change Poster", systemImage: "photo") {
+        movieToChangePoster = movie
+      }
+      Button("Change Backdrop", systemImage: "rectangle.on.rectangle") {
+        movieToChangeBackdrop = movie
+      }
+    }
+    Button("Remove Entry", systemImage: "trash", role: .destructive) {
+      handleDeleteMovie(movie)
+    }
+  }
+
+  private func handleLogAgain(_ movie: Movie) {
+    movieToLogAgain = movie
+    showingLogAgain = true
+  }
+
+  private func handleToggleFavorite(_ movie: Movie) {
+    Task {
+      await toggleMovieFavorite(movie)
+    }
+  }
+
+  private func handleAddToList(_ movie: Movie) {
+    movieToAddToLists = movie
+  }
+
+  private func handleEditMovie(_ movie: Movie) {
+    movieToEdit = movie
+  }
+
+  private func handleDeleteMovie(_ movie: Movie) {
+    movieToDelete = movie
+    showingDeleteMovieAlert = true
+  }
+
+  @ViewBuilder
+  private func movieTileMonthSection(section: MovieSectionSnapshot)
     -> some View
   {
     VStack(spacing: 0) {
-      // Month/Year header with descriptor support
-      MonthHeaderView(monthYear: monthYear)
+      MonthHeaderView(
+        monthYearKey: section.monthYearKey,
+        displayMonthYear: section.displayTitle
+      ) {
+        Task {
+          await viewModel.reloadMonthDescriptors()
+        }
+      }
 
       // Movies grid for this month
       let columns = Array(
@@ -780,7 +835,7 @@ struct MoviesView: View {
         count: 3
       )
       LazyVGrid(columns: columns, spacing: 12) {
-        ForEach(sortedMoviesForSection(movies)) { movie in
+        ForEach(section.movies) { movie in
           movieTileButton(for: movie)
         }
       }
@@ -833,7 +888,7 @@ struct MoviesView: View {
     }
     .scrollContentBackground(.hidden)
     .refreshable {
-      await refreshMovies()
+      await handleUserRefresh()
     }
   }
 
@@ -954,8 +1009,7 @@ struct MoviesView: View {
     )
     let isSelected = calendar.isDate(date, inSameDayAs: selectedDate)
     let isToday = calendar.isDateInToday(date)
-    let moviesForDay = moviesForDate(date)
-    let movieCount = moviesForDay.count
+    let movieCount = viewModel.movieCountForDate(date)
 
     Button(action: {
       withAnimation(.easeInOut(duration: 0.2)) {
@@ -1009,11 +1063,7 @@ struct MoviesView: View {
 
   @ViewBuilder
   private var selectedDateMoviesList: some View {
-    let moviesForSelectedDate = moviesForDate(selectedDate).sorted {
-      movie1,
-      movie2 in
-      (movie1.detailed_rating ?? 0) > (movie2.detailed_rating ?? 0)
-    }
+    let moviesForSelectedDate = viewModel.selectedDateMovies
 
     VStack(alignment: .leading, spacing: 12) {
       HStack {
@@ -1037,22 +1087,19 @@ struct MoviesView: View {
             Button(action: {
               selectedMovie = movie
             }) {
-              let isUniqueFilm = isCentennialUniqueFilm(movie)
-              let isTotalLog = isCentennialTotalLog(movie)
+              let metadata = viewModel.metadata(for: movie)
 
               selectedDateMovieRow(
                 movie: movie,
-                rewatchIconColor: getRewatchIconColor(
-                  for: movie
-                ),
-                shouldHighlightMustWatchTitle:
-                  shouldHighlightMustWatchTitle(movie),
-                shouldHighlightReleaseYearTitle:
-                  shouldHighlightReleaseYearTitle(movie),
-                shouldHighlightReleaseYearOnYear:
-                  shouldHighlightReleaseYearOnYear(movie),
-                isUniqueFilm: isUniqueFilm,
-                isTotalLog: isTotalLog
+                rewatchIconColor: metadata.rewatchColorToken.color,
+                shouldHighlightMustWatchTitle: metadata.shouldHighlightMustWatchTitle,
+                shouldHighlightReleaseYearTitle: metadata.shouldHighlightReleaseYearTitle,
+                shouldHighlightReleaseYearOnYear: metadata.shouldHighlightReleaseYearOnYear,
+                isUniqueFilm: metadata.isCentennialUniqueFilm,
+                isTotalLog: metadata.isCentennialTotalLog,
+                tagIcons: metadata.tagIcons,
+                accessibilityLabel: metadata.accessibilityLabel,
+                accessibilityValue: metadata.accessibilityValue
               )
               // MARK: - Temporarily disabled animated border feature
               // .overlay(
@@ -1115,11 +1162,17 @@ struct MoviesView: View {
     shouldHighlightReleaseYearTitle: Bool,
     shouldHighlightReleaseYearOnYear: Bool,
     isUniqueFilm: Bool,
-    isTotalLog: Bool
+    isTotalLog: Bool,
+    tagIcons: [MovieTagIconSnapshot],
+    accessibilityLabel: String,
+    accessibilityValue: String
   ) -> some View {
     HStack(spacing: 12) {
       // Movie poster
-      WebImage(url: movie.posterURL) { image in
+      WebImage(
+        url: movie.posterURL(for: .w92),
+        options: [.scaleDownLargeImages, .continueInBackground, .retryFailed]
+      ) { image in
         image
           .resizable()
           .aspectRatio(contentMode: .fill)
@@ -1196,16 +1249,11 @@ struct MoviesView: View {
           }
         }
 
-        // Tag icons (including location tag when location_id exists)
-        let allTagIcons = tagIconsWithColors(
-          for: movie.tags,
-          hasLocation: movie.location_id != nil
-        )
-        if !allTagIcons.isEmpty {
+        if !tagIcons.isEmpty {
           HStack(spacing: 3) {
-            ForEach(allTagIcons, id: \.icon) { iconData in
+            ForEach(tagIcons, id: \.icon) { iconData in
               Image(systemName: iconData.icon)
-                .foregroundColor(iconData.color)
+                .foregroundColor(iconData.colorToken.color)
                 .font(.system(size: 9, weight: .regular))
             }
           }
@@ -1247,6 +1295,10 @@ struct MoviesView: View {
       }
     )
     .cornerRadius(12)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityValue(accessibilityValue)
+    .accessibilityHint("Opens movie details")
   }
 
   // Helper computed properties and functions
@@ -1259,14 +1311,8 @@ struct MoviesView: View {
 
   @ViewBuilder
   private var monthCountPill: some View {
-    let filteredCount = moviesCountInMonth(
-      for: currentCalendarMonth,
-      in: filteredMovies
-    )
-    let totalCount = moviesCountInMonth(
-      for: currentCalendarMonth,
-      in: movies
-    )
+    let filteredCount = viewModel.moviesCountInMonth(for: currentCalendarMonth, filtered: true)
+    let totalCount = viewModel.moviesCountInMonth(for: currentCalendarMonth, filtered: false)
 
     HStack(spacing: 6) {
       Image(systemName: "film.fill")
@@ -1412,11 +1458,14 @@ struct MoviesView: View {
   @ViewBuilder
   private func movieTileButton(for movie: Movie) -> some View {
     Button(action: {
-      // Trigger animation
-      withAnimation(
-        .spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0)
-      ) {
+      if reduceMotion {
         tappedMovieId = movie.id
+      } else {
+        withAnimation(
+          .spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0)
+        ) {
+          tappedMovieId = movie.id
+        }
       }
 
       // Show movie details after brief delay
@@ -1425,17 +1474,18 @@ struct MoviesView: View {
         tappedMovieId = nil
       }
     }) {
-      let isUniqueFilm = isCentennialUniqueFilm(movie)
-      let isTotalLog = isCentennialTotalLog(movie)
+      let metadata = viewModel.metadata(for: movie)
 
       MovieTileView(
         movie: movie,
-        rewatchIconColor: getRewatchIconColor(for: movie)
+        rewatchIconColor: metadata.rewatchColorToken.color,
+        accessibilityLabel: metadata.accessibilityLabel,
+        accessibilityValue: metadata.accessibilityValue
       )
       .overlay(
         Group {
           // Prioritize red (total log) over yellow (unique film) if both apply
-          if isTotalLog {
+          if metadata.isCentennialTotalLog {
             RoundedRectangle(cornerRadius: 12)
               .stroke(
                 LinearGradient(
@@ -1445,7 +1495,7 @@ struct MoviesView: View {
                 ),
                 lineWidth: 3
               )
-          } else if isUniqueFilm {
+          } else if metadata.isCentennialUniqueFilm {
             RoundedRectangle(cornerRadius: 12)
               .stroke(
                 LinearGradient(
@@ -1460,7 +1510,9 @@ struct MoviesView: View {
       )
       .scaleEffect(tappedMovieId == movie.id ? 1.05 : 1.0)
       .animation(
-        .spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0),
+        reduceMotion
+          ? .linear(duration: 0.01)
+          : .spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0),
         value: tappedMovieId
       )
       // MARK: - Temporarily disabled animated border feature
@@ -1530,106 +1582,50 @@ struct MoviesView: View {
   // MARK: - Efficient Loading Functions
 
   private func shouldRefreshData() -> Bool {
-    return Date().timeIntervalSince(lastRefreshTime) > refreshInterval
-      || !hasLoadedInitially
+    viewModel.shouldRefreshData()
   }
 
   private func loadMoviesIfNeeded(force: Bool) async {
-    // If force is false and data is still fresh, skip loading
-    if !force && !shouldRefreshData() && !movies.isEmpty {
-      return
-    }
-
-    guard !isLoading else {
-      return
-    }
-
-    // Only show loading spinner on non-initial loads
-    if !isInitialLoad {
-      isLoading = true
-    }
-    errorMessage = nil
-
-    do {
-      movies = try await movieService.getMovies(
-        sortBy: sortBy,
-        ascending: sortAscending,
-        limit: 3000
-      )
-      lastRefreshTime = Date()
-
-      // Load optimized caches for rewatch colors and must watches highlighting
-      await loadOptimizedCaches()
-    } catch {
-      errorMessage = error.localizedDescription
-    }
-
-    await MainActor.run {
-      isInitialLoad = false
-      isLoading = false
-    }
-  }
-  
-  /// Load first watch dates and must watches mapping using batch queries
-  private func loadOptimizedCaches() async {
-    // Get unique TMDB IDs from rewatch movies for first watch date lookup
-    let rewatchTmdbIds = movies
-      .filter { $0.isRewatchMovie }
-      .compactMap { $0.tmdb_id }
-    let uniqueRewatchIds = Array(Set(rewatchTmdbIds))
-    
-    // Load first watch dates and must watches mapping concurrently
-    async let firstWatchTask: () = DataManager.shared.loadFirstWatchDates(for: uniqueRewatchIds)
-    async let mustWatchesTask: () = DataManager.shared.loadMustWatchesMapping()
-    
-    await firstWatchTask
-    await mustWatchesTask
+    await viewModel.loadMoviesIfNeeded(force: force)
   }
 
   private func refreshMovies() async {
-    guard !isRefreshing else {
-      return
-    }
+    await viewModel.refreshMovies()
+  }
 
-    isRefreshing = true
-    errorMessage = nil
-
-    do {
-      movies = try await movieService.getMovies(
-        sortBy: sortBy,
-        ascending: sortAscending,
-        limit: 3000
-      )
-      lastRefreshTime = Date()
-    } catch {
-      errorMessage = error.localizedDescription
+  private func refreshMoviesKeepingPlace() async {
+    syncViewModelInputs()
+    if viewModel.hasLoadedInitially && !movies.isEmpty {
+      await viewModel.refreshMovies()
+    } else {
+      await viewModel.loadMoviesIfNeeded(force: true)
     }
-    isRefreshing = false
+  }
+
+  private func handleUserRefresh() async {
+    syncViewModelInputs()
+    await viewModel.refreshMovies()
   }
 
   private func loadMovies() async {
-    await loadMoviesIfNeeded(force: true)
+    await viewModel.loadMoviesIfNeeded(force: true)
   }
 
   private func updateMovieInPlace(_ updated: Movie) {
-    if let index = movies.firstIndex(where: { $0.id == updated.id }) {
-      movies[index] = updated
-    } else {
-      Task { await loadMoviesIfNeeded(force: true) }
-    }
+    viewModel.updateMovieInPlace(updated)
   }
 
   private func deleteMovie(_ movie: Movie) async {
     do {
       try await movieService.deleteMovie(id: movie.id)
       await MainActor.run {
-        movies.removeAll { $0.id == movie.id }
+        viewModel.removeMovie(id: movie.id)
         movieToDelete = nil
         showingDeleteMovieAlert = false
       }
     } catch {
       await MainActor.run {
-        errorMessage = error.localizedDescription
+        // Error remains visible through existing empty/error states after next refresh.
         movieToDelete = nil
         showingDeleteMovieAlert = false
       }
@@ -2071,59 +2067,14 @@ struct MoviesView: View {
   // MARK: - Favorite Functions
   
   private func toggleMovieFavorite(_ movie: Movie) async {
-
-    
     do {
       let updatedMovie = try await movieService.toggleMovieFavorite(movieId: movie.id)
-      
-
-      
       await MainActor.run {
-        // Update the movie in the local array
-        if let index = movies.firstIndex(where: { $0.id == movie.id }) {
-
-          
-          // Create a new movie with updated favorite status
-          movies[index] = Movie(
-            id: updatedMovie.id,
-            title: updatedMovie.title,
-            release_year: updatedMovie.release_year,
-            release_date: updatedMovie.release_date,
-            rating: updatedMovie.rating,
-            detailed_rating: updatedMovie.detailed_rating,
-            review: updatedMovie.review,
-            tags: updatedMovie.tags,
-            watch_date: updatedMovie.watch_date,
-            is_rewatch: updatedMovie.is_rewatch,
-            tmdb_id: updatedMovie.tmdb_id,
-            overview: updatedMovie.overview,
-            poster_url: updatedMovie.poster_url,
-            backdrop_path: updatedMovie.backdrop_path,
-            director: updatedMovie.director,
-            runtime: updatedMovie.runtime,
-            vote_average: updatedMovie.vote_average,
-            vote_count: updatedMovie.vote_count,
-            popularity: updatedMovie.popularity,
-            original_language: updatedMovie.original_language,
-            original_title: updatedMovie.original_title,
-            tagline: updatedMovie.tagline,
-            status: updatedMovie.status,
-            budget: updatedMovie.budget,
-            revenue: updatedMovie.revenue,
-            imdb_id: updatedMovie.imdb_id,
-            homepage: updatedMovie.homepage,
-            genres: updatedMovie.genres,
-            created_at: updatedMovie.created_at,
-            updated_at: updatedMovie.updated_at,
-            favorited: updatedMovie.favorited
-          )
-          
-        }
+        viewModel.replaceMovie(updatedMovie)
       }
     } catch {
-
       await MainActor.run {
-        errorMessage = "Failed to update favorite status: \(error.localizedDescription)"
+        viewModel.setErrorMessage("Failed to update favorite status: \(error.localizedDescription)")
       }
     }
   }
@@ -2136,11 +2087,19 @@ struct MovieRowView: View {
   let shouldHighlightMustWatchTitle: Bool
   let shouldHighlightReleaseYearTitle: Bool
   let shouldHighlightReleaseYearOnYear: Bool
+  let watchDay: String
+  let watchDayOfWeek: String
+  let tagIcons: [MovieTagIconSnapshot]
+  let accessibilityLabel: String
+  let accessibilityValue: String
 
   var body: some View {
     HStack(spacing: 16) {
       // Movie poster
-      WebImage(url: movie.posterURL) { image in
+      WebImage(
+        url: movie.posterURL(for: .w185),
+        options: [.scaleDownLargeImages, .continueInBackground, .retryFailed]
+      ) { image in
         image
           .resizable()
           .aspectRatio(contentMode: .fill)
@@ -2217,16 +2176,11 @@ struct MovieRowView: View {
 
         }
 
-        // Tag icons (including location tag when location_id exists)
-        let allTagIcons = tagIconsWithColors(
-          for: movie.tags,
-          hasLocation: movie.location_id != nil
-        )
-        if !allTagIcons.isEmpty {
+        if !tagIcons.isEmpty {
           HStack(spacing: 4) {
-            ForEach(allTagIcons, id: \.icon) { iconData in
+            ForEach(tagIcons, id: \.icon) { iconData in
               Image(systemName: iconData.icon)
-                .foregroundColor(iconData.color)
+                .foregroundColor(iconData.colorToken.color)
                 .font(.system(size: 11, weight: .regular))
             }
           }
@@ -2244,12 +2198,12 @@ struct MovieRowView: View {
           }
 
           VStack(spacing: 2) {
-            Text(getDayFromWatchDate(movie.watch_date))
+            Text(watchDay)
               .font(.title)
               .fontWeight(.bold)
               .foregroundColor(Color.adaptiveText(scheme: colorScheme))
 
-            Text(getDayOfWeekFromWatchDate(movie.watch_date))
+            Text(watchDayOfWeek)
               .font(.caption)
               .foregroundColor(Color.adaptiveText(scheme: colorScheme))
               .textCase(.uppercase)
@@ -2259,6 +2213,10 @@ struct MovieRowView: View {
       .frame(width: 80, alignment: .trailing)
     }
     .padding(.vertical, 12)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityValue(accessibilityValue)
+    .accessibilityHint("Opens movie details")
   }
 
   private func starType(for index: Int, rating: Double?) -> String {
@@ -2318,11 +2276,16 @@ struct MovieRowView: View {
 struct MovieTileView: View {
   let movie: Movie
   let rewatchIconColor: Color
+  let accessibilityLabel: String
+  let accessibilityValue: String
 
   var body: some View {
     VStack(spacing: 6) {
       // Movie poster (no overlay indicators)
-      WebImage(url: movie.posterURL) { image in
+      WebImage(
+        url: movie.posterURL(for: .w342),
+        options: [.scaleDownLargeImages, .continueInBackground, .retryFailed]
+      ) { image in
         image
           .resizable()
           .aspectRatio(2 / 3, contentMode: .fill)
@@ -2357,6 +2320,10 @@ struct MovieTileView: View {
       .frame(maxWidth: .infinity)
       .frame(height: 16)
     }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityValue(accessibilityValue)
+    .accessibilityHint("Opens movie details")
   }
 
   private func starType(for index: Int, rating: Double?) -> String {
@@ -2386,6 +2353,7 @@ struct FilterSortView: View {
   let movies: [Movie]
   @Environment(\.dismiss) private var dismiss
   @State private var selectedSection: FilterSection = .tags
+  @State private var draftFilters = FilterDraftState()
 
   enum FilterSection: String, CaseIterable {
     case tags = "Tags"
@@ -2415,10 +2383,10 @@ struct FilterSortView: View {
         ScrollView {
           LazyVStack(spacing: 20) {
             // Clear All button (only show if there are active filters)
-            if filterViewModel.hasActiveFilters {
+            if draftFilters.toAppliedFilters().hasActiveFilters {
               Button(action: {
                 withAnimation(.easeInOut(duration: 0.3)) {
-                  filterViewModel.clearAllFilters()
+                  draftFilters.clearAll()
                 }
               }) {
                 HStack {
@@ -2478,12 +2446,15 @@ struct FilterSortView: View {
 
         ToolbarItem(placement: .confirmationAction) {
           Button("Apply", systemImage: "checkmark") {
-            filterViewModel.applyStagingFilters()
+            filterViewModel.apply(filters: draftFilters.toAppliedFilters())
             dismiss()
           }
           .foregroundColor(.blue)
         }
       }
+    }
+    .onAppear {
+      draftFilters = FilterDraftState(from: filterViewModel.appliedFiltersState)
     }
   }
 
@@ -2545,10 +2516,13 @@ struct FilterSortView: View {
           ForEach(availableTags, id: \.self) { tag in
             FilterChip(
               text: tag,
-              isSelected: filterViewModel.stagingSelectedTags
-                .contains(tag)
+              isSelected: draftFilters.selectedTags.contains(tag)
             ) {
-              filterViewModel.toggleStagingTag(tag)
+              if draftFilters.selectedTags.contains(tag) {
+                draftFilters.selectedTags.remove(tag)
+              } else {
+                draftFilters.selectedTags.insert(tag)
+              }
             }
           }
         }
@@ -2569,9 +2543,9 @@ struct FilterSortView: View {
 
             StarRatingView(
               rating: Binding(
-                get: { filterViewModel.stagingMinStarRating ?? 0.0 },
+                get: { draftFilters.minStarRating ?? 0.0 },
                 set: {
-                  filterViewModel.stagingMinStarRating = $0 == 0.0 ? nil : $0
+                  draftFilters.minStarRating = $0 == 0.0 ? nil : $0
                 }
               ),
               size: 24
@@ -2587,9 +2561,9 @@ struct FilterSortView: View {
 
             StarRatingView(
               rating: Binding(
-                get: { filterViewModel.stagingMaxStarRating ?? 5.0 },
+                get: { draftFilters.maxStarRating ?? 5.0 },
                 set: {
-                  filterViewModel.stagingMaxStarRating = $0 == 5.0 ? nil : $0
+                  draftFilters.maxStarRating = $0 == 5.0 ? nil : $0
                 }
               ),
               size: 24
@@ -2612,7 +2586,7 @@ struct FilterSortView: View {
               "0",
               text: Binding(
                 get: {
-                  if let minRating = filterViewModel.stagingMinDetailedRating {
+                  if let minRating = draftFilters.minDetailedRating {
                     return String(Int(minRating))
                   }
                   return "0"
@@ -2620,9 +2594,9 @@ struct FilterSortView: View {
                 set: { newValue in
                   let filtered = newValue.filter { $0.isNumber }
                   if let value = Double(filtered), value >= 0, value <= 100 {
-                    filterViewModel.stagingMinDetailedRating = value == 0 ? nil : value
+                    draftFilters.minDetailedRating = value == 0 ? nil : value
                   } else if filtered.isEmpty {
-                    filterViewModel.stagingMinDetailedRating = nil
+                    draftFilters.minDetailedRating = nil
                   }
                 }
               )
@@ -2643,7 +2617,7 @@ struct FilterSortView: View {
               "100",
               text: Binding(
                 get: {
-                  if let maxRating = filterViewModel.stagingMaxDetailedRating {
+                  if let maxRating = draftFilters.maxDetailedRating {
                     return String(Int(maxRating))
                   }
                   return "100"
@@ -2651,9 +2625,9 @@ struct FilterSortView: View {
                 set: { newValue in
                   let filtered = newValue.filter { $0.isNumber }
                   if let value = Double(filtered), value >= 0, value <= 100 {
-                    filterViewModel.stagingMaxDetailedRating = value == 100 ? nil : value
+                    draftFilters.maxDetailedRating = value == 100 ? nil : value
                   } else if filtered.isEmpty {
-                    filterViewModel.stagingMaxDetailedRating = nil
+                    draftFilters.maxDetailedRating = nil
                   }
                 }
               )
@@ -2688,10 +2662,13 @@ struct FilterSortView: View {
           ForEach(availableGenres, id: \.self) { genre in
             FilterChip(
               text: genre,
-              isSelected: filterViewModel.stagingSelectedGenres
-                .contains(genre)
+              isSelected: draftFilters.selectedGenres.contains(genre)
             ) {
-              filterViewModel.toggleStagingGenre(genre)
+              if draftFilters.selectedGenres.contains(genre) {
+                draftFilters.selectedGenres.remove(genre)
+              } else {
+                draftFilters.selectedGenres.insert(genre)
+              }
             }
           }
         }
@@ -2713,7 +2690,7 @@ struct FilterSortView: View {
                   filterViewModel.getEarliestWatchDate(
                     from: movies
                   )
-                return filterViewModel.stagingStartDate
+                return draftFilters.startDate
                   ?? earliestDate
               },
               set: {
@@ -2721,7 +2698,7 @@ struct FilterSortView: View {
                   filterViewModel.getEarliestWatchDate(
                     from: movies
                   )
-                filterViewModel.stagingStartDate =
+                draftFilters.startDate =
                   Calendar.current.isDate(
                     $0,
                     inSameDayAs: earliestDate
@@ -2735,9 +2712,9 @@ struct FilterSortView: View {
           DatePicker(
             "End Date",
             selection: Binding(
-              get: { filterViewModel.stagingEndDate ?? Date() },
+              get: { draftFilters.endDate ?? Date() },
               set: {
-                filterViewModel.stagingEndDate =
+                draftFilters.endDate =
                   Calendar.current.isDate(
                     $0,
                     inSameDayAs: Date()
@@ -2774,10 +2751,13 @@ struct FilterSortView: View {
             ForEach(availableDecades, id: \.self) { decade in
               FilterChip(
                 text: decade,
-                isSelected: filterViewModel
-                  .stagingSelectedDecades.contains(decade)
+                isSelected: draftFilters.selectedDecades.contains(decade)
               ) {
-                filterViewModel.toggleStagingDecade(decade)
+                if draftFilters.selectedDecades.contains(decade) {
+                  draftFilters.selectedDecades.remove(decade)
+                } else {
+                  draftFilters.selectedDecades.insert(decade)
+                }
               }
             }
           }
@@ -2795,9 +2775,9 @@ struct FilterSortView: View {
           FilterToggle(
             title: "Show only rewatches",
             isOn: Binding(
-              get: { filterViewModel.stagingShowRewatchesOnly },
+              get: { draftFilters.showRewatchesOnly },
               set: {
-                filterViewModel.stagingShowRewatchesOnly = $0
+                draftFilters.showRewatchesOnly = $0
               }
             )
           )
@@ -2805,8 +2785,8 @@ struct FilterSortView: View {
           FilterToggle(
             title: "Hide rewatches",
             isOn: Binding(
-              get: { filterViewModel.stagingHideRewatches },
-              set: { filterViewModel.stagingHideRewatches = $0 }
+              get: { draftFilters.hideRewatches },
+              set: { draftFilters.hideRewatches = $0 }
             )
           )
         }
@@ -2821,23 +2801,23 @@ struct FilterSortView: View {
             Spacer()
 
             Button(action: {
-              filterViewModel.stagingHasReview =
-                filterViewModel.stagingHasReview == true
+              draftFilters.hasReview =
+                draftFilters.hasReview == true
                 ? nil : true
             }) {
               HStack(spacing: 4) {
                 Image(
-                  systemName: filterViewModel.stagingHasReview
+                  systemName: draftFilters.hasReview
                     == true
                     ? "checkmark.circle.fill" : "circle"
                 )
                 .foregroundColor(
-                  filterViewModel.stagingHasReview == true
+                  draftFilters.hasReview == true
                     ? .green : .gray
                 )
                 Text("Yes")
                   .foregroundColor(
-                    filterViewModel.stagingHasReview == true
+                    draftFilters.hasReview == true
                       ? .green : .gray
                   )
               }
@@ -2845,23 +2825,23 @@ struct FilterSortView: View {
             .buttonStyle(PlainButtonStyle())
 
             Button(action: {
-              filterViewModel.stagingHasReview =
-                filterViewModel.stagingHasReview == false
+              draftFilters.hasReview =
+                draftFilters.hasReview == false
                 ? nil : false
             }) {
               HStack(spacing: 4) {
                 Image(
-                  systemName: filterViewModel.stagingHasReview
+                  systemName: draftFilters.hasReview
                     == false
                     ? "checkmark.circle.fill" : "circle"
                 )
                 .foregroundColor(
-                  filterViewModel.stagingHasReview == false
+                  draftFilters.hasReview == false
                     ? .red : .gray
                 )
                 Text("No")
                   .foregroundColor(
-                    filterViewModel.stagingHasReview
+                    draftFilters.hasReview
                       == false ? .red : .gray
                   )
               }
@@ -2885,11 +2865,11 @@ struct FilterSortView: View {
             RuntimeSlider(
               value: Binding(
                 get: {
-                  filterViewModel.stagingMinRuntime
+                  draftFilters.minRuntime
                     ?? runtimeRange.min
                 },
                 set: {
-                  filterViewModel.stagingMinRuntime =
+                  draftFilters.minRuntime =
                     $0 == runtimeRange.min ? nil : $0
                 }
               ),
@@ -2904,11 +2884,11 @@ struct FilterSortView: View {
             RuntimeSlider(
               value: Binding(
                 get: {
-                  filterViewModel.stagingMaxRuntime
+                  draftFilters.maxRuntime
                     ?? runtimeRange.max
                 },
                 set: {
-                  filterViewModel.stagingMaxRuntime =
+                  draftFilters.maxRuntime =
                     $0 == runtimeRange.max ? nil : $0
                 }
               ),

@@ -46,6 +46,8 @@ struct AddMoviesView: View {
     @State private var movieDetails: TMDBMovieDetails?
     @State private var director: String?
     @State private var isLoadingDetails = false
+    @State private var movieDetailsMovieId: Int?
+    @State private var movieDetailsTask: Task<Void, Never>?
     
     // User input state
     @State private var starRating: Double = 0.0
@@ -59,6 +61,8 @@ struct AddMoviesView: View {
     // UI state
     @State private var showingSimilarRatings = false
     @State private var similarRatingMovies: [Movie] = []
+    @State private var similarRatingsTask: Task<Void, Never>?
+    @State private var similarRatingsCache: [String: [Movie]] = [:]
     @State private var displayedMoviesCount = 5
     @State private var isLoadingMoreMovies = false
     @State private var previousWatches: [Movie] = []
@@ -115,6 +119,34 @@ struct AddMoviesView: View {
     @State private var isCreatingNewLocationGroup = false
     @State private var newLocationGroupName = ""
     @State private var isResolvingLocation = false
+
+    private static let movieDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let movieTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        return formatter
+    }()
+
+    private static let iso8601WithFractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
     
     var body: some View {
         NavigationView {
@@ -202,9 +234,8 @@ struct AddMoviesView: View {
                         showResumeDraftDialog = true
                     }
                     
-                    // Load movie details and check for existing entries to prefill form
-                    loadMovieDetails(movieId: preSelected.id)
                     Task {
+                        await loadMovieDetailsIfNeeded(movieId: preSelected.id, force: true)
                         await checkForExistingMovie(tmdbId: preSelected.id)
                         await checkForMovieLists(tmdbId: preSelected.id)
                     }
@@ -226,6 +257,8 @@ struct AddMoviesView: View {
             .onDisappear {
                 searchTask?.cancel()
                 autoSaveTask?.cancel()
+                movieDetailsTask?.cancel()
+                similarRatingsTask?.cancel()
             }
             // Resume Draft Dialog
             .alert("Resume Draft?", isPresented: $showResumeDraftDialog) {
@@ -470,10 +503,9 @@ struct AddMoviesView: View {
             .padding(.top, 8)
         }
         .background(Color.black)
-        .onAppear {
-            if let movie = selectedMovie {
-                loadMovieDetails(movieId: movie.id)
-            }
+        .task(id: selectedMovie?.id) {
+            guard let movieId = selectedMovie?.id else { return }
+            await loadMovieDetailsIfNeeded(movieId: movieId)
         }
     }
     
@@ -481,9 +513,12 @@ struct AddMoviesView: View {
     private var movieHeader: some View {
         VStack(alignment: .leading, spacing: 15) {
             HStack {
-                Button("� Back to Search") {
+                Button("Back to Search") {
+                    movieDetailsTask?.cancel()
+                    similarRatingsTask?.cancel()
                     selectedMovie = nil
                     movieDetails = nil
+                    movieDetailsMovieId = nil
                     director = nil
                     resetForm()
                 }
@@ -991,6 +1026,12 @@ struct AddMoviesView: View {
                     currentTags.removeAll { $0.lowercased() == "short" }
                     tags = currentTags.joined(separator: ", ")
                 }
+                if let rating = Double(detailedRating), rating > 0 {
+                    checkSimilarRatings(rating: rating)
+                } else {
+                    showingSimilarRatings = false
+                    similarRatingMovies = []
+                }
                 scheduleDraftSave()
             }
             
@@ -1065,7 +1106,12 @@ struct AddMoviesView: View {
     }
     
     private func selectMovie(_ movie: TMDBMovie) {
+        movieDetailsTask?.cancel()
+        similarRatingsTask?.cancel()
         selectedMovie = movie
+        movieDetails = nil
+        movieDetailsMovieId = nil
+        director = nil
         currentDraftTmdbId = movie.id
         resetForm()
         
@@ -1077,6 +1123,7 @@ struct AddMoviesView: View {
         
         // Check if this movie has been watched before and is in any lists
         Task {
+            await loadMovieDetailsIfNeeded(movieId: movie.id, force: true)
             await checkForExistingMovie(tmdbId: movie.id)
             await checkForMovieLists(tmdbId: movie.id)
         }
@@ -1122,25 +1169,65 @@ struct AddMoviesView: View {
         }
     }
     
-    private func loadMovieDetails(movieId: Int) {
+    @MainActor
+    private func loadMovieDetailsIfNeeded(movieId: Int, force: Bool = false) async {
+        if !force, movieDetailsMovieId == movieId, (movieDetails != nil || isLoadingDetails) {
+            return
+        }
+
+        movieDetailsTask?.cancel()
         isLoadingDetails = true
-        
-        Task {
+        movieDetailsMovieId = movieId
+
+        movieDetailsTask = Task(priority: .userInitiated) {
             do {
                 let (details, directorName) = try await tmdbService.getCompleteMovieData(movieId: movieId)
+                guard !Task.isCancelled else { return }
+
                 await MainActor.run {
+                    guard selectedMovie?.id == movieId else { return }
                     movieDetails = details
                     director = directorName
+                    movieDetailsMovieId = movieId
                     isLoadingDetails = false
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    if selectedMovie?.id == movieId {
+                        isLoadingDetails = false
+                        if movieDetails == nil {
+                            movieDetailsMovieId = nil
+                        }
+                    }
                 }
             } catch {
                 await MainActor.run {
+                    guard selectedMovie?.id == movieId else { return }
                     isLoadingDetails = false
+                    movieDetailsMovieId = nil
                     alertMessage = "Failed to load movie details: \(error.localizedDescription)"
                     showingAlert = true
                 }
             }
         }
+
+        await movieDetailsTask?.value
+    }
+
+    private func ensureMovieDetailsForSave(movieId: Int) async throws -> (details: TMDBMovieDetails?, director: String?) {
+        if movieDetailsMovieId == movieId, let movieDetails {
+            return (movieDetails, director)
+        }
+
+        let (details, directorName) = try await tmdbService.getCompleteMovieData(movieId: movieId)
+        await MainActor.run {
+            if selectedMovie?.id == movieId {
+                movieDetails = details
+                director = directorName
+                movieDetailsMovieId = movieId
+            }
+        }
+        return (details, directorName)
     }
 
     private func loadLocationGroups() async {
@@ -1302,26 +1389,42 @@ struct AddMoviesView: View {
         return tagList.contains("short")
     }
     
+    @MainActor
     private func checkSimilarRatings(rating: Double) {
-        Task {
+        similarRatingsTask?.cancel()
+
+        guard rating > 0 else {
+            showingSimilarRatings = false
+            similarRatingMovies = []
+            displayedMoviesCount = 5
+            return
+        }
+
+        let shortFilmOnly = isShortFilm
+        let cacheKey = similarRatingsCacheKey(for: rating, shortFilmOnly: shortFilmOnly)
+        if let cachedMovies = similarRatingsCache[cacheKey] {
+            applySimilarRatings(cachedMovies)
+            return
+        }
+
+        similarRatingsTask = Task(priority: .utility) {
             do {
-                // Use decade-based ranges (100-90, 89-80, 79-70, etc.)
+                // Debounce so typing into detailed rating does not trigger redundant requests.
+                try await Task.sleep(nanoseconds: 150_000_000)
+                guard !Task.isCancelled else { return }
+
                 let (minRating, maxRating) = getDecadeRange(for: rating)
                 var movies = try await supabaseService.getMoviesInRatingRange(
                     minRating: minRating,
                     maxRating: maxRating,
-                    limit: 3000  // Get more movies for pagination
+                    limit: 3000
                 )
-                
-                // Filter to only short films if short film mode is enabled
-                if isShortFilm {
+
+                if shortFilmOnly {
                     movies = movies.filter { movieHasShortTag($0) }
                 }
 
-                // Deduplicate by movie identity (tmdb_id or title) AND detailed rating, keeping latest entry
                 let deduplicatedMovies = deduplicateMoviesByIdentityAndDetailedRating(movies)
-
-                // Sort movies by rating in descending order (highest first) and then by latest watch/created date
                 let sortedMovies = deduplicatedMovies.sorted {
                     let lhsRating = Int($0.detailed_rating ?? -1)
                     let rhsRating = Int($1.detailed_rating ?? -1)
@@ -1333,12 +1436,11 @@ struct AddMoviesView: View {
                 }
 
                 await MainActor.run {
-                    similarRatingMovies = sortedMovies
-                    displayedMoviesCount = 5  // Reset to show first 5
-                    showingSimilarRatings = !sortedMovies.isEmpty
+                    similarRatingsCache[cacheKey] = sortedMovies
+                    applySimilarRatings(sortedMovies)
                 }
             } catch {
-                // Silently fail for similar ratings feature
+                if Task.isCancelled { return }
                 await MainActor.run {
                     showingSimilarRatings = false
                     similarRatingMovies = []
@@ -1346,6 +1448,18 @@ struct AddMoviesView: View {
                 }
             }
         }
+    }
+
+    @MainActor
+    private func applySimilarRatings(_ movies: [Movie]) {
+        similarRatingMovies = movies
+        displayedMoviesCount = 5
+        showingSimilarRatings = !movies.isEmpty
+    }
+
+    private func similarRatingsCacheKey(for rating: Double, shortFilmOnly: Bool) -> String {
+        let range = getDecadeRange(for: rating)
+        return "\(Int(range.min))-\(Int(range.max))-\(shortFilmOnly ? "short" : "all")"
     }
 
     // MARK: - Deduplication Helpers
@@ -1398,22 +1512,22 @@ struct AddMoviesView: View {
     }
 
     private func parseDate(_ format: String, from string: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = format
-        return formatter.date(from: string)
+        switch format {
+        case "yyyy-MM-dd":
+            return Self.movieDateFormatter.date(from: string)
+        case "yyyy-MM-dd'T'HH:mm:ss":
+            return Self.movieTimestampFormatter.date(from: string)
+        default:
+            return nil
+        }
     }
 
     private func parseISO8601Date(from string: String) -> Date? {
-        // Try strict ISO8601 first
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = iso.date(from: string) { return d }
+        // Try strict ISO8601 first.
+        if let d = Self.iso8601WithFractionalFormatter.date(from: string) { return d }
 
-        // Try without fractional seconds
-        iso.formatOptions = [.withInternetDateTime]
-        if let d2 = iso.date(from: string) { return d2 }
+        // Try without fractional seconds.
+        if let d2 = Self.iso8601Formatter.date(from: string) { return d2 }
 
         // Fallback: attempt a common Postgrest format without timezone
         if let d3 = parseDate("yyyy-MM-dd'T'HH:mm:ss", from: string) { return d3 }
@@ -1461,39 +1575,42 @@ struct AddMoviesView: View {
         var lastError: Error?
         for attempt in 1...2 {
             do {
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyy-MM-dd"
-
-                let genres = movieDetails?.genreNames ?? []
+                let detailContext = try? await ensureMovieDetailsForSave(movieId: selectedMovie.id)
+                let detailsForSave = detailContext?.details ?? movieDetails
+                let genres = detailsForSave?.genreNames ?? []
+                let resolvedPosterURL = selectedMovie.fullPosterURL
+                    ?? detailsForSave?.posterPath.map { "https://image.tmdb.org/t/p/w500\($0)" }
+                let resolvedBackdropPath = detailsForSave?.backdropPath ?? selectedMovie.backdropPath
+                let detailedRatingValue = Double(detailedRating.trimmingCharacters(in: .whitespacesAndNewlines))
                 let resolvedLocationId = try await resolveLocationIdForSave()
 
                 let movieRequest = AddMovieRequest(
                     title: selectedMovie.title,
-                    release_year: selectedMovie.releaseYear,
-                    release_date: selectedMovie.releaseDate,
+                    release_year: selectedMovie.releaseYear ?? detailsForSave?.releaseYear,
+                    release_date: detailsForSave?.releaseDate ?? selectedMovie.releaseDate,
                     rating: starRating > 0 ? starRating : nil,
-                    ratings100: Double(detailedRating),
+                    ratings100: detailedRatingValue,
                     reviews: review.isEmpty ? nil : review,
                     tags: tags.isEmpty ? nil : tags,
-                    watched_date: formatter.string(from: watchDate),
+                    watched_date: Self.movieDateFormatter.string(from: watchDate),
                     rewatch: isRewatch ? "yes" : "no",
                     tmdb_id: selectedMovie.id,
-                    overview: selectedMovie.overview,
-                    poster_url: selectedMovie.fullPosterURL,
-                    backdrop_path: selectedMovie.backdropPath,
-                    director: director,
-                    runtime: movieDetails?.runtime,
-                    vote_average: selectedMovie.voteAverage,
-                    vote_count: selectedMovie.voteCount,
-                    popularity: selectedMovie.popularity,
-                    original_language: selectedMovie.originalLanguage,
-                    original_title: selectedMovie.originalTitle,
-                    tagline: movieDetails?.tagline,
-                    status: movieDetails?.status,
-                    budget: movieDetails?.budget,
-                    revenue: movieDetails?.revenue,
-                    imdb_id: movieDetails?.imdbId,
-                    homepage: movieDetails?.homepage,
+                    overview: detailsForSave?.overview ?? selectedMovie.overview,
+                    poster_url: resolvedPosterURL,
+                    backdrop_path: resolvedBackdropPath,
+                    director: detailContext?.director ?? director,
+                    runtime: detailsForSave?.runtime,
+                    vote_average: detailsForSave?.voteAverage ?? selectedMovie.voteAverage,
+                    vote_count: detailsForSave?.voteCount ?? selectedMovie.voteCount,
+                    popularity: detailsForSave?.popularity ?? selectedMovie.popularity,
+                    original_language: detailsForSave?.originalLanguage ?? selectedMovie.originalLanguage,
+                    original_title: detailsForSave?.originalTitle ?? selectedMovie.originalTitle,
+                    tagline: detailsForSave?.tagline,
+                    status: detailsForSave?.status,
+                    budget: detailsForSave?.budget,
+                    revenue: detailsForSave?.revenue,
+                    imdb_id: detailsForSave?.imdbId,
+                    homepage: detailsForSave?.homepage,
                     genres: genres,
                     location_id: resolvedLocationId
                 )
@@ -1503,6 +1620,10 @@ struct AddMoviesView: View {
                 // Set favorite status if selected
                 if isFavorited {
                     let _ = try await supabaseService.setMovieFavorite(movieId: addedMovie.id, isFavorite: true)
+                }
+
+                Task(priority: .userInitiated) {
+                    await dataManager.refreshMovies()
                 }
 
                 // Copy review to clipboard if it exists
@@ -1553,6 +1674,12 @@ struct AddMoviesView: View {
     }
     
     private func resetForm() {
+        movieDetailsTask?.cancel()
+        similarRatingsTask?.cancel()
+        movieDetails = nil
+        director = nil
+        movieDetailsMovieId = nil
+        isLoadingDetails = false
         starRating = 0.0
         detailedRating = ""
         review = ""
@@ -1664,12 +1791,11 @@ struct AddMoviesView: View {
         
         // Select the movie (which will trigger draft check and show resume dialog)
         selectMovie(movie)
-        loadMovieDetails(movieId: draft.tmdbId)
     }
     
     /// Schedule a debounced draft save (500ms delay)
     private func scheduleDraftSave() {
-        guard let movie = selectedMovie else { return }
+        guard selectedMovie != nil else { return }
         
         // Cancel any pending save
         autoSaveTask?.cancel()
@@ -2043,13 +2169,8 @@ struct PreviousEntryRow: View {
     
     private var formattedWatchDate: String {
         guard let watchDate = movie.watch_date else { return "Unknown Date" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let date = formatter.date(from: watchDate) else { return "Unknown Date" }
-        
-        let displayFormatter = DateFormatter()
-        displayFormatter.dateFormat = "MMM d, yyyy"
-        return displayFormatter.string(from: date)
+        guard let date = DateFormatter.addMoviesRowDateFormatter.date(from: watchDate) else { return "Unknown Date" }
+        return DateFormatter.addMoviesRowDisplayDateFormatter.string(from: date)
     }
     
     private func starType(for index: Int, rating: Double?) -> String {
@@ -2146,4 +2267,20 @@ extension View {
 // MARK: - Preview
 #Preview {
     AddMoviesView()
+}
+
+private extension DateFormatter {
+    static let addMoviesRowDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    static let addMoviesRowDisplayDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d, yyyy"
+        return formatter
+    }()
 }
